@@ -3,7 +3,7 @@ target/
 
 .idea/
 *.iml
-docs/
+docs/work-logs/.drafts/
 
 .env
 .env.*
