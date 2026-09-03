@@ -1,0 +1,96 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.lawrence.supportagent.persistence.mapper.FoundationMapper">
+    <select id="findTicket" resultType="com.lawrence.supportagent.persistence.record.TicketDO">
+        SELECT id, ticket_no, conversation_id, source_turn_id, title, problem_description,
+               attempted_actions, status, root_cause, solution, close_reason, version,
+               created_by, created_at, updated_by, updated_at, resolved_by, resolved_at,
+               closed_by, closed_at
+        FROM ticket WHERE id = #{id}
+    </select>
+    <insert id="insertTicket" useGeneratedKeys="true" keyProperty="id">
+        INSERT INTO ticket (ticket_no, conversation_id, source_turn_id, title, problem_description,
+            attempted_actions, status, root_cause, solution, close_reason, version, created_by,
+            created_at, updated_by, updated_at, resolved_by, resolved_at, closed_by, closed_at)
+        VALUES (#{ticketNo}, #{conversationId}, #{sourceTurnId}, #{title}, #{problemDescription},
+            #{attemptedActions}, #{status}, #{rootCause}, #{solution}, #{closeReason}, #{version},
+            #{createdBy}, #{createdAt}, #{updatedBy}, #{updatedAt}, #{resolvedBy}, #{resolvedAt},
+            #{closedBy}, #{closedAt})
+    </insert>
+    <update id="updateTicket">
+        UPDATE ticket SET ticket_no=#{ticketNo}, title=#{title}, problem_description=#{problemDescription},
+            attempted_actions=#{attemptedActions}, status=#{status}, root_cause=#{rootCause},
+            solution=#{solution}, close_reason=#{closeReason}, version=#{version}, updated_by=#{updatedBy},
+            updated_at=#{updatedAt}, resolved_by=#{resolvedBy}, resolved_at=#{resolvedAt},
+            closed_by=#{closedBy}, closed_at=#{closedAt}
+        WHERE id=#{id} AND version=#{version} - 1
+    </update>
+
+    <select id="findDocument" resultType="com.lawrence.supportagent.persistence.record.ManagedDocumentDO">
+        SELECT id, title, input_type, original_file_name, media_type, raw_content, content_hash, status,
+               version, index_failure_reason, archive_reason, deleted, deleted_by, deleted_at,
+               created_by, created_at, updated_by, updated_at, published_by, published_at,
+               archived_by, archived_at FROM managed_document WHERE id=#{id}
+    </select>
+    <insert id="insertDocument" useGeneratedKeys="true" keyProperty="id">
+        INSERT INTO managed_document (title,input_type,original_file_name,media_type,raw_content,
+            content_hash,status,version,index_failure_reason,archive_reason,deleted,deleted_by,deleted_at,
+            created_by,created_at,updated_by,updated_at,published_by,published_at,archived_by,archived_at)
+        VALUES (#{title},#{inputType},#{originalFileName},#{mediaType},#{rawContent},#{contentHash},
+            #{status},#{version},#{indexFailureReason},#{archiveReason},#{deleted},#{deletedBy},#{deletedAt},
+            #{createdBy},#{createdAt},#{updatedBy},#{updatedAt},#{publishedBy},#{publishedAt},#{archivedBy},#{archivedAt})
+    </insert>
+    <update id="updateDocument">
+        UPDATE managed_document SET title=#{title},raw_content=#{rawContent},content_hash=#{contentHash},
+            status=#{status},version=#{version},index_failure_reason=#{indexFailureReason},
+            archive_reason=#{archiveReason},deleted=#{deleted},deleted_by=#{deletedBy},deleted_at=#{deletedAt},
+            updated_by=#{updatedBy},updated_at=#{updatedAt},published_by=#{publishedBy},published_at=#{publishedAt},
+            archived_by=#{archivedBy},archived_at=#{archivedAt}
+        WHERE id=#{id} AND version=#{version} - 1
+    </update>
+
+    <select id="findCase" resultType="com.lawrence.supportagent.persistence.record.ResolvedCaseDO">
+        SELECT id,source_ticket_id,title,problem,cause,solution,status,content_hash,version,
+               publish_failure_reason,rejection_reason,archive_reason,deleted,deleted_by,deleted_at,
+               created_by,created_at,updated_by,updated_at,published_by,published_at,archived_by,archived_at
+        FROM resolved_case WHERE id=#{id}
+    </select>
+    <insert id="insertCase" useGeneratedKeys="true" keyProperty="id">
+        INSERT INTO resolved_case (source_ticket_id,title,problem,cause,solution,status,content_hash,version,
+            publish_failure_reason,rejection_reason,archive_reason,deleted,deleted_by,deleted_at,created_by,
+            created_at,updated_by,updated_at,published_by,published_at,archived_by,archived_at)
+        VALUES (#{sourceTicketId},#{title},#{problem},#{cause},#{solution},#{status},#{contentHash},#{version},
+            #{publishFailureReason},#{rejectionReason},#{archiveReason},#{deleted},#{deletedBy},#{deletedAt},
+            #{createdBy},#{createdAt},#{updatedBy},#{updatedAt},#{publishedBy},#{publishedAt},#{archivedBy},#{archivedAt})
+    </insert>
+    <update id="updateCase">
+        UPDATE resolved_case SET title=#{title},problem=#{problem},cause=#{cause},solution=#{solution},
+            status=#{status},content_hash=#{contentHash},version=#{version},
+            publish_failure_reason=#{publishFailureReason},rejection_reason=#{rejectionReason},
+            archive_reason=#{archiveReason},deleted=#{deleted},deleted_by=#{deletedBy},deleted_at=#{deletedAt},
+            updated_by=#{updatedBy},updated_at=#{updatedAt},published_by=#{publishedBy},published_at=#{publishedAt},
+            archived_by=#{archivedBy},archived_at=#{archivedAt}
+        WHERE id=#{id} AND version=#{version} - 1
+    </update>
+
+    <select id="findTask" resultType="com.lawrence.supportagent.persistence.record.AsyncTaskDO">
+        SELECT id,task_type,aggregate_type,aggregate_id,aggregate_version,idempotency_key,status,
+               attempt_count,max_attempts,next_run_at,locked_by,locked_until,last_error_code,last_error_message,
+               retry_of_task_id,manual_retry_reason,created_by,created_at,started_at,finished_at,updated_at
+        FROM async_task WHERE id=#{id}
+    </select>
+    <insert id="insertTask" useGeneratedKeys="true" keyProperty="id">
+        INSERT INTO async_task (task_type,aggregate_type,aggregate_id,aggregate_version,idempotency_key,status,
+            attempt_count,max_attempts,next_run_at,locked_by,locked_until,last_error_code,last_error_message,
+            retry_of_task_id,manual_retry_reason,created_by,created_at,started_at,finished_at,updated_at)
+        VALUES (#{taskType},#{aggregateType},#{aggregateId},#{aggregateVersion},#{idempotencyKey},#{status},
+            #{attemptCount},#{maxAttempts},#{nextRunAt},#{lockedBy},#{lockedUntil},#{lastErrorCode},#{lastErrorMessage},
+            #{retryOfTaskId},#{manualRetryReason},#{createdBy},#{createdAt},#{startedAt},#{finishedAt},#{updatedAt})
+    </insert>
+    <update id="updateTask">
+        UPDATE async_task SET status=#{status},attempt_count=#{attemptCount},next_run_at=#{nextRunAt},
+            locked_by=#{lockedBy},locked_until=#{lockedUntil},last_error_code=#{lastErrorCode},
+            last_error_message=#{lastErrorMessage},started_at=#{startedAt},finished_at=#{finishedAt},updated_at=#{updatedAt}
+        WHERE id=#{id}
+    </update>
+</mapper>

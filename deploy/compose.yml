@@ -1,0 +1,56 @@
+name: support-agent
+services:
+  mysql:
+    image: mysql:8.4.11
+    environment:
+      MYSQL_DATABASE: support_agent
+      MYSQL_USER: support_agent
+      MYSQL_PASSWORD: ${SUPPORT_AGENT_MYSQL_PASSWORD:?请设置 SUPPORT_AGENT_MYSQL_PASSWORD}
+      MYSQL_ROOT_PASSWORD: ${SUPPORT_AGENT_MYSQL_ROOT_PASSWORD:?请设置 SUPPORT_AGENT_MYSQL_ROOT_PASSWORD}
+      TZ: UTC
+    ports:
+      - "127.0.0.1:${SUPPORT_AGENT_MYSQL_PORT:-3306}:3306"
+    volumes:
+      - mysql-data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h localhost -uroot -p\"$${MYSQL_ROOT_PASSWORD}\""]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    networks: [support-agent-network]
+  redis:
+    image: redis:8.8.0
+    ports:
+      - "127.0.0.1:${SUPPORT_AGENT_REDIS_PORT:-6379}:6379"
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    networks: [support-agent-network]
+  elasticsearch:
+    build:
+      context: ./elasticsearch
+    environment:
+      discovery.type: single-node
+      xpack.security.enabled: "false"
+      ES_JAVA_OPTS: -Xms1g -Xmx1g
+    ports:
+      - "127.0.0.1:${SUPPORT_AGENT_ELASTICSEARCH_PORT:-9200}:9200"
+    volumes:
+      - elasticsearch-data:/usr/share/elasticsearch/data
+    healthcheck:
+      test: ["CMD-SHELL", "curl --fail http://localhost:9200/_cluster/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+    networks: [support-agent-network]
+volumes:
+  mysql-data:
+  redis-data:
+  elasticsearch-data:
+networks:
+  support-agent-network:
+    driver: bridge

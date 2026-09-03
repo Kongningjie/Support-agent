@@ -1,1 +1,8 @@
-# 开发环境配置将在基础设施实现阶段补充。
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics
+  endpoint:
+    health:
+      show-details: always

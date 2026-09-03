@@ -10,7 +10,7 @@
 | 构建工具 | Maven 3.9+ | 使用 Maven Reactor 管理六模块工程 |
 | Spring Boot | 4.1.1 | 一期冻结的应用框架版本 |
 | AgentScope | 2.0.1 | Agent 编排框架，仅限 Agent 模块使用 |
-| 数据组件 | MySQL 8.4.12、Redis 8.8.0、Elasticsearch 9.5.2 + ICU 9.5.2 | 一期冻结的存储与检索基线 |
+| 数据组件 | MySQL 8.4.11、Redis 8.8.0、Elasticsearch 9.5.2 + ICU 9.5.2 | 一期冻结的存储与检索基线 |
 
 ## 命令要求
 

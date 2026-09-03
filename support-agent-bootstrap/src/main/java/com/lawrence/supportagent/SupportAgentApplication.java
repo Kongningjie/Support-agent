@@ -9,6 +9,11 @@ import org.springframework.boot.autoconfigure.SpringBootApplication;
 @SpringBootApplication
 public class SupportAgentApplication {
 
+    /**
+     * 启动 Support Agent Spring Boot 应用。
+     *
+     * @param args Spring Boot 命令行参数
+     */
     public static void main(String[] args) {
         SpringApplication.run(SupportAgentApplication.class, args);
     }

@@ -23,7 +23,7 @@
 - Spring Boot 4.1.x；骨架锁定当前 4.1 系列稳定版本 4.1.1。
 - 使用 AgentScope Java 2.0.1，只采用 `ReActAgent`。
 - DashScope 统一提供 Chat、Embedding、Rerank，但能力端口相互独立。
-- MySQL 8.4.12 LTS、Redis 8.8.0、Elasticsearch 9.5.2 + ICU 9.5.2。
+- MySQL 8.4.11 LTS、Redis 8.8.0、Elasticsearch 9.5.2 + ICU 9.5.2。
 - 一期必须支持 BM25、向量混合检索、RRF 和 Rerank。
 - 一期不引入 RocketMQ，使用 MySQL `async_task` 持久化工作队列。
 - 普通接口使用 `ApiResult<T>`，SSE 使用独立事件协议。

@@ -3,8 +3,36 @@ spring:
     name: support-agent
   profiles:
     default: dev
+  datasource:
+    url: ${SUPPORT_AGENT_MYSQL_URL:jdbc:mysql://localhost:3306/support_agent?useUnicode=true&characterEncoding=utf8&serverTimezone=UTC}
+    username: ${SUPPORT_AGENT_MYSQL_USERNAME:support_agent}
+    password: ${SUPPORT_AGENT_MYSQL_PASSWORD:}
+  data:
+    redis:
+      url: ${SUPPORT_AGENT_REDIS_URL:redis://localhost:6379}
+      password: ${SUPPORT_AGENT_REDIS_PASSWORD:}
+  flyway:
+    enabled: true
+    locations: classpath:db/migration
+
+mybatis:
+  mapper-locations: classpath*:mapper/**/*.xml
+  configuration:
+    map-underscore-to-camel-case: true
+
+support-agent:
+  operator-id: dev-operator
+  dashscope:
+    api-key: ${DASHSCOPE_API_KEY:}
+  elasticsearch:
+    url: ${SUPPORT_AGENT_ELASTICSEARCH_URL:http://localhost:9200}
+    username: ${SUPPORT_AGENT_ELASTICSEARCH_USERNAME:}
+    password: ${SUPPORT_AGENT_ELASTICSEARCH_PASSWORD:}
 
 management:
+  info:
+    env:
+      enabled: true
   endpoints:
     web:
       exposure:
@@ -13,3 +41,19 @@ management:
     health:
       probes:
         enabled: true
+      show-details: never
+      group:
+        liveness:
+          include: livenessState
+        readiness:
+          include: readinessState,db,redis,elasticsearch,dashScopeConfiguration
+
+info:
+  application:
+    name: ${spring.application.name}
+    description: 企业内部技术支持 Agent
+
+logging:
+  structured:
+    format:
+      console: logstash

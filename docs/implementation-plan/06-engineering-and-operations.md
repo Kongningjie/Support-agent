@@ -111,7 +111,7 @@ application-prod.yml
 
 后续使用 `deploy/compose.yml` 只启动：
 
-- MySQL 8.4.12 LTS。
+- MySQL 8.4.11 LTS。
 - Redis 8.8.0 官方普通镜像。
 - Elasticsearch 9.5.2，自定义 Dockerfile 安装同版本 ICU Analysis 插件。
 

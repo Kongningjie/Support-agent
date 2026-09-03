@@ -14,7 +14,7 @@
 | Spring Boot | 4.1.x，骨架使用 4.1.1 | Web、配置、Actuator 和应用装配 |
 | AgentScope Java | 2.0.1 | `ReActAgent`、流式执行和 Agent 状态接入 |
 | MyBatis Starter | 4.1.0 | MySQL 数据访问，XML Mapper |
-| MySQL | 8.4.12 LTS | 业务数据、审计和持久化异步任务 |
+| MySQL | 8.4.11 LTS | 业务数据、审计和持久化异步任务 |
 | Redis | 8.8.0 | 短期会话与 Agent 状态 |
 | Elasticsearch | 9.5.2 | BM25、向量和混合检索 |
 | ICU Analysis | 9.5.2 | 中英文通用分词与规范化 |

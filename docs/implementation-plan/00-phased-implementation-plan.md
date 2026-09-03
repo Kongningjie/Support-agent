@@ -27,7 +27,7 @@
 | 阶段 | 名称 | 状态 | 阶段结果含义 |
 |---:|---|---|---|
 | 0 | 项目骨架与设计冻结 | 已完成 | 六模块 Maven 骨架、技术基线和设计文档已建立 |
-| 1 | 工程基础、领域模型与数据基线 | 待执行 | 应用具备可启动、可迁移、可测试的领域和数据基础 |
+| 1 | 工程基础、领域模型与数据基线 | 已完成 | 应用具备可启动、可迁移、可测试的领域和数据基础 |
 | 2 | 工单、幂等与异步任务核心 | 待执行 | 无 AI 依赖的工单主流程和持久化任务机制可用 |
 | 3 | 托管知识与 Elasticsearch 索引 | 待执行 | 文档可安全导入、异步发布、归档并进入版本化索引 |
 | 4 | 混合检索、Agent 与 SSE 对话 | 待执行 | BM25、向量、RRF、Rerank 和受控对话主链路可用 |
@@ -56,7 +56,7 @@
 - 单体部署、六个 Maven 模块，最终生成一个可执行 JAR。
 - AgentScope Java 2.0.1，只使用 `ReActAgent`，`maxIters=3`。
 - DashScope 统一供应模型，但保留 `ChatModelPort`、`IntentRecognitionPort`、`EmbeddingModelPort`、`RerankModelPort` 等独立端口。
-- MySQL 8.4.12 保存业务事实、审计、幂等和异步任务；Redis 8.8.0 保存短期会话与 Agent 状态；Elasticsearch 9.5.2 + ICU 9.5.2 承担知识检索。
+- MySQL 8.4.11 保存业务事实、审计、幂等和异步任务；Redis 8.8.0 保存短期会话与 Agent 状态；Elasticsearch 9.5.2 + ICU 9.5.2 承担知识检索。
 - 不使用 Spring AI、JPA、MyBatis-Plus、Spring Data Elasticsearch、Redis Stack 或消息队列。
 - 关键异步动作使用 MySQL `async_task`/Outbox，业务状态、任务插入和幂等结果在同一事务中提交。
 
