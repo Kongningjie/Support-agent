@@ -1,0 +1,59 @@
+@baseUrl = http://localhost:8080/api/v1
+
+### 手工创建草稿；重复发送相同请求会返回首次创建的工单
+# @name createDraft
+POST {{baseUrl}}/tickets/drafts
+Content-Type: application/json
+
+{
+  "title": "应用启动时报 MySQL 连接失败",
+  "problemDescription": "启动后无法连接 localhost:3306，错误为 Connection refused",
+  "attemptedActions": "已确认配置文件中的端口和用户名",
+  "idempotencyKey": "ticket-create-local-001"
+}
+
+> {% client.global.set("ticketNo", response.body.data.ticketNo); client.global.set("ticketVersion", response.body.data.version); %}
+
+### 查询刚创建的工单详情
+GET {{baseUrl}}/tickets/{{ticketNo}}
+Accept: application/json
+
+### 修改草稿；version 用于乐观锁校验
+# @name reviseDraft
+PUT {{baseUrl}}/tickets/{{ticketNo}}/draft
+Content-Type: application/json
+
+{
+  "title": "应用启动时报 MySQL 连接失败",
+  "problemDescription": "启动后无法连接 localhost:3306，已确认 MySQL 容器处于运行状态",
+  "attemptedActions": "已检查端口和用户名，准备检查宿主机端口映射",
+  "version": {{ticketVersion}}
+}
+
+> {% client.global.set("ticketVersion", response.body.data.version); %}
+
+### 提交草稿为开放工单
+# @name submitTicket
+POST {{baseUrl}}/tickets/{{ticketNo}}/submit
+Content-Type: application/json
+
+{
+  "version": {{ticketVersion}},
+  "idempotencyKey": "ticket-submit-local-001"
+}
+
+> {% client.global.set("ticketVersion", response.body.data.version); %}
+
+### 按状态和关键词分页查询
+GET {{baseUrl}}/tickets?status=OPEN&keyword=MySQL&page=1&size=20
+Accept: application/json
+
+### 关闭开放工单
+POST {{baseUrl}}/tickets/{{ticketNo}}/close
+Content-Type: application/json
+
+{
+  "closeReason": "本地配置修正后不再复现，用户确认关闭",
+  "version": {{ticketVersion}},
+  "idempotencyKey": "ticket-close-local-001"
+}

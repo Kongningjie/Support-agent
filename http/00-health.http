@@ -1,0 +1,13 @@
+@baseUrl = http://localhost:8080
+
+### 存活探针：只判断 JVM 与 Spring 应用是否存活
+GET {{baseUrl}}/actuator/health/liveness
+Accept: application/json
+
+### 就绪探针：检查 MySQL、Redis、Elasticsearch 与 DashScope 配置
+GET {{baseUrl}}/actuator/health/readiness
+Accept: application/json
+
+### 非敏感构建与应用信息
+GET {{baseUrl}}/actuator/info
+Accept: application/json

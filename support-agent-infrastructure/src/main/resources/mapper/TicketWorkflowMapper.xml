@@ -1,0 +1,51 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.lawrence.supportagent.persistence.mapper.TicketWorkflowMapper">
+    <sql id="ticketColumns">
+        id, ticket_no, conversation_id, source_turn_id, title, problem_description,
+        attempted_actions, status, root_cause, solution, close_reason, version,
+        created_by, created_at, updated_by, updated_at, resolved_by, resolved_at,
+        closed_by, closed_at
+    </sql>
+
+    <select id="findByTicketNo" resultType="com.lawrence.supportagent.persistence.record.TicketDO">
+        SELECT <include refid="ticketColumns"/>
+        FROM ticket
+        WHERE ticket_no = #{ticketNo}
+    </select>
+
+    <update id="assignNumber">
+        UPDATE ticket SET ticket_no = #{ticketNo}
+        WHERE id = #{id} AND ticket_no IS NULL
+    </update>
+
+    <select id="findPage" resultType="com.lawrence.supportagent.persistence.record.TicketDO">
+        SELECT <include refid="ticketColumns"/>
+        FROM ticket
+        <where>
+            <if test="status != null">status = #{status}</if>
+            <if test="keyword != null">
+                <if test="status != null">AND</if>
+                (title LIKE CONCAT('%', #{keyword}, '%')
+                 OR problem_description LIKE CONCAT('%', #{keyword}, '%')
+                 OR ticket_no = #{keyword})
+            </if>
+        </where>
+        ORDER BY created_at DESC, id DESC
+        LIMIT #{size} OFFSET #{offset}
+    </select>
+
+    <select id="count" resultType="long">
+        SELECT COUNT(*)
+        FROM ticket
+        <where>
+            <if test="status != null">status = #{status}</if>
+            <if test="keyword != null">
+                <if test="status != null">AND</if>
+                (title LIKE CONCAT('%', #{keyword}, '%')
+                 OR problem_description LIKE CONCAT('%', #{keyword}, '%')
+                 OR ticket_no = #{keyword})
+            </if>
+        </where>
+    </select>
+</mapper>

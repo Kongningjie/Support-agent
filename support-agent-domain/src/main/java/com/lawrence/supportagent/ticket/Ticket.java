@@ -32,6 +32,20 @@ public record Ticket(Long id, String ticketNo, UUID conversationId, UUID sourceT
                 operator, now, operator, now, null, null, null, null);
     }
 
+    /** 在首次持久化取得内部主键后设置稳定对外工单编号，不改变业务版本。 */
+    public Ticket assignNumber(long persistedId, String assignedTicketNo) {
+        DomainAssertions.state(id == null || id == persistedId, "工单内部主键不一致");
+        DomainAssertions.state(ticketNo == null, "工单编号只能分配一次");
+        if (persistedId <= 0) {
+            throw new IllegalArgumentException("工单内部主键必须为正数");
+        }
+        assignedTicketNo = DomainAssertions.requiredText(assignedTicketNo, "工单编号");
+        return new Ticket(persistedId, assignedTicketNo, conversationId, sourceTurnId,
+                title, problemDescription, attemptedActions, status, rootCause, solution,
+                closeReason, version, createdBy, createdAt, updatedBy, updatedAt,
+                resolvedBy, resolvedAt, closedBy, closedAt);
+    }
+
     /** 修改草稿内容并递增版本。 */
     public Ticket reviseDraft(String newTitle, String newProblemDescription,
                               String newAttemptedActions, String operator, Instant now) {

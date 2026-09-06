@@ -1,0 +1,23 @@
+@baseUrl = http://localhost:8080/api/v1
+@taskId = 1
+
+### 分页查询全部异步任务；阶段 2 不提供绕过业务流程的任务创建接口
+GET {{baseUrl}}/async-tasks?page=1&size=20
+Accept: application/json
+
+### 按类型、状态与关联对象过滤任务
+GET {{baseUrl}}/async-tasks?taskType=KNOWLEDGE_INDEX&status=DEAD&aggregateType=MANAGED_DOCUMENT&aggregateId=1&page=1&size=20
+Accept: application/json
+
+### 查询任务详情；响应不会暴露 lockedBy 或 lockedUntil
+GET {{baseUrl}}/async-tasks/{{taskId}}
+Accept: application/json
+
+### 人工重试死亡任务；仅当关联对象状态和版本仍匹配时创建新任务
+POST {{baseUrl}}/async-tasks/{{taskId}}/retry
+Content-Type: application/json
+
+{
+  "idempotencyKey": "task-retry-local-001",
+  "reason": "临时依赖故障已恢复"
+}

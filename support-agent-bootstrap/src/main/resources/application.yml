@@ -28,6 +28,13 @@ support-agent:
     url: ${SUPPORT_AGENT_ELASTICSEARCH_URL:http://localhost:9200}
     username: ${SUPPORT_AGENT_ELASTICSEARCH_USERNAME:}
     password: ${SUPPORT_AGENT_ELASTICSEARCH_PASSWORD:}
+  async-task:
+    enabled: true
+    worker-id: ${SUPPORT_AGENT_WORKER_ID:}
+    poll-delay: 2s
+    batch-size: 10
+    concurrency: 2
+    lease-duration: 5m
 
 management:
   info:

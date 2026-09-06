@@ -1,0 +1,64 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.lawrence.supportagent.persistence.mapper.IdempotencyMapper">
+    <delete id="deleteExpired">
+        DELETE FROM idempotency_record
+        WHERE operator_id = #{operatorId}
+          AND operation_type = #{operationType}
+          AND idempotency_key = #{idempotencyKey}
+          AND expires_at &lt;= #{now}
+    </delete>
+
+    <insert id="insertIfAbsent" useGeneratedKeys="true" keyProperty="id">
+        INSERT INTO idempotency_record
+            (operator_id, operation_type, idempotency_key, request_hash, status,
+             resource_type, resource_id, response_code, failure_message, locked_until,
+             created_at, updated_at, expires_at)
+        VALUES
+            (#{operatorId}, #{operationType}, #{idempotencyKey}, #{requestHash}, #{status},
+             NULL, NULL, NULL, NULL, #{lockedUntil}, #{createdAt}, #{updatedAt}, #{expiresAt})
+    </insert>
+
+    <select id="findForUpdate" resultType="com.lawrence.supportagent.persistence.record.IdempotencyRecordDO">
+        SELECT id, operator_id, operation_type, idempotency_key, request_hash, status,
+               resource_type, resource_id, response_code, failure_message, locked_until,
+               created_at, updated_at, expires_at
+        FROM idempotency_record
+        WHERE operator_id = #{operatorId}
+          AND operation_type = #{operationType}
+          AND idempotency_key = #{idempotencyKey}
+        FOR UPDATE
+    </select>
+
+    <select id="findByIdForUpdate" resultType="com.lawrence.supportagent.persistence.record.IdempotencyRecordDO">
+        SELECT id, operator_id, operation_type, idempotency_key, request_hash, status,
+               resource_type, resource_id, response_code, failure_message, locked_until,
+               created_at, updated_at, expires_at
+        FROM idempotency_record
+        WHERE id = #{id}
+        FOR UPDATE
+    </select>
+
+    <update id="reacquire">
+        UPDATE idempotency_record
+        SET status = 'PROCESSING', locked_until = #{lockedUntil}, response_code = NULL,
+            failure_message = NULL, updated_at = #{updatedAt}
+        WHERE id = #{id}
+          AND status IN ('PROCESSING', 'FAILED_RETRYABLE')
+    </update>
+
+    <update id="markSucceeded">
+        UPDATE idempotency_record
+        SET status = 'SUCCEEDED', resource_type = #{resourceType}, resource_id = #{resourceId},
+            response_code = 'SUCCESS', failure_message = NULL, locked_until = NULL,
+            updated_at = #{updatedAt}
+        WHERE id = #{id} AND status = 'PROCESSING' AND locked_until = #{expectedLockedUntil}
+    </update>
+
+    <update id="markFailed">
+        UPDATE idempotency_record
+        SET status = #{status}, response_code = #{responseCode}, failure_message = #{failureMessage},
+            locked_until = NULL, updated_at = #{updatedAt}
+        WHERE id = #{id} AND status = 'PROCESSING' AND locked_until = #{expectedLockedUntil}
+    </update>
+</mapper>

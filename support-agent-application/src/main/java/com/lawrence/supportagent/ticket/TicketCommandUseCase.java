@@ -1,0 +1,146 @@
+package com.lawrence.supportagent.ticket;
+
+import com.lawrence.supportagent.idempotency.IdempotencyCommand;
+import com.lawrence.supportagent.idempotency.IdempotentExecutor;
+import com.lawrence.supportagent.idempotency.IdempotentResource;
+import com.lawrence.supportagent.idempotency.RequestFingerprint;
+import com.lawrence.supportagent.sharedkernel.error.ApplicationException;
+import com.lawrence.supportagent.sharedkernel.error.ErrorCode;
+import com.lawrence.supportagent.sharedkernel.port.OperatorProvider;
+import com.lawrence.supportagent.sharedkernel.port.TimeProvider;
+import com.lawrence.supportagent.ticket.port.TicketRepository;
+import java.time.Duration;
+import java.time.Instant;
+
+/** 编排手工工单草稿、修改、提交和关闭，并落实幂等与乐观锁边界。 */
+public class TicketCommandUseCase {
+    private static final Duration IDEMPOTENCY_LEASE = Duration.ofSeconds(30);
+    private static final Duration IDEMPOTENCY_RETENTION = Duration.ofDays(7);
+    private final TicketRepository repository;
+    private final TicketQueryUseCase queryUseCase;
+    private final IdempotentExecutor idempotentExecutor;
+    private final OperatorProvider operatorProvider;
+    private final TimeProvider timeProvider;
+
+    /** 注入工单持久化、查询、幂等、操作者和时间端口。 */
+    public TicketCommandUseCase(TicketRepository repository, TicketQueryUseCase queryUseCase,
+                                IdempotentExecutor idempotentExecutor,
+                                OperatorProvider operatorProvider, TimeProvider timeProvider) {
+        this.repository = repository;
+        this.queryUseCase = queryUseCase;
+        this.idempotentExecutor = idempotentExecutor;
+        this.operatorProvider = operatorProvider;
+        this.timeProvider = timeProvider;
+    }
+
+    /** 手工创建工单草稿，并由内部主键确定性生成对外编号。 */
+    public TicketDetails createDraft(String title, String problemDescription,
+                                     String attemptedActions, String idempotencyKey) {
+        String normalizedTitle = required(title, "工单标题", 160);
+        String normalizedProblem = required(problemDescription, "问题描述", 8000);
+        String normalizedActions = optional(attemptedActions, "已尝试操作", 8000);
+        IdempotencyCommand command = command("TICKET_CREATE_DRAFT", idempotencyKey,
+                RequestFingerprint.sha256(normalizedTitle, normalizedProblem, normalizedActions));
+        return idempotentExecutor.execute(command, () -> {
+            Instant now = timeProvider.now();
+            String operator = operatorProvider.currentOperator().value();
+            Ticket inserted = repository.save(Ticket.draft(null, null, normalizedTitle,
+                    normalizedProblem, normalizedActions, operator, now));
+            String ticketNo = formatTicketNo(inserted.id());
+            Ticket numbered = repository.assignNumber(inserted, ticketNo);
+            return new IdempotentResource<>("TICKET", numbered.id(), TicketDetails.from(numbered));
+        }, queryUseCase::getByInternalId);
+    }
+
+    /** 修改仍处于草稿状态且版本匹配的工单内容。 */
+    public TicketDetails reviseDraft(String ticketNo, String title, String problemDescription,
+                                     String attemptedActions, long version) {
+        Ticket current = requireVersion(queryUseCase.requireTicket(ticketNo), version);
+        requireStatus(current, TicketStatus.DRAFT, "只有草稿工单可以修改");
+        Ticket revised = current.reviseDraft(required(title, "工单标题", 160),
+                required(problemDescription, "问题描述", 8000),
+                optional(attemptedActions, "已尝试操作", 8000),
+                operatorProvider.currentOperator().value(), timeProvider.now());
+        return TicketDetails.from(repository.save(revised));
+    }
+
+    /** 幂等地把版本匹配的草稿提交为开放工单。 */
+    public TicketDetails submit(String ticketNo, long version, String idempotencyKey) {
+        IdempotencyCommand command = command("TICKET_SUBMIT", idempotencyKey,
+                RequestFingerprint.sha256(ticketNo, Long.toString(version)));
+        return idempotentExecutor.execute(command, () -> {
+            Ticket current = requireVersion(queryUseCase.requireTicket(ticketNo), version);
+            requireStatus(current, TicketStatus.DRAFT, "只有草稿工单可以提交");
+            Ticket saved = repository.save(current.submit(
+                    operatorProvider.currentOperator().value(), timeProvider.now()));
+            return new IdempotentResource<>("TICKET", saved.id(), TicketDetails.from(saved));
+        }, queryUseCase::getByInternalId);
+    }
+
+    /** 幂等地关闭版本匹配的草稿或开放工单。 */
+    public TicketDetails close(String ticketNo, String reason, long version, String idempotencyKey) {
+        String normalizedReason = required(reason, "关闭原因", 500);
+        IdempotencyCommand command = command("TICKET_CLOSE", idempotencyKey,
+                RequestFingerprint.sha256(ticketNo, Long.toString(version), normalizedReason));
+        return idempotentExecutor.execute(command, () -> {
+            Ticket current = requireVersion(queryUseCase.requireTicket(ticketNo), version);
+            if (current.status() != TicketStatus.DRAFT && current.status() != TicketStatus.OPEN) {
+                throw new ApplicationException(ErrorCode.TICKET_STATUS_CONFLICT,
+                        "只有草稿或开放工单可以关闭");
+            }
+            Ticket saved = repository.save(current.close(normalizedReason,
+                    operatorProvider.currentOperator().value(), timeProvider.now()));
+            return new IdempotentResource<>("TICKET", saved.id(), TicketDetails.from(saved));
+        }, queryUseCase::getByInternalId);
+    }
+
+    /** 构造具有统一租约和七天保留期的幂等命令。 */
+    private IdempotencyCommand command(String operationType, String key, String requestHash) {
+        String normalizedKey = required(key, "幂等键", 160);
+        return new IdempotencyCommand(operatorProvider.currentOperator().value(), operationType,
+                normalizedKey, requestHash, IDEMPOTENCY_LEASE, IDEMPOTENCY_RETENTION);
+    }
+
+    /** 校验并规整必填文本。 */
+    private String required(String value, String fieldName, int maxLength) {
+        if (value == null || value.isBlank()) {
+            throw new IllegalArgumentException(fieldName + "不能为空");
+        }
+        String normalized = value.trim();
+        if (normalized.length() > maxLength) {
+            throw new IllegalArgumentException(fieldName + "不能超过 " + maxLength + " 个字符");
+        }
+        return normalized;
+    }
+
+    /** 校验并规整可空文本。 */
+    private String optional(String value, String fieldName, int maxLength) {
+        if (value == null || value.isBlank()) {
+            return null;
+        }
+        return required(value, fieldName, maxLength);
+    }
+
+    /** 校验客户端版本，避免并发覆盖。 */
+    private Ticket requireVersion(Ticket ticket, long version) {
+        if (version < 0 || ticket.version() != version) {
+            throw new ApplicationException(ErrorCode.TICKET_VERSION_CONFLICT, "工单版本已变化");
+        }
+        return ticket;
+    }
+
+    /** 校验工单状态并转换为稳定应用错误。 */
+    private void requireStatus(Ticket ticket, TicketStatus expected, String message) {
+        if (ticket.status() != expected) {
+            throw new ApplicationException(ErrorCode.TICKET_STATUS_CONFLICT, message);
+        }
+    }
+
+    /** 按内部主键生成 T 加 12 位十进制数字的对外编号。 */
+    private String formatTicketNo(long id) {
+        if (id <= 0 || id > 999_999_999_999L) {
+            throw new IllegalStateException("工单编号空间已耗尽");
+        }
+        return "T%012d".formatted(id);
+    }
+}

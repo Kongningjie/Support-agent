@@ -2,11 +2,13 @@ package com.lawrence.supportagent;
 
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
+import org.springframework.scheduling.annotation.EnableScheduling;
 
 /**
  * Support Agent 单体应用启动入口。
  */
 @SpringBootApplication
+@EnableScheduling
 public class SupportAgentApplication {
 
     /**

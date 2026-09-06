@@ -3,12 +3,16 @@ package com.lawrence.supportagent.sharedkernel.api;
 import com.lawrence.supportagent.observability.TraceIdFilter;
 import com.lawrence.supportagent.sharedkernel.error.ApplicationException;
 import com.lawrence.supportagent.sharedkernel.port.TimeProvider;
+import jakarta.validation.ConstraintViolationException;
 import jakarta.servlet.http.HttpServletRequest;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
+import org.springframework.web.method.annotation.HandlerMethodValidationException;
+import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
 
 /** 把可预期异常映射为安全、稳定的统一 JSON 响应。 */
 @RestControllerAdvice
@@ -25,7 +29,9 @@ public class GlobalExceptionHandler {
     }
 
     /** 将请求校验错误映射为 400。 */
-    @ExceptionHandler({MethodArgumentNotValidException.class, IllegalArgumentException.class})
+    @ExceptionHandler({MethodArgumentNotValidException.class, HandlerMethodValidationException.class,
+            ConstraintViolationException.class, MethodArgumentTypeMismatchException.class,
+            HttpMessageNotReadableException.class, IllegalArgumentException.class})
     public ResponseEntity<ApiResult<Void>> handleValidation(Exception exception, HttpServletRequest request) {
         return response(HttpStatus.BAD_REQUEST, "COMMON_VALIDATION_FAILED", "请求参数不符合要求", request);
     }
@@ -56,7 +62,10 @@ public class GlobalExceptionHandler {
     private HttpStatus statusOf(ApplicationException exception) {
         return switch (exception.errorCode()) {
             case COMMON_VALIDATION_FAILED -> HttpStatus.BAD_REQUEST;
-            case COMMON_CONFLICT -> HttpStatus.CONFLICT;
+            case TICKET_NOT_FOUND, ASYNC_TASK_NOT_FOUND -> HttpStatus.NOT_FOUND;
+            case COMMON_CONFLICT, COMMON_IDEMPOTENCY_IN_PROGRESS,
+                    COMMON_IDEMPOTENCY_KEY_REUSED, TICKET_STATUS_CONFLICT,
+                    TICKET_VERSION_CONFLICT, ASYNC_TASK_NOT_RETRYABLE -> HttpStatus.CONFLICT;
             case DEPENDENCY_UNAVAILABLE, DASHSCOPE_NOT_CONFIGURED -> HttpStatus.SERVICE_UNAVAILABLE;
             case COMMON_INTERNAL_ERROR -> HttpStatus.INTERNAL_SERVER_ERROR;
         };

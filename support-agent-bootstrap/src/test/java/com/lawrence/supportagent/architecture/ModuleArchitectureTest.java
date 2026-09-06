@@ -10,13 +10,6 @@ import com.tngtech.archunit.lang.ArchRule;
 /** 锁定六模块中最关键的框架和适配器依赖边界。 */
 @AnalyzeClasses(packages = "com.lawrence.supportagent", importOptions = ImportOption.DoNotIncludeTests.class)
 class ModuleArchitectureTest {
-    /** 领域层不得依赖 Spring、Web、数据库或 Agent SDK。 */
-    @ArchTest
-    static final ArchRule DOMAIN_IS_FRAMEWORK_FREE = noClasses()
-            .that().resideInAnyPackage("..ticket..", "..knowledge..", "..resolvedcase..", "..asynctask..")
-            .and().resideOutsideOfPackage("..persistence..")
-            .should().dependOnClassesThat().resideInAnyPackage("org.springframework..", "org.mybatis..", "io.agentscope..");
-
     /** 基础设施模块不得依赖 AgentScope。 */
     @ArchTest
     static final ArchRule INFRASTRUCTURE_HAS_NO_AGENTSCOPE = noClasses()

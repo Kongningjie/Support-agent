@@ -2,12 +2,18 @@ package com.lawrence.supportagent.persistence;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.lawrence.supportagent.asynctask.AggregateType;
 import com.lawrence.supportagent.asynctask.AsyncTask;
 import com.lawrence.supportagent.asynctask.AsyncTaskStatus;
 import com.lawrence.supportagent.asynctask.AsyncTaskType;
 import com.lawrence.supportagent.asynctask.port.AsyncTaskRepository;
+import com.lawrence.supportagent.idempotency.IdempotencyCommand;
+import com.lawrence.supportagent.idempotency.IdempotentExecutor;
+import com.lawrence.supportagent.idempotency.IdempotentResource;
+import com.lawrence.supportagent.idempotency.RequestFingerprint;
 import com.lawrence.supportagent.knowledge.DocumentInputType;
 import com.lawrence.supportagent.knowledge.ManagedDocument;
 import com.lawrence.supportagent.knowledge.port.ManagedDocumentRepository;
@@ -17,10 +23,25 @@ import com.lawrence.supportagent.resolvedcase.ResolvedCase;
 import com.lawrence.supportagent.resolvedcase.ResolvedCaseStatus;
 import com.lawrence.supportagent.resolvedcase.port.ResolvedCaseRepository;
 import com.lawrence.supportagent.ticket.Ticket;
+import com.lawrence.supportagent.ticket.TicketCommandUseCase;
+import com.lawrence.supportagent.ticket.TicketDetails;
+import com.lawrence.supportagent.ticket.TicketQueryUseCase;
 import com.lawrence.supportagent.ticket.port.TicketRepository;
+import com.lawrence.supportagent.sharedkernel.error.ApplicationException;
+import com.lawrence.supportagent.sharedkernel.error.ErrorCode;
+import com.lawrence.supportagent.sharedkernel.port.TimeProvider;
+import java.time.Duration;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.Test;
 import org.mybatis.spring.annotation.MapperScan;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -28,6 +49,7 @@ import org.springframework.boot.SpringBootConfiguration;
 import org.springframework.boot.autoconfigure.EnableAutoConfiguration;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.context.annotation.ComponentScan;
+import org.springframework.context.annotation.Bean;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.testcontainers.junit.jupiter.Container;
@@ -60,6 +82,8 @@ class FoundationRepositoryIT {
     private ResolvedCaseRepository caseRepository;
     @Autowired
     private AsyncTaskRepository taskRepository;
+    @Autowired
+    private IdempotentExecutor idempotentExecutor;
 
     /** 把 Testcontainers 连接信息注入 Spring 数据源。 */
     @DynamicPropertySource
@@ -132,11 +156,134 @@ class FoundationRepositoryIT {
         assertEquals(running, taskRepository.findById(running.id()).orElseThrow());
     }
 
+    /** 验证工单创建结果可重放，且同一幂等键不能承载不同请求。 */
+    @Test
+    void shouldReplayIdempotentTicketCreationAndRejectChangedRequest() {
+        TicketQueryUseCase queryUseCase = new TicketQueryUseCase(ticketRepository);
+        TicketCommandUseCase commandUseCase = new TicketCommandUseCase(ticketRepository,
+                queryUseCase, idempotentExecutor, () -> new com.lawrence.supportagent.sharedkernel.OperatorId("tester"),
+                Instant::now);
+        String key = "integration-ticket-" + UUID.randomUUID();
+
+        TicketDetails first = commandUseCase.createDraft("幂等工单", "相同请求只创建一次",
+                null, key);
+        TicketDetails replayed = commandUseCase.createDraft("幂等工单", "相同请求只创建一次",
+                null, key);
+        ApplicationException conflict = assertThrows(ApplicationException.class,
+                () -> commandUseCase.createDraft("变更标题", "相同请求只创建一次", null, key));
+
+        assertEquals(first.ticketNo(), replayed.ticketNo());
+        assertEquals(ErrorCode.COMMON_IDEMPOTENCY_KEY_REUSED, conflict.errorCode());
+        assertEquals(1, ticketRepository.count(null, first.ticketNo()));
+    }
+
+    /** 验证首次请求执行期间，并发相同请求快速返回执行中而不重复执行业务。 */
+    @Test
+    void shouldRejectConcurrentIdempotentExecutionInProgress() throws Exception {
+        String key = "integration-in-progress-" + UUID.randomUUID();
+        IdempotencyCommand command = new IdempotencyCommand("tester", "CONCURRENT_TEST", key,
+                RequestFingerprint.sha256("same-request"), Duration.ofSeconds(30), Duration.ofDays(1));
+        CountDownLatch actionStarted = new CountDownLatch(1);
+        CountDownLatch releaseAction = new CountDownLatch(1);
+        ExecutorService executor = Executors.newSingleThreadExecutor();
+        try {
+            Future<String> first = executor.submit(() -> idempotentExecutor.execute(command, () -> {
+                actionStarted.countDown();
+                try {
+                    if (!releaseAction.await(5, TimeUnit.SECONDS)) {
+                        throw new IllegalStateException("测试等待首次请求释放超时");
+                    }
+                } catch (InterruptedException exception) {
+                    Thread.currentThread().interrupt();
+                    throw new IllegalStateException("测试线程被中断", exception);
+                }
+                return new IdempotentResource<>("TEST_RESOURCE", 1L, "first");
+            }, ignored -> "replayed"));
+            assertTrue(actionStarted.await(5, TimeUnit.SECONDS));
+
+            ApplicationException conflict = assertThrows(ApplicationException.class,
+                    () -> idempotentExecutor.execute(command,
+                            () -> new IdempotentResource<>("TEST_RESOURCE", 2L, "second"),
+                            ignored -> "replayed"));
+            assertEquals(ErrorCode.COMMON_IDEMPOTENCY_IN_PROGRESS, conflict.errorCode());
+            releaseAction.countDown();
+            assertEquals("first", first.get(5, TimeUnit.SECONDS));
+        } finally {
+            releaseAction.countDown();
+            executor.shutdownNow();
+        }
+    }
+
+    /** 验证多个 Worker 并发抢占时目标任务不重复，并能回收崩溃 Worker 的过期租约。 */
+    @Test
+    void shouldClaimWithoutDuplicatesAndRecoverExpiredLease() throws Exception {
+        Instant dueAt = Instant.now().minusSeconds(10).truncatedTo(ChronoUnit.MICROS);
+        Set<Long> targetIds = new HashSet<>();
+        for (int index = 0; index < 12; index++) {
+            AsyncTask saved = taskRepository.save(AsyncTask.pending(AsyncTaskType.KNOWLEDGE_INDEX,
+                    AggregateType.MANAGED_DOCUMENT, 1000L + index, 1L,
+                    "claim-it:" + UUID.randomUUID(), "system", dueAt));
+            targetIds.add(saved.id());
+        }
+        CountDownLatch start = new CountDownLatch(1);
+        ExecutorService executor = Executors.newFixedThreadPool(2);
+        try {
+            Future<List<AsyncTask>> first = executor.submit(() -> claimAfter(start, "worker-a", dueAt));
+            Future<List<AsyncTask>> second = executor.submit(() -> claimAfter(start, "worker-b", dueAt));
+            start.countDown();
+            List<AsyncTask> claimed = new java.util.ArrayList<>(first.get(10, TimeUnit.SECONDS));
+            claimed.addAll(second.get(10, TimeUnit.SECONDS));
+            List<Long> claimedTargets = claimed.stream().map(AsyncTask::id)
+                    .filter(targetIds::contains).toList();
+            assertEquals(12, claimedTargets.size());
+            assertEquals(12, new HashSet<>(claimedTargets).size());
+
+            long expiredId = claimedTargets.getFirst();
+            AsyncTask recovered = taskRepository.claimDue("worker-recovery",
+                            dueAt.plusSeconds(301), dueAt.plusSeconds(601), 100).stream()
+                    .filter(task -> task.id().equals(expiredId)).findFirst().orElseThrow();
+            assertEquals("worker-recovery", recovered.lockedBy());
+            assertEquals(2, recovered.attemptCount());
+
+            AsyncTask exhausted = taskRepository.save(new AsyncTask(null,
+                    AsyncTaskType.KNOWLEDGE_DELETE, AggregateType.MANAGED_DOCUMENT,
+                    5000L, 1L, "exhausted-it:" + UUID.randomUUID(),
+                    AsyncTaskStatus.PENDING, 0, 1, dueAt.plusSeconds(1000),
+                    null, null, null, null, null, null, "system",
+                    dueAt, null, null, dueAt));
+            AsyncTask claimedOnce = taskRepository.claimDue("worker-crashed",
+                            dueAt.plusSeconds(1000), dueAt.plusSeconds(1300), 100).stream()
+                    .filter(task -> task.id().equals(exhausted.id())).findFirst().orElseThrow();
+            taskRepository.claimDue("worker-cleanup", dueAt.plusSeconds(1301),
+                    dueAt.plusSeconds(1601), 100);
+            AsyncTask dead = taskRepository.findById(claimedOnce.id()).orElseThrow();
+            assertEquals(AsyncTaskStatus.DEAD, dead.status());
+            assertEquals("ASYNC_TASK_WORKER_LEASE_EXPIRED", dead.lastErrorCode());
+        } finally {
+            executor.shutdownNow();
+        }
+    }
+
+    /** 等待并发起点后用指定 Worker 抢占一批到期任务。 */
+    private List<AsyncTask> claimAfter(CountDownLatch start, String workerId, Instant now)
+            throws InterruptedException {
+        start.await();
+        return taskRepository.claimDue(workerId, now, now.plusSeconds(300), 100);
+    }
+
     /** 只装配数据源、Flyway、MyBatis Mapper 和 Repository 的测试应用。 */
     @SpringBootConfiguration
     @EnableAutoConfiguration
     @MapperScan(basePackageClasses = FoundationMapper.class)
-    @ComponentScan(basePackageClasses = TicketMyBatisRepository.class)
+    @ComponentScan(basePackages = {
+            "com.lawrence.supportagent.persistence.repository",
+            "com.lawrence.supportagent.idempotency"
+    })
     static class TestApplication {
+        /** 为幂等适配器提供与生产一致的 UTC 系统时间端口。 */
+        @Bean
+        TimeProvider timeProvider() {
+            return Instant::now;
+        }
     }
 }

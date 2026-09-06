@@ -22,6 +22,27 @@ public record AsyncTask(Long id, AsyncTaskType taskType, AggregateType aggregate
         createdBy = DomainAssertions.requiredText(createdBy, "创建人");
     }
 
+    /** 创建等待首次执行的普通异步任务。 */
+    public static AsyncTask pending(AsyncTaskType taskType, AggregateType aggregateType,
+                                    long aggregateId, long aggregateVersion,
+                                    String idempotencyKey, String createdBy, Instant now) {
+        return new AsyncTask(null, taskType, aggregateType, aggregateId, aggregateVersion,
+                idempotencyKey, AsyncTaskStatus.PENDING, 0, 3, now, null, null,
+                null, null, null, null, createdBy, now, null, null, now);
+    }
+
+    /** 根据死亡任务创建独立的人工重试任务，原任务保持不变。 */
+    public static AsyncTask manualRetry(AsyncTask original, String idempotencyKey,
+                                        String reason, String createdBy, Instant now) {
+        DomainAssertions.state(original != null && original.id != null
+                && original.status == AsyncTaskStatus.DEAD, "只有死亡任务可以人工重试");
+        return new AsyncTask(null, original.taskType, original.aggregateType,
+                original.aggregateId, original.aggregateVersion, idempotencyKey,
+                AsyncTaskStatus.PENDING, 0, original.maxAttempts, now, null, null,
+                null, null, original.id, DomainAssertions.requiredText(reason, "人工重试原因"),
+                createdBy, now, null, null, now);
+    }
+
     /** 取得执行租约并开始一次尝试。 */
     public AsyncTask start(String worker, Instant now, Instant leaseUntil) {
         DomainAssertions.state(status == AsyncTaskStatus.PENDING
@@ -57,6 +78,17 @@ public record AsyncTask(Long id, AsyncTaskType taskType, AggregateType aggregate
                 null, null, DomainAssertions.requiredText(errorCode, "错误码"),
                 DomainAssertions.requiredText(message, "错误摘要"), startedAt,
                 target == AsyncTaskStatus.DEAD ? now : null);
+    }
+
+    /** 将运行中任务因不可重试错误直接置为死亡状态。 */
+    public AsyncTask failPermanently(String errorCode, String message, Instant now) {
+        requireRunning();
+        if (now == null) {
+            throw new IllegalArgumentException("失败时间不能为空");
+        }
+        return copy(AsyncTaskStatus.DEAD, attemptCount, now, now, null, null,
+                DomainAssertions.requiredText(errorCode, "错误码"),
+                DomainAssertions.requiredText(message, "错误摘要"), startedAt, now);
     }
 
     /** 因关联业务对象失效取消尚未完成的任务。 */

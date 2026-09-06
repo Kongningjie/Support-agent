@@ -90,6 +90,7 @@ application-prod.yml
 | `SUPPORT_AGENT_ELASTICSEARCH_URL` | Elasticsearch 地址 |
 | `SUPPORT_AGENT_ELASTICSEARCH_USERNAME` | Elasticsearch 用户名，可按环境为空 |
 | `SUPPORT_AGENT_ELASTICSEARCH_PASSWORD` | Elasticsearch 密码，可按环境为空 |
+| `SUPPORT_AGENT_WORKER_ID` | 异步任务 Worker 实例标识；为空时由应用在启动时生成 |
 | `DASHSCOPE_API_KEY` | DashScope API 密钥 |
 
 `.env` 必须忽略，仓库只提交 `.env.example`。IDEA 运行配置只引用本地环境变量，不提交真实秘密。

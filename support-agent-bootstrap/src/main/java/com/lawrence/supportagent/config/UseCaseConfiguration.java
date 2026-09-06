@@ -1,0 +1,69 @@
+package com.lawrence.supportagent.config;
+
+import com.lawrence.supportagent.asynctask.AsyncTaskCreator;
+import com.lawrence.supportagent.asynctask.AsyncTaskHandler;
+import com.lawrence.supportagent.asynctask.AsyncTaskRunner;
+import com.lawrence.supportagent.asynctask.AsyncTaskUseCase;
+import com.lawrence.supportagent.asynctask.port.AsyncTaskRepository;
+import com.lawrence.supportagent.idempotency.IdempotentExecutor;
+import com.lawrence.supportagent.knowledge.port.ManagedDocumentRepository;
+import com.lawrence.supportagent.resolvedcase.port.ResolvedCaseRepository;
+import com.lawrence.supportagent.sharedkernel.port.OperatorProvider;
+import com.lawrence.supportagent.sharedkernel.port.TimeProvider;
+import com.lawrence.supportagent.ticket.TicketCommandUseCase;
+import com.lawrence.supportagent.ticket.TicketQueryUseCase;
+import com.lawrence.supportagent.ticket.port.TicketRepository;
+import java.util.List;
+import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
+
+/** 在启动模块装配阶段 2 的应用用例，保持应用模块不依赖 Spring。 */
+@Configuration
+public class UseCaseConfiguration {
+    /** 创建工单只读查询用例。 */
+    @Bean
+    public TicketQueryUseCase ticketQueryUseCase(TicketRepository repository) {
+        return new TicketQueryUseCase(repository);
+    }
+
+    /** 创建具有外部幂等保护的工单命令用例。 */
+    @Bean
+    public TicketCommandUseCase ticketCommandUseCase(TicketRepository repository,
+                                                      TicketQueryUseCase queryUseCase,
+                                                      IdempotentExecutor executor,
+                                                      OperatorProvider operatorProvider,
+                                                      TimeProvider timeProvider) {
+        return new TicketCommandUseCase(repository, queryUseCase, executor,
+                operatorProvider, timeProvider);
+    }
+
+    /** 创建供后续业务事务内投递任务的统一入口。 */
+    @Bean
+    public AsyncTaskCreator asyncTaskCreator(AsyncTaskRepository repository,
+                                              TimeProvider timeProvider) {
+        return new AsyncTaskCreator(repository, timeProvider);
+    }
+
+    /** 创建任务执行器；阶段 2 允许生产 Handler 集合为空。 */
+    @Bean
+    public AsyncTaskRunner asyncTaskRunner(AsyncTaskRepository repository,
+                                            TimeProvider timeProvider,
+                                            ObjectProvider<AsyncTaskHandler> handlers) {
+        List<AsyncTaskHandler> availableHandlers = handlers.orderedStream().toList();
+        return new AsyncTaskRunner(repository, timeProvider, availableHandlers);
+    }
+
+    /** 创建任务查询、取消及人工重试用例。 */
+    @Bean
+    public AsyncTaskUseCase asyncTaskUseCase(AsyncTaskRepository taskRepository,
+                                              TicketRepository ticketRepository,
+                                              ManagedDocumentRepository documentRepository,
+                                              ResolvedCaseRepository caseRepository,
+                                              IdempotentExecutor executor,
+                                              OperatorProvider operatorProvider,
+                                              TimeProvider timeProvider) {
+        return new AsyncTaskUseCase(taskRepository, ticketRepository, documentRepository,
+                caseRepository, executor, operatorProvider, timeProvider);
+    }
+}
