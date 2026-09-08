@@ -11,6 +11,7 @@ import com.lawrence.supportagent.sharedkernel.port.TimeProvider;
 import com.lawrence.supportagent.ticket.port.TicketRepository;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.UUID;
 
 /** 编排手工工单草稿、修改、提交和关闭，并落实幂等与乐观锁边界。 */
 public class TicketCommandUseCase {
@@ -48,6 +49,26 @@ public class TicketCommandUseCase {
                     normalizedProblem, normalizedActions, operator, now));
             String ticketNo = formatTicketNo(inserted.id());
             Ticket numbered = repository.assignNumber(inserted, ticketNo);
+            return new IdempotentResource<>("TICKET", numbered.id(), TicketDetails.from(numbered));
+        }, queryUseCase::getByInternalId);
+    }
+
+    /** 使用冻结会话轮次创建唯一工单草稿；模型生成必须在调用本方法前完成。 */
+    public TicketDetails createSuggestedDraft(UUID conversationId, UUID sourceTurnId,
+                                              String title, String problemDescription,
+                                              String attemptedActions, String idempotencyKey) {
+        if (conversationId == null || sourceTurnId == null) throw new IllegalArgumentException("会话和来源轮次不能为空");
+        String normalizedTitle = required(title, "工单标题", 160);
+        String normalizedProblem = required(problemDescription, "问题描述", 8000);
+        String normalizedActions = optional(attemptedActions, "已尝试操作", 8000);
+        IdempotencyCommand command = command("TICKET_CREATE_FROM_CONVERSATION", idempotencyKey,
+                RequestFingerprint.sha256(conversationId.toString(), sourceTurnId.toString()));
+        return idempotentExecutor.execute(command, () -> {
+            Instant now = timeProvider.now();
+            String operator = operatorProvider.currentOperator().value();
+            Ticket inserted = repository.save(Ticket.draft(conversationId, sourceTurnId,
+                    normalizedTitle, normalizedProblem, normalizedActions, operator, now));
+            Ticket numbered = repository.assignNumber(inserted, formatTicketNo(inserted.id()));
             return new IdempotentResource<>("TICKET", numbered.id(), TicketDetails.from(numbered));
         }, queryUseCase::getByInternalId);
     }

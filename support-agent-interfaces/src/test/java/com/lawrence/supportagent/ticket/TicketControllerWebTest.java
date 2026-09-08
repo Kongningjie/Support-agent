@@ -25,7 +25,8 @@ class TicketControllerWebTest {
     void setUp() {
         TimeProvider timeProvider = () -> Instant.parse("2026-09-04T01:00:00Z");
         TicketController controller = new TicketController(mock(TicketCommandUseCase.class),
-                mock(TicketQueryUseCase.class), new ApiResponseFactory(timeProvider));
+                mock(TicketQueryUseCase.class), mock(SuggestedTicketUseCase.class),
+                new ApiResponseFactory(timeProvider));
         mockMvc = MockMvcBuilders.standaloneSetup(controller)
                 .setControllerAdvice(new GlobalExceptionHandler(timeProvider)).build();
     }

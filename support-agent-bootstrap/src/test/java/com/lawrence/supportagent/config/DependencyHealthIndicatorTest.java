@@ -59,7 +59,8 @@ class DependencyHealthIndicatorTest {
         server.start();
         try {
             SupportAgentProperties configured = new SupportAgentProperties("test-operator",
-                    new SupportAgentProperties.DashScope("", "text-embedding-v4"),
+                    new SupportAgentProperties.DashScope("", "https://dashscope.aliyuncs.com/api/v1",
+                            "qwen-plus", "text-embedding-v4", "gte-rerank-v2"),
                     new SupportAgentProperties.Elasticsearch(
                             "http://127.0.0.1:" + server.getAddress().getPort(), "elastic", "secret",
                             "support_knowledge_v1", "support_knowledge_current"));
@@ -74,7 +75,8 @@ class DependencyHealthIndicatorTest {
     /** 构造健康探测测试所需的最小配置。 */
     private SupportAgentProperties properties(String apiKey, String elasticsearchUrl) {
         return new SupportAgentProperties("test-operator",
-                new SupportAgentProperties.DashScope(apiKey, "text-embedding-v4"),
+                new SupportAgentProperties.DashScope(apiKey, "https://dashscope.aliyuncs.com/api/v1",
+                        "qwen-plus", "text-embedding-v4", "gte-rerank-v2"),
                 new SupportAgentProperties.Elasticsearch(elasticsearchUrl, "", "",
                         "support_knowledge_v1", "support_knowledge_current"));
     }

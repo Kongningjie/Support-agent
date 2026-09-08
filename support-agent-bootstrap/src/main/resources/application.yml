@@ -28,13 +28,20 @@ support-agent:
   operator-id: dev-operator
   dashscope:
     api-key: ${DASHSCOPE_API_KEY:}
+    base-url: ${DASHSCOPE_HTTP_BASE_URL:https://dashscope.aliyuncs.com/api/v1}
+    chat-model: ${SUPPORT_AGENT_CHAT_MODEL:qwen-plus}
     embedding-model: ${SUPPORT_AGENT_EMBEDDING_MODEL:text-embedding-v4}
+    rerank-model: ${SUPPORT_AGENT_RERANK_MODEL:gte-rerank-v2}
   elasticsearch:
     url: ${SUPPORT_AGENT_ELASTICSEARCH_URL:http://localhost:9200}
     username: ${SUPPORT_AGENT_ELASTICSEARCH_USERNAME:}
     password: ${SUPPORT_AGENT_ELASTICSEARCH_PASSWORD:}
     knowledge-index: ${SUPPORT_AGENT_KNOWLEDGE_INDEX:support_knowledge_v1}
     knowledge-alias: ${SUPPORT_AGENT_KNOWLEDGE_ALIAS:support_knowledge_current}
+  retrieval:
+    vector-minimum-similarity: ${SUPPORT_AGENT_VECTOR_MINIMUM_SIMILARITY:0.20}
+    vector-candidates: ${SUPPORT_AGENT_VECTOR_CANDIDATES:200}
+    rerank-grounded-threshold: ${SUPPORT_AGENT_RERANK_GROUNDED_THRESHOLD:0.35}
   async-task:
     enabled: true
     worker-id: ${SUPPORT_AGENT_WORKER_ID:}

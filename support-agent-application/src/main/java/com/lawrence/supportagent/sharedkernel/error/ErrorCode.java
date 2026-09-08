@@ -37,5 +37,23 @@ public enum ErrorCode {
     /** MySQL、Redis、Elasticsearch 等外部依赖不可用。 */
     DEPENDENCY_UNAVAILABLE,
     /** 当前环境需要但未配置 DashScope 密钥。 */
-    DASHSCOPE_NOT_CONFIGURED
+    DASHSCOPE_NOT_CONFIGURED,
+    /** 会话版本与服务端当前版本不一致。 */
+    CHAT_VERSION_CONFLICT,
+    /** 指定的后续会话已经过期或不存在。 */
+    CHAT_CONVERSATION_EXPIRED,
+    /** 同一会话已有未过期的运行。 */
+    CHAT_CONVERSATION_BUSY,
+    /** 相同客户端消息编号承载了不同内容。 */
+    CHAT_MESSAGE_ID_REUSED,
+    /** 混合检索的两个召回分支均不可用。 */
+    RETRIEVAL_FAILED,
+    /** 模型不可用、超时或返回了无效结果。 */
+    CHAT_MODEL_UNAVAILABLE,
+    /** 重生成后答案仍未通过安全校验。 */
+    CHAT_ANSWER_VALIDATION_FAILED,
+    /** 工单建议不存在、已过期或不属于当前会话。 */
+    TICKET_SUGGESTION_NOT_FOUND,
+    /** 工单建议正在被另一个请求消费。 */
+    TICKET_SUGGESTION_IN_PROGRESS
 }

@@ -16,9 +16,13 @@ public record SupportAgentProperties(String operatorId, DashScope dashscope,
      * DashScope 配置；密钥为空表示当前环境未启用模型能力。
      *
      * @param apiKey DashScope API 密钥；不得写入仓库或日志
+     * @param baseUrl DashScope 原生 API 根地址
+     * @param chatModel 对话与意图模型名称
      * @param embeddingModel 文档与查询向量模型名称
+     * @param rerankModel 候选重排模型名称
      */
-    public record DashScope(String apiKey, String embeddingModel) { }
+    public record DashScope(String apiKey, String baseUrl, String chatModel,
+                            String embeddingModel, String rerankModel) { }
 
     /**
      * Elasticsearch 健康探测配置。

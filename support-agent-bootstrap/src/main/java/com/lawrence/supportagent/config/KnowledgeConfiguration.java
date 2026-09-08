@@ -66,7 +66,7 @@ public class KnowledgeConfiguration {
     @Bean(destroyMethod = "close")
     public EmbeddingModelPort embeddingModelPort(SupportAgentProperties properties) {
         SupportAgentProperties.DashScope config = properties.dashscope();
-        return new DashScopeEmbeddingModelAdapter(config.apiKey(), config.embeddingModel());
+        return new DashScopeEmbeddingModelAdapter(config.apiKey(), config.embeddingModel(), config.baseUrl());
     }
 
     /** 创建 Elasticsearch REST5 客户端；索引仍由首个任务惰性检查。 */
@@ -77,8 +77,8 @@ public class KnowledgeConfiguration {
 
     /** 创建知识索引持久化端口。 */
     @Bean
-    public KnowledgeIndexPort knowledgeIndexPort(Rest5Client client, ObjectMapper objectMapper,
-                                                 SupportAgentProperties properties) {
+    public ElasticsearchKnowledgeIndexAdapter knowledgeIndexPort(Rest5Client client, ObjectMapper objectMapper,
+                                                                  SupportAgentProperties properties) {
         SupportAgentProperties.Elasticsearch config = properties.elasticsearch();
         return new ElasticsearchKnowledgeIndexAdapter(client, objectMapper,
                 config.knowledgeIndex(), config.knowledgeAlias(),

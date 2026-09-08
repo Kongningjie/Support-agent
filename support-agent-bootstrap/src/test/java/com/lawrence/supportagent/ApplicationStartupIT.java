@@ -19,7 +19,9 @@ import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
+import org.testcontainers.containers.GenericContainer;
 import org.testcontainers.mysql.MySQLContainer;
+import org.testcontainers.utility.DockerImageName;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
 
@@ -40,6 +42,9 @@ class ApplicationStartupIT {
             .withDatabaseName("support_agent")
             .withUsername("support_agent")
             .withPassword("test_password");
+    @Container
+    private static final GenericContainer<?> REDIS = new GenericContainer<>(
+            DockerImageName.parse("redis:7.4.7")).withExposedPorts(6379);
 
     @LocalServerPort
     private int serverPort;
@@ -52,6 +57,34 @@ class ApplicationStartupIT {
         registry.add("spring.datasource.url", MYSQL::getJdbcUrl);
         registry.add("spring.datasource.username", MYSQL::getUsername);
         registry.add("spring.datasource.password", MYSQL::getPassword);
+        registry.add("spring.data.redis.host", REDIS::getHost);
+        registry.add("spring.data.redis.port", () -> REDIS.getMappedPort(6379));
+        registry.add("spring.data.redis.url", () -> "redis://" + REDIS.getHost()
+                + ":" + REDIS.getMappedPort(6379));
+    }
+
+    /** 验证无需模型的越界分支可按稳定顺序完成真实 SSE 响应并写入审计。 */
+    @Test
+    void shouldStreamFixedOutOfScopeAnswer() throws Exception {
+        HttpRequest request = HttpRequest.newBuilder(
+                        URI.create("http://127.0.0.1:" + serverPort + "/api/v1/chat/stream"))
+                .header("Accept", "text/event-stream")
+                .header("Content-Type", "application/json")
+                .POST(HttpRequest.BodyPublishers.ofString("""
+                        {"clientMessageId":"%s","message":"告诉我今天的股票行情"}
+                        """.formatted(UUID.randomUUID())))
+                .build();
+
+        HttpResponse<String> response = HttpClient.newHttpClient().send(
+                request, HttpResponse.BodyHandlers.ofString());
+
+        assertEquals(200, response.statusCode());
+        assertTrue(response.headers().firstValue("Content-Type").orElse("")
+                .startsWith("text/event-stream"));
+        assertEventOrder(response.body(), "conversation.started", "answer.started",
+                "answer.delta", "answer.completed");
+        assertTrue(response.body().contains("\"resultStatus\":\"OUT_OF_SCOPE\""));
+        assertTrue(response.body().contains("\"conversationVersion\":1"));
     }
 
     /** 验证存活探针为 UP，依赖不可用时就绪探针为 DOWN。 */
@@ -161,7 +194,7 @@ class ApplicationStartupIT {
         assertEquals(404, get(client, "/api/v1/knowledge/documents/" + documentId).statusCode());
     }
 
-    /** 验证 OpenAPI 已注册阶段 2 接口且未提前开放解决工单接口。 */
+    /** 验证 OpenAPI 已注册当前阶段接口且未提前开放解决工单接口。 */
     @Test
     void shouldExposeOnlyCurrentStageTicketOperations() throws Exception {
         JsonNode paths = objectMapper.readTree(get(HttpClient.newHttpClient(), "/v3/api-docs").body())
@@ -171,6 +204,8 @@ class ApplicationStartupIT {
         assertTrue(paths.has("/api/v1/async-tasks/{taskId}/retry"));
         assertTrue(paths.has("/api/v1/knowledge/documents/text"));
         assertTrue(paths.has("/api/v1/knowledge/documents/{documentId}/publish"));
+        assertTrue(paths.has("/api/v1/chat/stream"));
+        assertTrue(paths.has("/api/v1/tickets/drafts/from-conversation"));
         assertFalse(paths.has("/api/v1/tickets/{ticketNo}/resolve"));
     }
 
@@ -190,5 +225,15 @@ class ApplicationStartupIT {
                 .header("Content-Type", "application/json")
                 .method(method, HttpRequest.BodyPublishers.ofString(body)).build();
         return client.send(request, HttpResponse.BodyHandlers.ofString());
+    }
+
+    /** 断言多个 SSE 事件名称按给定先后顺序出现。 */
+    private void assertEventOrder(String body, String... eventNames) {
+        int previous = -1;
+        for (String eventName : eventNames) {
+            int current = body.indexOf("event:" + eventName, previous + 1);
+            assertTrue(current > previous, "SSE 事件顺序错误：" + eventName);
+            previous = current;
+        }
     }
 }

@@ -14,7 +14,7 @@ class DashScopeEmbeddingModelAdapterOnlineIT {
     @Test
     void shouldCreateDocumentAndQueryEmbeddings() {
         try (DashScopeEmbeddingModelAdapter adapter = new DashScopeEmbeddingModelAdapter(
-                System.getenv("DASHSCOPE_API_KEY"), "text-embedding-v4")) {
+                System.getenv("DASHSCOPE_API_KEY"), "text-embedding-v4", baseUrl())) {
             List<Double> document = adapter.embedDocuments(
                     List.of("Support Agent 在线 Embedding 协议验证。"), null).getFirst();
             List<Double> query = adapter.embedQuery("如何验证 Embedding？");
@@ -24,5 +24,11 @@ class DashScopeEmbeddingModelAdapterOnlineIT {
             assertTrue(document.stream().allMatch(value -> value != null && Double.isFinite(value)));
             assertTrue(query.stream().allMatch(value -> value != null && Double.isFinite(value)));
         }
+    }
+
+    /** 返回在线环境显式地址，未配置时使用 DashScope 公共地址。 */
+    private String baseUrl() {
+        return System.getenv().getOrDefault("DASHSCOPE_HTTP_BASE_URL",
+                "https://dashscope.aliyuncs.com/api/v1");
     }
 }

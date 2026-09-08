@@ -13,6 +13,9 @@ import com.lawrence.supportagent.sharedkernel.port.OperatorProvider;
 import com.lawrence.supportagent.sharedkernel.port.TimeProvider;
 import com.lawrence.supportagent.ticket.TicketCommandUseCase;
 import com.lawrence.supportagent.ticket.TicketQueryUseCase;
+import com.lawrence.supportagent.ticket.SuggestedTicketUseCase;
+import com.lawrence.supportagent.chat.port.ConversationStorePort;
+import com.lawrence.supportagent.model.ChatModelPort;
 import com.lawrence.supportagent.ticket.port.TicketRepository;
 import java.util.List;
 import org.springframework.beans.factory.ObjectProvider;
@@ -37,6 +40,16 @@ public class UseCaseConfiguration {
                                                       TimeProvider timeProvider) {
         return new TicketCommandUseCase(repository, queryUseCase, executor,
                 operatorProvider, timeProvider);
+    }
+
+    /** 创建显式消费会话建议的工单草稿用例。 */
+    @Bean
+    public SuggestedTicketUseCase suggestedTicketUseCase(ConversationStorePort conversations,
+                                                          ChatModelPort model,
+                                                          TicketCommandUseCase commands,
+                                                          TicketQueryUseCase queries,
+                                                          TimeProvider timeProvider) {
+        return new SuggestedTicketUseCase(conversations, model, commands, queries, timeProvider);
     }
 
     /** 创建供后续业务事务内投递任务的统一入口。 */

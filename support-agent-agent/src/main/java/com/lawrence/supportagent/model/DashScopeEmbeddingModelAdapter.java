@@ -36,6 +36,11 @@ public class DashScopeEmbeddingModelAdapter implements EmbeddingModelPort, AutoC
         this(apiKey, modelName, param -> new TextEmbedding().call(param));
     }
 
+    /** 使用显式 Base URL 构造 Embedding 客户端。 */
+    public DashScopeEmbeddingModelAdapter(String apiKey, String modelName, String baseUrl) {
+        this(apiKey, modelName, param -> new TextEmbedding(baseUrl).call(param));
+    }
+
     /** 注入测试可替换的官方 SDK 调用边界。 */
     DashScopeEmbeddingModelAdapter(String apiKey, String modelName, SdkCaller sdkCaller) {
         this.apiKey = apiKey;

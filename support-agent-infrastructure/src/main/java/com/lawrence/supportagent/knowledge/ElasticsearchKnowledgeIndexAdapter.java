@@ -6,6 +6,11 @@ import co.elastic.clients.transport.rest5_client.low_level.ResponseException;
 import co.elastic.clients.transport.rest5_client.low_level.Rest5Client;
 import com.lawrence.supportagent.knowledge.port.KnowledgeIndexException;
 import com.lawrence.supportagent.knowledge.port.KnowledgeIndexPort;
+import com.lawrence.supportagent.knowledge.ExactTerm;
+import com.lawrence.supportagent.knowledge.ExactTermExtractor;
+import com.lawrence.supportagent.knowledge.ExactTermType;
+import com.lawrence.supportagent.retrieval.RetrievalEvidence;
+import com.lawrence.supportagent.retrieval.port.KnowledgeSearchPort;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
@@ -14,6 +19,7 @@ import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import org.apache.hc.core5.http.ContentType;
 import org.apache.hc.core5.http.io.entity.EntityUtils;
 import org.apache.hc.core5.http.io.entity.StringEntity;
@@ -22,13 +28,14 @@ import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
 
 /** 使用 Elasticsearch REST5 客户端维护版本化知识索引和固定业务别名。 */
-public class ElasticsearchKnowledgeIndexAdapter implements KnowledgeIndexPort {
+public class ElasticsearchKnowledgeIndexAdapter implements KnowledgeIndexPort, KnowledgeSearchPort {
     private static final String ICU_ANALYZER = "support_icu";
     private final Rest5Client client;
     private final ObjectMapper objectMapper;
     private final String indexName;
     private final String aliasName;
     private final String authorization;
+    private final ExactTermExtractor exactTermExtractor;
 
     /** 注入客户端、JSON 编解码器、冻结索引名称、别名和可选基础认证。 */
     public ElasticsearchKnowledgeIndexAdapter(Rest5Client client, ObjectMapper objectMapper,
@@ -39,6 +46,75 @@ public class ElasticsearchKnowledgeIndexAdapter implements KnowledgeIndexPort {
         this.indexName = requiredName(indexName, "物理索引名");
         this.aliasName = requiredName(aliasName, "业务别名");
         this.authorization = basicAuthorization(username, password);
+        this.exactTermExtractor = new ExactTermExtractor();
+    }
+
+    /** {@inheritDoc} */
+    @Override
+    public List<RetrievalEvidence> searchBm25(String query, int limit) {
+        List<Object> should = new ArrayList<>();
+        should.add(Map.of("multi_match", Map.of("query", query, "type", "best_fields",
+                "fields", List.of("title^3", "headingPath^2", "content"),
+                "minimum_should_match", "30%", "_name", "text")));
+        should.add(Map.of("multi_match", Map.of("query", query,
+                "fields", List.of("title", "headingPath"), "_name", "title_or_heading")));
+        should.add(Map.of("match", Map.of("content", Map.of("query", query,
+                "_name", "content"))));
+        for (ExactTerm term : exactTermExtractor.extract(query)) {
+            should.add(Map.of("nested", Map.of("path", "exactTerms", "query", Map.of(
+                    "bool", Map.of("filter", List.of(
+                            Map.of("term", Map.of("exactTerms.type", term.type().name())),
+                            Map.of("term", Map.of("exactTerms.normalizedValue",
+                                    term.normalizedValue()))))), "score_mode", "max",
+                    "_name", "exact_term", "boost", 5)));
+        }
+        Map<String, Object> body = Map.of("size", limit, "track_total_hits", false,
+                "_source", true, "query", Map.of("bool", Map.of(
+                        "should", should, "minimum_should_match", 1)));
+        return parseSearch(perform("POST", "/" + aliasName + "/_search", body, true));
+    }
+
+    /** {@inheritDoc} */
+    @Override
+    public List<RetrievalEvidence> searchVector(List<Double> vector, int limit,
+                                                int numberOfCandidates,
+                                                double minimumSimilarity) {
+        if (vector == null || vector.size() != 1024
+                || vector.stream().anyMatch(value -> value == null || !Double.isFinite(value))) {
+            throw new IllegalArgumentException("查询向量必须包含 1024 个有限值");
+        }
+        Map<String, Object> knn = Map.of("field", "embedding", "query_vector", vector,
+                "k", limit, "num_candidates", numberOfCandidates,
+                "similarity", minimumSimilarity);
+        return parseSearch(perform("POST", "/" + aliasName + "/_search",
+                Map.of("size", limit, "_source", true, "knn", knn), true));
+    }
+
+    /** 把 Elasticsearch 命中转换为与客户端 SDK 无关的候选证据。 */
+    private List<RetrievalEvidence> parseSearch(JsonNode response) {
+        JsonNode hits = response.path("hits").path("hits");
+        if (!hits.isArray()) {
+            throw failure("KNOWLEDGE_SEARCH_RESPONSE_INVALID",
+                    "Elasticsearch 检索响应结构不合法", false, null);
+        }
+        List<RetrievalEvidence> values = new ArrayList<>();
+        for (JsonNode hit : hits) {
+            JsonNode source = hit.path("_source");
+            List<ExactTerm> terms = new ArrayList<>();
+            for (JsonNode term : source.path("exactTerms")) {
+                terms.add(new ExactTerm(ExactTermType.valueOf(term.path("type").asText()),
+                        term.path("normalizedValue").asText(), term.path("displayValue").asText(),
+                        term.path("sourceOffsetStart").asInt(), term.path("sourceOffsetEnd").asInt()));
+            }
+            Set<String> matches = new java.util.HashSet<>();
+            hit.path("matched_queries").forEach(value -> matches.add(value.asText()));
+            values.add(new RetrievalEvidence(source.path("chunkId").asText(),
+                    source.path("sourceType").asText(), source.path("sourceId").asLong(),
+                    source.path("sourceVersion").asLong(), source.path("title").asText(),
+                    source.path("headingPath").asText(), source.path("content").asText(),
+                    List.copyOf(terms), Set.copyOf(matches), null, null, 0, null));
+        }
+        return List.copyOf(values);
     }
 
     /** {@inheritDoc} */

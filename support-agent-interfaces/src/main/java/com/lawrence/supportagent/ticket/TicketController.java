@@ -33,14 +33,28 @@ import org.springframework.web.bind.annotation.RestController;
 public class TicketController {
     private final TicketCommandUseCase commandUseCase;
     private final TicketQueryUseCase queryUseCase;
+    private final SuggestedTicketUseCase suggestedTicketUseCase;
     private final ApiResponseFactory responses;
 
     /** 注入工单命令、查询用例和统一响应工厂。 */
     public TicketController(TicketCommandUseCase commandUseCase,
-                            TicketQueryUseCase queryUseCase, ApiResponseFactory responses) {
+                            TicketQueryUseCase queryUseCase, SuggestedTicketUseCase suggestedTicketUseCase,
+                            ApiResponseFactory responses) {
         this.commandUseCase = commandUseCase;
         this.queryUseCase = queryUseCase;
+        this.suggestedTicketUseCase = suggestedTicketUseCase;
         this.responses = responses;
+    }
+
+    /** 显式消费无可靠知识建议并生成唯一工单草稿。 */
+    @Operation(summary = "从会话建议创建工单草稿")
+    @PostMapping("/drafts/from-conversation")
+    public ResponseEntity<ApiResult<TicketResponse>> createFromConversation(
+            @Valid @RequestBody ConversationDraftRequest body, HttpServletRequest request) {
+        TicketDetails ticket = suggestedTicketUseCase.create(body.conversationId(),
+                body.suggestionId(), body.idempotencyKey());
+        return ResponseEntity.status(HttpStatus.CREATED)
+                .body(responses.success(TicketResponse.from(ticket), request));
     }
 
     /** 手工创建尚未提交的工单草稿。 */
@@ -147,6 +161,18 @@ public class TicketController {
                     example = "ticket-create-20260904-001")
             @NotBlank @Size(max = 160) String idempotencyKey) {
     }
+
+    /**
+     * 从会话建议创建草稿的请求。
+     *
+     * @param conversationId 建议所属会话 UUID
+     * @param suggestionId SSE 返回的建议 UUID
+     * @param idempotencyKey 当前创建操作幂等键
+     */
+    public record ConversationDraftRequest(
+            @NotNull @Schema(description = "建议所属会话 UUID") java.util.UUID conversationId,
+            @NotNull @Schema(description = "ticket.suggested 返回的建议 UUID") java.util.UUID suggestionId,
+            @NotBlank @Size(max = 160) @Schema(description = "本次创建操作幂等键") String idempotencyKey) { }
 
     /**
      * 修改工单草稿请求。

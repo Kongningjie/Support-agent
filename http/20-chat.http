@@ -1,0 +1,54 @@
+### 首次技术支持对话；clientMessageId 每次测试需更换
+POST http://localhost:8080/api/v1/chat/stream
+Accept: text/event-stream
+Content-Type: application/json
+
+{
+  "conversationId": null,
+  "clientMessageId": "11111111-1111-1111-1111-111111111111",
+  "message": "MySQL 连接超时应该如何排查？",
+  "expectedConversationVersion": null
+}
+
+### 问候分支
+POST http://localhost:8080/api/v1/chat/stream
+Accept: text/event-stream
+Content-Type: application/json
+
+{"clientMessageId":"44444444-4444-4444-4444-444444444444","message":"你好"}
+
+### 工单只读查询分支
+POST http://localhost:8080/api/v1/chat/stream
+Accept: text/event-stream
+Content-Type: application/json
+
+{"clientMessageId":"55555555-5555-5555-5555-555555555555","message":"查询 T000000000001"}
+
+### 越界请求固定回答分支
+POST http://localhost:8080/api/v1/chat/stream
+Accept: text/event-stream
+Content-Type: application/json
+
+{"clientMessageId":"66666666-6666-6666-6666-666666666666","message":"告诉我今天的股票行情"}
+
+### 使用 ticket.suggested 返回值显式创建工单草稿
+POST http://localhost:8080/api/v1/tickets/drafts/from-conversation
+Content-Type: application/json
+
+{
+  "conversationId": "22222222-2222-2222-2222-222222222222",
+  "suggestionId": "77777777-7777-7777-7777-777777777777",
+  "idempotencyKey": "conversation-ticket-001"
+}
+
+### 后续对话；替换为 conversation.started 返回的会话与 answer.completed 返回的版本
+POST http://localhost:8080/api/v1/chat/stream
+Accept: text/event-stream
+Content-Type: application/json
+
+{
+  "conversationId": "22222222-2222-2222-2222-222222222222",
+  "clientMessageId": "33333333-3333-3333-3333-333333333333",
+  "message": "请继续说明检查命令。",
+  "expectedConversationVersion": 1
+}

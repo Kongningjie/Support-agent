@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.lawrence.supportagent.persistence.mapper.AgentAuditMapper">
+    <insert id="insertRun">
+        INSERT INTO agent_run (run_id,conversation_id,client_message_id,status,created_at)
+        VALUES (#{runId},#{conversationId},#{clientMessageId},'RUNNING',#{createdAt})
+    </insert>
+    <update id="updateIntent">
+        UPDATE agent_run SET intent=#{intent},intent_confidence=#{confidence},
+            intent_reason_code=#{reasonCode} WHERE run_id=#{runId}
+    </update>
+    <insert id="insertRetrieval">
+        INSERT INTO retrieval_trace (run_id,standalone_query_hash,bm25_status,vector_status,
+            rerank_status,rerank_degraded,grounded_threshold,candidate_scores_json,selected_count,
+            retrieval_status,duration_ms,created_at)
+        VALUES (#{runId},#{queryHash},#{bm25Status},#{vectorStatus},#{rerankStatus},#{degraded},
+            #{threshold},CAST(#{scoresJson} AS JSON),#{selectedCount},#{retrievalStatus},#{durationMs},#{createdAt})
+    </insert>
+    <update id="succeed">
+        UPDATE agent_run SET prompt_version=#{promptVersion},chat_model=#{chatModel},
+            embedding_model=#{embeddingModel},rerank_model=#{rerankModel},status='SUCCEEDED',
+            duration_ms=#{durationMs},finished_at=#{finishedAt} WHERE run_id=#{runId}
+    </update>
+    <update id="fail">
+        UPDATE agent_run SET status=#{status},error_code=#{errorCode},duration_ms=#{durationMs},
+            finished_at=#{finishedAt} WHERE run_id=#{runId}
+    </update>
+</mapper>
