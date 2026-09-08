@@ -1,0 +1,81 @@
+@baseUrl = http://localhost:8080/api/v1
+
+### 直接文本创建知识草稿；响应 documentId 为字符串
+# @name createKnowledgeText
+POST {{baseUrl}}/knowledge/documents/text
+Content-Type: application/json
+
+{
+  "title": "MySQL 连接故障排查",
+  "content": "# 连接检查\n先确认 ERROR_CONNECTION_REFUSED，再运行 `Test-NetConnection localhost -Port 3306`。",
+  "idempotencyKey": "knowledge-create-text-local-001"
+}
+
+> {% client.global.set("documentId", response.body.data.documentId); client.global.set("documentVersion", response.body.data.version); %}
+
+### 上传单个 Markdown 文件；title 留空时使用文件名主体
+# @name uploadKnowledgeFile
+POST {{baseUrl}}/knowledge/documents/files
+Content-Type: multipart/form-data; boundary=SupportAgentBoundary
+
+--SupportAgentBoundary
+Content-Disposition: form-data; name="idempotencyKey"
+
+knowledge-create-file-local-001
+--SupportAgentBoundary
+Content-Disposition: form-data; name="file"; filename="mysql-troubleshooting.md"
+Content-Type: text/markdown
+
+< ./samples/mysql-troubleshooting.md
+--SupportAgentBoundary--
+
+### 查询详情，包含规范化正文和内容哈希
+GET {{baseUrl}}/knowledge/documents/{{documentId}}
+Accept: application/json
+
+### 分页查询，列表不返回正文
+GET {{baseUrl}}/knowledge/documents?status=DRAFT&keyword=MySQL&page=1&size=20
+Accept: application/json
+
+### 修改草稿；需要使用最新 version
+# @name reviseKnowledge
+PUT {{baseUrl}}/knowledge/documents/{{documentId}}/draft
+Content-Type: application/json
+
+{
+  "title": "MySQL 连接故障排查",
+  "content": "# 连接检查\n先检查 localhost:3306，再执行 `Test-NetConnection localhost -Port 3306`。",
+  "version": {{documentVersion}}
+}
+
+> {% client.global.set("documentVersion", response.body.data.version); %}
+
+### 发起异步发布；需要配置真实 DashScope 密钥才能最终成功
+# @name publishKnowledge
+POST {{baseUrl}}/knowledge/documents/{{documentId}}/publish
+Content-Type: application/json
+
+{
+  "version": {{documentVersion}},
+  "idempotencyKey": "knowledge-publish-local-001"
+}
+
+> {% client.global.set("indexTaskId", response.body.data.taskId); client.global.set("documentVersion", response.body.data.document.version); %}
+
+### 查询索引任务状态
+GET {{baseUrl}}/async-tasks/{{indexTaskId}}
+Accept: application/json
+
+### 仅当文档已经 PUBLISHED 时可归档
+POST {{baseUrl}}/knowledge/documents/{{documentId}}/archive
+Content-Type: application/json
+
+{
+  "version": {{documentVersion}},
+  "archiveReason": "该知识已由新版文档替代",
+  "idempotencyKey": "knowledge-archive-local-001"
+}
+
+### 仅允许删除从未发布的 DRAFT
+DELETE {{baseUrl}}/knowledge/documents/{{documentId}}?version={{documentVersion}}
+Accept: application/json

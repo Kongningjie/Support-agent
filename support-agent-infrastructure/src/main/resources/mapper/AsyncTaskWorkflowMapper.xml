@@ -46,32 +46,32 @@
     <select id="findClaimableIds" resultType="long">
         SELECT id
         FROM async_task
-        WHERE attempt_count &lt; max_attempts
-          AND ((status IN ('PENDING', 'RETRY_WAIT') AND next_run_at &lt;= #{now})
-            OR (status = 'RUNNING' AND locked_until &lt;= #{now}))
+        WHERE (status IN ('PENDING', 'RETRY_WAIT') AND attempt_count &lt; max_attempts
+               AND next_run_at &lt;= #{now})
+           OR (status = 'RUNNING' AND locked_until &lt;= #{now})
         ORDER BY next_run_at ASC, id ASC
         LIMIT #{limit}
         FOR UPDATE SKIP LOCKED
     </select>
 
-    <update id="expireExhaustedLeases">
-        UPDATE async_task
-        SET status = 'DEAD', next_run_at = #{now}, locked_by = NULL, locked_until = NULL,
-            last_error_code = 'ASYNC_TASK_WORKER_LEASE_EXPIRED',
-            last_error_message = 'Worker 租约过期且任务已耗尽尝试次数',
-            finished_at = #{now}, updated_at = #{now}
-        WHERE status = 'RUNNING' AND locked_until &lt;= #{now}
-          AND attempt_count &gt;= max_attempts
-    </update>
-
     <update id="claim">
         UPDATE async_task
-        SET status = 'RUNNING', attempt_count = attempt_count + 1, next_run_at = #{now},
+        SET attempt_count = CASE
+                WHEN status = 'RUNNING' AND attempt_count &gt;= max_attempts THEN attempt_count
+                ELSE attempt_count + 1 END,
+            last_error_code = CASE
+                WHEN status = 'RUNNING' AND attempt_count &gt;= max_attempts
+                    THEN 'ASYNC_TASK_WORKER_LEASE_EXPIRED'
+                ELSE NULL END,
+            last_error_message = CASE
+                WHEN status = 'RUNNING' AND attempt_count &gt;= max_attempts
+                    THEN 'Worker 租约过期且任务已耗尽尝试次数'
+                ELSE NULL END,
+            status = 'RUNNING', next_run_at = #{now},
             locked_by = #{workerId}, locked_until = #{lockedUntil},
-            last_error_code = NULL, last_error_message = NULL,
             started_at = COALESCE(started_at, #{now}), finished_at = NULL, updated_at = #{now}
-        WHERE id = #{id} AND attempt_count &lt; max_attempts
-          AND ((status IN ('PENDING', 'RETRY_WAIT') AND next_run_at &lt;= #{now})
+        WHERE id = #{id} AND ((status IN ('PENDING', 'RETRY_WAIT')
+                AND attempt_count &lt; max_attempts AND next_run_at &lt;= #{now})
             OR (status = 'RUNNING' AND locked_until &lt;= #{now}))
     </update>
 
@@ -103,5 +103,13 @@
         SET status = 'CANCELLED', next_run_at = #{now}, locked_by = NULL, locked_until = NULL,
             finished_at = #{now}, updated_at = #{now}
         WHERE id = #{id} AND status IN ('PENDING', 'RUNNING', 'RETRY_WAIT')
+    </update>
+
+    <update id="cancelOwned">
+        UPDATE async_task
+        SET status = 'CANCELLED', next_run_at = #{now}, locked_by = NULL, locked_until = NULL,
+            finished_at = #{now}, updated_at = #{now}
+        WHERE id = #{id} AND status = 'RUNNING' AND locked_by = #{workerId}
+          AND locked_until &gt; #{now}
     </update>
 </mapper>

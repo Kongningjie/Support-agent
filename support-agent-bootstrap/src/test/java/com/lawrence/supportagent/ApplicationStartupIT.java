@@ -121,6 +121,46 @@ class ApplicationStartupIT {
                 .path("data").path("status").asText());
     }
 
+    /** 验证直接文本知识草稿的创建、幂等、分页、修改及软删除 HTTP 主路径。 */
+    @Test
+    void shouldCompleteManagedDocumentDraftHttpWorkflow() throws Exception {
+        HttpClient client = HttpClient.newHttpClient();
+        String key = "startup-it-knowledge-" + UUID.randomUUID();
+        String content = "唯一正文-" + UUID.randomUUID();
+        String createBody = """
+                {"title":"MySQL 排障","content":"%s","idempotencyKey":"%s"}
+                """.formatted(content, key);
+        HttpResponse<String> created = sendJson(client, "POST",
+                "/api/v1/knowledge/documents/text", createBody);
+        HttpResponse<String> replayed = sendJson(client, "POST",
+                "/api/v1/knowledge/documents/text", createBody);
+        JsonNode createdJson = objectMapper.readTree(created.body()).path("data");
+        String documentId = createdJson.path("documentId").asText();
+
+        assertEquals(201, created.statusCode());
+        assertEquals(documentId, objectMapper.readTree(replayed.body())
+                .path("data").path("documentId").asText());
+        assertTrue(documentId.matches("\\d+"));
+
+        HttpResponse<String> page = get(client,
+                "/api/v1/knowledge/documents?status=DRAFT&keyword=MySQL&page=1&size=20");
+        assertTrue(objectMapper.readTree(page.body()).path("data")
+                .path("totalElements").asLong() >= 1);
+        long version = createdJson.path("version").asLong();
+        HttpResponse<String> revised = sendJson(client, "PUT",
+                "/api/v1/knowledge/documents/" + documentId + "/draft", """
+                        {"title":"MySQL 连接排障","content":"%s-修改","version":%d}
+                        """.formatted(content, version));
+        long revisedVersion = objectMapper.readTree(revised.body())
+                .path("data").path("version").asLong();
+        assertEquals(version + 1, revisedVersion);
+
+        HttpResponse<String> deleted = sendJson(client, "DELETE",
+                "/api/v1/knowledge/documents/" + documentId + "?version=" + revisedVersion, "");
+        assertEquals(200, deleted.statusCode());
+        assertEquals(404, get(client, "/api/v1/knowledge/documents/" + documentId).statusCode());
+    }
+
     /** 验证 OpenAPI 已注册阶段 2 接口且未提前开放解决工单接口。 */
     @Test
     void shouldExposeOnlyCurrentStageTicketOperations() throws Exception {
@@ -129,6 +169,8 @@ class ApplicationStartupIT {
 
         assertTrue(paths.has("/api/v1/tickets/drafts"));
         assertTrue(paths.has("/api/v1/async-tasks/{taskId}/retry"));
+        assertTrue(paths.has("/api/v1/knowledge/documents/text"));
+        assertTrue(paths.has("/api/v1/knowledge/documents/{documentId}/publish"));
         assertFalse(paths.has("/api/v1/tickets/{ticketNo}/resolve"));
     }
 

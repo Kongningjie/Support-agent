@@ -59,9 +59,10 @@ class DependencyHealthIndicatorTest {
         server.start();
         try {
             SupportAgentProperties configured = new SupportAgentProperties("test-operator",
-                    new SupportAgentProperties.DashScope(""),
+                    new SupportAgentProperties.DashScope("", "text-embedding-v4"),
                     new SupportAgentProperties.Elasticsearch(
-                            "http://127.0.0.1:" + server.getAddress().getPort(), "elastic", "secret"));
+                            "http://127.0.0.1:" + server.getAddress().getPort(), "elastic", "secret",
+                            "support_knowledge_v1", "support_knowledge_current"));
 
             assertEquals(Status.UP, new ElasticsearchHealthIndicator(configured).health().getStatus());
             assertEquals("Basic ZWxhc3RpYzpzZWNyZXQ=", authorization.get());
@@ -73,7 +74,8 @@ class DependencyHealthIndicatorTest {
     /** 构造健康探测测试所需的最小配置。 */
     private SupportAgentProperties properties(String apiKey, String elasticsearchUrl) {
         return new SupportAgentProperties("test-operator",
-                new SupportAgentProperties.DashScope(apiKey),
-                new SupportAgentProperties.Elasticsearch(elasticsearchUrl, "", ""));
+                new SupportAgentProperties.DashScope(apiKey, "text-embedding-v4"),
+                new SupportAgentProperties.Elasticsearch(elasticsearchUrl, "", "",
+                        "support_knowledge_v1", "support_knowledge_current"));
     }
 }

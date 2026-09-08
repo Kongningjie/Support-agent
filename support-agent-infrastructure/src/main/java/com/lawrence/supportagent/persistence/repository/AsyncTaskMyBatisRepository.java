@@ -73,7 +73,6 @@ public class AsyncTaskMyBatisRepository implements AsyncTaskRepository {
     @Transactional
     public List<AsyncTask> claimDue(String workerId, Instant now,
                                     Instant lockedUntil, int limit) {
-        workflowMapper.expireExhaustedLeases(now);
         List<Long> ids = workflowMapper.findClaimableIds(now, limit);
         return ids.stream().filter(id -> workflowMapper.claim(id, workerId, lockedUntil, now) == 1)
                 .map(mapper::findTask).map(AggregateRecordMapper::toDomain).toList();

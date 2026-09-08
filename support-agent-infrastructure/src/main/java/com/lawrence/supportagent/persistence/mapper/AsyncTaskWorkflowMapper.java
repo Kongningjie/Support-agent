@@ -27,9 +27,6 @@ public interface AsyncTaskWorkflowMapper {
     /** 使用 FOR UPDATE SKIP LOCKED 选择当前事务可抢占的任务 ID。 */
     List<Long> findClaimableIds(@Param("now") Instant now, @Param("limit") int limit);
 
-    /** 把租约过期且已经耗尽尝试次数的运行中任务收敛为死亡状态。 */
-    int expireExhaustedLeases(@Param("now") Instant now);
-
     /** 把一个已锁定任务切换或恢复为本 Worker 的 RUNNING 尝试。 */
     int claim(@Param("id") long id, @Param("workerId") String workerId,
               @Param("lockedUntil") Instant lockedUntil, @Param("now") Instant now);
@@ -50,4 +47,8 @@ public interface AsyncTaskWorkflowMapper {
 
     /** 取消尚未进入终态的指定任务。 */
     int cancel(@Param("id") long id, @Param("now") Instant now);
+
+    /** 仅允许当前持锁 Worker 取消运行中任务。 */
+    int cancelOwned(@Param("id") long id, @Param("workerId") String workerId,
+                    @Param("now") Instant now);
 }

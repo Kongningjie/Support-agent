@@ -61,12 +61,15 @@ public class GlobalExceptionHandler {
     /** 根据公开错误语义选择 HTTP 状态，避免所有应用异常被误报为冲突。 */
     private HttpStatus statusOf(ApplicationException exception) {
         return switch (exception.errorCode()) {
-            case COMMON_VALIDATION_FAILED -> HttpStatus.BAD_REQUEST;
-            case TICKET_NOT_FOUND, ASYNC_TASK_NOT_FOUND -> HttpStatus.NOT_FOUND;
+            case COMMON_VALIDATION_FAILED, KNOWLEDGE_SENSITIVE_CONTENT -> HttpStatus.BAD_REQUEST;
+            case TICKET_NOT_FOUND, KNOWLEDGE_NOT_FOUND, ASYNC_TASK_NOT_FOUND -> HttpStatus.NOT_FOUND;
             case COMMON_CONFLICT, COMMON_IDEMPOTENCY_IN_PROGRESS,
                     COMMON_IDEMPOTENCY_KEY_REUSED, TICKET_STATUS_CONFLICT,
-                    TICKET_VERSION_CONFLICT, ASYNC_TASK_NOT_RETRYABLE -> HttpStatus.CONFLICT;
-            case DEPENDENCY_UNAVAILABLE, DASHSCOPE_NOT_CONFIGURED -> HttpStatus.SERVICE_UNAVAILABLE;
+                    TICKET_VERSION_CONFLICT, KNOWLEDGE_DUPLICATE_CONTENT,
+                    KNOWLEDGE_STATUS_CONFLICT, KNOWLEDGE_VERSION_CONFLICT,
+                    ASYNC_TASK_NOT_RETRYABLE -> HttpStatus.CONFLICT;
+            case DEPENDENCY_UNAVAILABLE, DASHSCOPE_NOT_CONFIGURED,
+                    KNOWLEDGE_INDEX_FAILED -> HttpStatus.SERVICE_UNAVAILABLE;
             case COMMON_INTERNAL_ERROR -> HttpStatus.INTERNAL_SERVER_ERROR;
         };
     }

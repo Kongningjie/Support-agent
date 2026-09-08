@@ -18,6 +18,18 @@ public enum ErrorCode {
     TICKET_STATUS_CONFLICT,
     /** 工单版本已变化，当前写入不能覆盖新版本。 */
     TICKET_VERSION_CONFLICT,
+    /** 指定托管文档或知识来源不存在。 */
+    KNOWLEDGE_NOT_FOUND,
+    /** 相同规范化内容的有效知识已经存在。 */
+    KNOWLEDGE_DUPLICATE_CONTENT,
+    /** 文档包含疑似密钥、令牌或连接凭据。 */
+    KNOWLEDGE_SENSITIVE_CONTENT,
+    /** 文档当前状态不允许执行请求操作。 */
+    KNOWLEDGE_STATUS_CONFLICT,
+    /** 文档乐观锁版本已变化。 */
+    KNOWLEDGE_VERSION_CONFLICT,
+    /** 文档索引任务最终失败。 */
+    KNOWLEDGE_INDEX_FAILED,
     /** 指定异步任务不存在。 */
     ASYNC_TASK_NOT_FOUND,
     /** 异步任务或其关联业务对象不再允许人工重试。 */

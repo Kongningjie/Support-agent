@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.lawrence.supportagent.persistence.mapper.ManagedDocumentWorkflowMapper">
+    <sql id="documentColumns">
+        id, title, input_type, original_file_name, media_type, raw_content, content_hash,
+        status, version, index_failure_reason, archive_reason, deleted, deleted_by,
+        deleted_at, created_by, created_at, updated_by, updated_at, published_by,
+        published_at, archived_by, archived_at
+    </sql>
+
+    <select id="findPage" resultType="com.lawrence.supportagent.persistence.record.ManagedDocumentDO">
+        SELECT <include refid="documentColumns"/>
+        FROM managed_document
+        WHERE deleted = FALSE
+        <if test="status != null">AND status = #{status}</if>
+        <if test="keyword != null">
+            AND (title LIKE CONCAT('%', #{keyword}, '%')
+                OR raw_content LIKE CONCAT('%', #{keyword}, '%'))
+        </if>
+        ORDER BY created_at DESC, id DESC
+        LIMIT #{size} OFFSET #{offset}
+    </select>
+
+    <select id="count" resultType="long">
+        SELECT COUNT(*)
+        FROM managed_document
+        WHERE deleted = FALSE
+        <if test="status != null">AND status = #{status}</if>
+        <if test="keyword != null">
+            AND (title LIKE CONCAT('%', #{keyword}, '%')
+                OR raw_content LIKE CONCAT('%', #{keyword}, '%'))
+        </if>
+    </select>
+
+    <select id="countActiveHash" resultType="long">
+        SELECT COUNT(*)
+        FROM managed_document
+        WHERE active_content_hash = #{contentHash}
+        <if test="excludedId != null">AND id &lt;&gt; #{excludedId}</if>
+    </select>
+</mapper>

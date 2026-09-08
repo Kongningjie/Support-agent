@@ -125,6 +125,21 @@ class FoundationRepositoryIT {
         assertEquals(published, documentRepository.findById(published.id()).orElseThrow());
     }
 
+    /** 验证数据库生成列唯一约束可阻止并发检查后仍发生的有效内容重复。 */
+    @Test
+    void shouldRejectDuplicateActiveManagedDocumentContent() {
+        String hash = RequestFingerprint.sha256("duplicate-" + UUID.randomUUID());
+        documentRepository.save(ManagedDocument.draft("第一份", DocumentInputType.DIRECT_TEXT,
+                null, "text/plain", "相同正文", hash, "tester", NOW));
+
+        ApplicationException conflict = assertThrows(ApplicationException.class,
+                () -> documentRepository.save(ManagedDocument.draft("第二份",
+                        DocumentInputType.DIRECT_TEXT, null, "text/plain", "相同正文",
+                        hash, "tester", NOW.plusSeconds(1))));
+
+        assertEquals(ErrorCode.KNOWLEDGE_DUPLICATE_CONTENT, conflict.errorCode());
+    }
+
     /** 验证已解决案例的外键、发布状态和审计字段往返。 */
     @Test
     void shouldRoundTripResolvedCase() {
@@ -254,11 +269,12 @@ class FoundationRepositoryIT {
             AsyncTask claimedOnce = taskRepository.claimDue("worker-crashed",
                             dueAt.plusSeconds(1000), dueAt.plusSeconds(1300), 100).stream()
                     .filter(task -> task.id().equals(exhausted.id())).findFirst().orElseThrow();
-            taskRepository.claimDue("worker-cleanup", dueAt.plusSeconds(1301),
-                    dueAt.plusSeconds(1601), 100);
-            AsyncTask dead = taskRepository.findById(claimedOnce.id()).orElseThrow();
-            assertEquals(AsyncTaskStatus.DEAD, dead.status());
-            assertEquals("ASYNC_TASK_WORKER_LEASE_EXPIRED", dead.lastErrorCode());
+            AsyncTask reclaimed = taskRepository.claimDue("worker-cleanup", dueAt.plusSeconds(1301),
+                            dueAt.plusSeconds(1601), 100).stream()
+                    .filter(task -> task.id().equals(claimedOnce.id())).findFirst().orElseThrow();
+            assertEquals(AsyncTaskStatus.RUNNING, reclaimed.status());
+            assertEquals(1, reclaimed.attemptCount());
+            assertEquals("ASYNC_TASK_WORKER_LEASE_EXPIRED", reclaimed.lastErrorCode());
         } finally {
             executor.shutdownNow();
         }

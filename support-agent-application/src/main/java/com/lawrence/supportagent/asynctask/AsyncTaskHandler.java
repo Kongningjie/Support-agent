@@ -10,5 +10,17 @@ public interface AsyncTaskHandler {
      *
      * @param context 包含任务快照和按需续租能力的执行上下文
      */
-    void execute(AsyncTaskExecutionContext context);
+    AsyncTaskBusinessMutation execute(AsyncTaskExecutionContext context);
+
+    /**
+     * 返回任务最终死亡时需要与任务状态原子提交的业务变更。
+     *
+     * @param context 当前任务及续租上下文
+     * @param failure 已脱敏和分类的最终失败
+     * @return 不调用外部服务的短事务动作
+     */
+    default AsyncTaskBusinessMutation finalFailureMutation(
+            AsyncTaskExecutionContext context, AsyncTaskExecutionException failure) {
+        return AsyncTaskBusinessMutation.NONE;
+    }
 }

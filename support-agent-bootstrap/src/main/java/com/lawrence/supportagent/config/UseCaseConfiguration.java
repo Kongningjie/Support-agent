@@ -5,6 +5,7 @@ import com.lawrence.supportagent.asynctask.AsyncTaskHandler;
 import com.lawrence.supportagent.asynctask.AsyncTaskRunner;
 import com.lawrence.supportagent.asynctask.AsyncTaskUseCase;
 import com.lawrence.supportagent.asynctask.port.AsyncTaskRepository;
+import com.lawrence.supportagent.asynctask.port.AsyncTaskCompletionPort;
 import com.lawrence.supportagent.idempotency.IdempotentExecutor;
 import com.lawrence.supportagent.knowledge.port.ManagedDocumentRepository;
 import com.lawrence.supportagent.resolvedcase.port.ResolvedCaseRepository;
@@ -18,7 +19,7 @@ import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
-/** 在启动模块装配阶段 2 的应用用例，保持应用模块不依赖 Spring。 */
+/** 在启动模块装配通用任务与工单应用用例，保持应用模块不依赖 Spring。 */
 @Configuration
 public class UseCaseConfiguration {
     /** 创建工单只读查询用例。 */
@@ -45,13 +46,14 @@ public class UseCaseConfiguration {
         return new AsyncTaskCreator(repository, timeProvider);
     }
 
-    /** 创建任务执行器；阶段 2 允许生产 Handler 集合为空。 */
+    /** 创建任务执行器并按任务类型收集当前阶段已注册的 Handler。 */
     @Bean
     public AsyncTaskRunner asyncTaskRunner(AsyncTaskRepository repository,
+                                            AsyncTaskCompletionPort completionPort,
                                             TimeProvider timeProvider,
                                             ObjectProvider<AsyncTaskHandler> handlers) {
         List<AsyncTaskHandler> availableHandlers = handlers.orderedStream().toList();
-        return new AsyncTaskRunner(repository, timeProvider, availableHandlers);
+        return new AsyncTaskRunner(repository, completionPort, timeProvider, availableHandlers);
     }
 
     /** 创建任务查询、取消及人工重试用例。 */
