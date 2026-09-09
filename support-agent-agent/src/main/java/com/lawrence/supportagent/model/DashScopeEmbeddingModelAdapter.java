@@ -7,6 +7,9 @@ import com.alibaba.dashscope.embeddings.TextEmbeddingResult;
 import com.alibaba.dashscope.embeddings.TextEmbeddingResultItem;
 import com.alibaba.dashscope.exception.ApiException;
 import com.alibaba.dashscope.exception.NoApiKeyException;
+import com.lawrence.supportagent.observability.OptimizationTelemetryPort;
+import com.lawrence.supportagent.observability.OptimizationTelemetryPort.ModelOperation;
+import com.lawrence.supportagent.observability.OptimizationTelemetryPort.Operation;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -29,23 +32,38 @@ public class DashScopeEmbeddingModelAdapter implements EmbeddingModelPort, AutoC
     private final String apiKey;
     private final String modelName;
     private final SdkCaller sdkCaller;
+    private final OptimizationTelemetryPort telemetry;
     private final ExecutorService calls = Executors.newVirtualThreadPerTaskExecutor();
 
     /** 保存不会写入日志的 API 密钥和冻结模型名称。 */
     public DashScopeEmbeddingModelAdapter(String apiKey, String modelName) {
-        this(apiKey, modelName, param -> new TextEmbedding().call(param));
+        this(apiKey, modelName, param -> new TextEmbedding().call(param),
+                OptimizationTelemetryPort.noOp());
     }
 
     /** 使用显式 Base URL 构造 Embedding 客户端。 */
     public DashScopeEmbeddingModelAdapter(String apiKey, String modelName, String baseUrl) {
-        this(apiKey, modelName, param -> new TextEmbedding(baseUrl).call(param));
+        this(apiKey, modelName, baseUrl, OptimizationTelemetryPort.noOp());
+    }
+
+    /** 使用显式 Base URL 和低基数遥测端口构造 Embedding 客户端。 */
+    public DashScopeEmbeddingModelAdapter(String apiKey, String modelName, String baseUrl,
+                                           OptimizationTelemetryPort telemetry) {
+        this(apiKey, modelName, param -> new TextEmbedding(baseUrl).call(param), telemetry);
     }
 
     /** 注入测试可替换的官方 SDK 调用边界。 */
     DashScopeEmbeddingModelAdapter(String apiKey, String modelName, SdkCaller sdkCaller) {
+        this(apiKey, modelName, sdkCaller, OptimizationTelemetryPort.noOp());
+    }
+
+    /** 注入测试可替换的 SDK 调用边界和遥测端口。 */
+    DashScopeEmbeddingModelAdapter(String apiKey, String modelName, SdkCaller sdkCaller,
+                                   OptimizationTelemetryPort telemetry) {
         this.apiKey = apiKey;
         this.modelName = modelName;
         this.sdkCaller = sdkCaller;
+        this.telemetry = telemetry == null ? OptimizationTelemetryPort.noOp() : telemetry;
     }
 
     /** {@inheritDoc} */
@@ -101,18 +119,24 @@ public class DashScopeEmbeddingModelAdapter implements EmbeddingModelPort, AutoC
     /** 在独立虚拟线程中执行 SDK 同步调用并强制总超时。 */
     private List<List<Double>> timedCall(List<String> inputs,
                                          TextEmbeddingParam.TextType textType) {
+        long started = System.nanoTime();
         Future<List<List<Double>>> future = calls.submit(() -> invokeSdk(inputs, textType));
         try {
-            return future.get(CALL_TIMEOUT.toMillis(), TimeUnit.MILLISECONDS);
+            List<List<Double>> result = future.get(CALL_TIMEOUT.toMillis(), TimeUnit.MILLISECONDS);
+            telemetry.recordDuration(Operation.EMBEDDING, elapsed(started), true);
+            return result;
         } catch (TimeoutException exception) {
             future.cancel(true);
+            telemetry.recordDuration(Operation.EMBEDDING, elapsed(started), false);
             throw new ModelInvocationException("EMBEDDING_TIMEOUT",
                     "Embedding 调用超时", true, exception);
         } catch (InterruptedException exception) {
             Thread.currentThread().interrupt();
+            telemetry.recordDuration(Operation.EMBEDDING, elapsed(started), false);
             throw new ModelInvocationException("EMBEDDING_INTERRUPTED",
                     "Embedding 调用被中断", true, exception);
         } catch (ExecutionException exception) {
+            telemetry.recordDuration(Operation.EMBEDDING, elapsed(started), false);
             throw classify(exception.getCause());
         }
     }
@@ -137,7 +161,12 @@ public class DashScopeEmbeddingModelAdapter implements EmbeddingModelPort, AutoC
             throw new ModelInvocationException("EMBEDDING_PROVIDER_FAILURE",
                     "Embedding 服务暂时不可用", status == 0 || status == 429 || status >= 500, null);
         }
-        return orderedEmbeddings(inputs.size(), result.getOutput());
+        List<List<Double>> vectors = orderedEmbeddings(inputs.size(), result.getOutput());
+        long tokens = result.getUsage() == null || result.getUsage().getTotalTokens() == null
+                ? 0 : result.getUsage().getTotalTokens();
+        long characters = inputs.stream().mapToLong(String::length).sum();
+        telemetry.recordUsage(ModelOperation.EMBEDDING, tokens, 0, inputs.size(), characters);
+        return vectors;
     }
 
     /** 校验响应索引唯一完整后返回不可变的有序向量列表。 */
@@ -194,6 +223,11 @@ public class DashScopeEmbeddingModelAdapter implements EmbeddingModelPort, AutoC
     /** 创建不可重试的响应结构错误。 */
     private ModelInvocationException invalidResponse(String message) {
         return new ModelInvocationException("EMBEDDING_RESULT_INVALID", message, false, null);
+    }
+
+    /** 将单调时钟纳秒差转换为非负毫秒。 */
+    private long elapsed(long started) {
+        return Math.max(0, (System.nanoTime() - started) / 1_000_000);
     }
 
     /** 隔离官方 SDK 同步调用，供离线协议测试替换网络。 */

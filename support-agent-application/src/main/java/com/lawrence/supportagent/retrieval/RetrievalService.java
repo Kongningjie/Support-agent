@@ -4,6 +4,8 @@ import com.lawrence.supportagent.model.EmbeddingModelPort;
 import com.lawrence.supportagent.model.RerankModelPort;
 import com.lawrence.supportagent.model.RerankModelPort.RerankDocument;
 import com.lawrence.supportagent.model.RerankModelPort.RerankScore;
+import com.lawrence.supportagent.observability.OptimizationTelemetryPort;
+import com.lawrence.supportagent.observability.OptimizationTelemetryPort.Operation;
 import com.lawrence.supportagent.retrieval.port.KnowledgeSearchPort;
 import com.lawrence.supportagent.retrieval.port.KnowledgeSourceValidityPort;
 import com.lawrence.supportagent.retrieval.port.KnowledgeSourceValidityPort.SourceVersion;
@@ -32,6 +34,7 @@ public class RetrievalService implements AutoCloseable {
     private final double vectorMinimumSimilarity;
     private final int vectorCandidates;
     private final double groundedThreshold;
+    private final OptimizationTelemetryPort telemetry;
     private final ExecutorService branches = Executors.newVirtualThreadPerTaskExecutor();
 
     /** 创建参数固定且不执行在线调优的混合检索服务。 */
@@ -39,6 +42,15 @@ public class RetrievalService implements AutoCloseable {
                             EmbeddingModelPort embeddingModel, RerankModelPort rerankModel,
                             double vectorMinimumSimilarity, int vectorCandidates,
                             double groundedThreshold) {
+        this(searchPort, validityPort, embeddingModel, rerankModel, vectorMinimumSimilarity,
+                vectorCandidates, groundedThreshold, OptimizationTelemetryPort.noOp());
+    }
+
+    /** 创建带二期低基数遥测的混合检索服务。 */
+    public RetrievalService(KnowledgeSearchPort searchPort, KnowledgeSourceValidityPort validityPort,
+                            EmbeddingModelPort embeddingModel, RerankModelPort rerankModel,
+                            double vectorMinimumSimilarity, int vectorCandidates,
+                            double groundedThreshold, OptimizationTelemetryPort telemetry) {
         if (!Double.isFinite(vectorMinimumSimilarity) || vectorMinimumSimilarity < -1
                 || vectorMinimumSimilarity > 1 || vectorCandidates < BRANCH_LIMIT
                 || !Double.isFinite(groundedThreshold) || groundedThreshold < 0
@@ -52,29 +64,35 @@ public class RetrievalService implements AutoCloseable {
         this.vectorMinimumSimilarity = vectorMinimumSimilarity;
         this.vectorCandidates = vectorCandidates;
         this.groundedThreshold = groundedThreshold;
+        this.telemetry = telemetry == null ? OptimizationTelemetryPort.noOp() : telemetry;
     }
 
     /** 执行完整检索并保证单分支失败可降级、双分支失败明确报错。 */
     public RetrievalResult retrieve(String query) {
         long started = System.nanoTime();
-        BranchResult bm25;
-        BranchResult vector;
-        CompletableFuture<BranchResult> bm25Task = CompletableFuture.supplyAsync(
-                () -> callBm25(query), branches);
-        CompletableFuture<BranchResult> vectorTask = CompletableFuture.supplyAsync(
-                () -> callVector(query), branches);
-        bm25 = bm25Task.join();
-        vector = vectorTask.join();
-        if (bm25.status == BranchStatus.FAILED && vector.status == BranchStatus.FAILED) {
-            return failed(started);
+        boolean succeeded = false;
+        try {
+            CompletableFuture<BranchResult> bm25Task = CompletableFuture.supplyAsync(
+                    () -> callBm25(query), branches);
+            CompletableFuture<BranchResult> vectorTask = CompletableFuture.supplyAsync(
+                    () -> callVector(query), branches);
+            BranchResult bm25 = bm25Task.join();
+            BranchResult vector = vectorTask.join();
+            if (bm25.status == BranchStatus.FAILED && vector.status == BranchStatus.FAILED) {
+                return failed(started);
+            }
+            List<RetrievalEvidence> fused = validSources(fuse(bm25.items, vector.items));
+            RerankOutcome reranked = rerank(query, fused);
+            List<RetrievalEvidence> selected = selectReliable(reranked.items, reranked.status);
+            RetrievalStatus status = selected.isEmpty() ? RetrievalStatus.NO_RELIABLE_KNOWLEDGE
+                    : RetrievalStatus.GROUNDED;
+            RetrievalResult result = new RetrievalResult(status, bm25.status, vector.status,
+                    reranked.status, selected, fused, elapsed(started));
+            succeeded = true;
+            return result;
+        } finally {
+            telemetry.recordDuration(Operation.RETRIEVAL, elapsed(started), succeeded);
         }
-        List<RetrievalEvidence> fused = validSources(fuse(bm25.items, vector.items));
-        RerankOutcome reranked = rerank(query, fused);
-        List<RetrievalEvidence> selected = selectReliable(reranked.items, reranked.status);
-        RetrievalStatus status = selected.isEmpty() ? RetrievalStatus.NO_RELIABLE_KNOWLEDGE
-                : RetrievalStatus.GROUNDED;
-        return new RetrievalResult(status, bm25.status, vector.status, reranked.status,
-                selected, fused, elapsed(started));
     }
 
     /** 按固定评测模式返回最多十个有效候选，不应用回答可靠性门槛。 */

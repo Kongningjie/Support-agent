@@ -21,6 +21,7 @@ import com.lawrence.supportagent.model.DashScopeRerankModelAdapter;
 import com.lawrence.supportagent.model.EmbeddingModelPort;
 import com.lawrence.supportagent.model.IntentRecognitionPort;
 import com.lawrence.supportagent.model.RerankModelPort;
+import com.lawrence.supportagent.observability.OptimizationTelemetryPort;
 import com.lawrence.supportagent.persistence.mapper.AgentAuditMapper;
 import com.lawrence.supportagent.resolvedcase.port.ResolvedCaseRepository;
 import com.lawrence.supportagent.retrieval.RetrievalService;
@@ -32,11 +33,16 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.redis.core.StringRedisTemplate;
+import io.micrometer.core.instrument.MeterRegistry;
 import tools.jackson.databind.ObjectMapper;
 
 /** 装配阶段四聊天、混合检索、模型适配和会话审计能力。 */
 @Configuration
 public class ChatConfiguration {
+    /** 创建不携带正文和高基数标签的二期优化遥测端口。 */
+    @Bean public OptimizationTelemetryPort optimizationTelemetryPort(MeterRegistry registry) {
+        return new MicrometerOptimizationTelemetryAdapter(registry);
+    }
     /** 创建独立意图模型端口。 */
     @Bean public IntentRecognitionPort intentRecognitionPort(SupportAgentProperties properties) {
         var config = properties.dashscope();
@@ -45,16 +51,19 @@ public class ChatConfiguration {
     }
     /** 创建内部流式 Chat 与受控工单 Agent 端口。 */
     @Bean public ChatModelPort chatModelPort(SupportAgentProperties properties,
-                                              ObjectMapper objectMapper) {
+                                              ObjectMapper objectMapper,
+                                              OptimizationTelemetryPort telemetry) {
         var config = properties.dashscope();
         if (config.apiKey() == null || config.apiKey().isBlank()) return new UnavailableChatModelAdapter();
         return new DashScopeChatModelAdapter(config.apiKey(), config.chatModel(),
-                config.baseUrl(), objectMapper);
+                config.baseUrl(), objectMapper, telemetry);
     }
     /** 创建独立 Rerank 模型端口。 */
-    @Bean public RerankModelPort rerankModelPort(SupportAgentProperties properties) {
+    @Bean public RerankModelPort rerankModelPort(SupportAgentProperties properties,
+                                                  OptimizationTelemetryPort telemetry) {
         var config = properties.dashscope();
-        return new DashScopeRerankModelAdapter(config.apiKey(), config.rerankModel(), config.baseUrl());
+        return new DashScopeRerankModelAdapter(config.apiKey(), config.rerankModel(),
+                config.baseUrl(), telemetry);
     }
     /** 创建会话和建议 Redis 适配器。 */
     @Bean public ConversationStorePort conversationStorePort(StringRedisTemplate redis, ObjectMapper mapper) {
@@ -75,8 +84,10 @@ public class ChatConfiguration {
             EmbeddingModelPort embedding, RerankModelPort rerank,
             @Value("${support-agent.retrieval.vector-minimum-similarity:0.20}") double similarity,
             @Value("${support-agent.retrieval.vector-candidates:200}") int candidates,
-            @Value("${support-agent.retrieval.rerank-grounded-threshold:0.35}") double threshold) {
-        return new RetrievalService(search, validity, embedding, rerank, similarity, candidates, threshold);
+            @Value("${support-agent.retrieval.rerank-grounded-threshold:0.35}") double threshold,
+            OptimizationTelemetryPort telemetry) {
+        return new RetrievalService(search, validity, embedding, rerank, similarity, candidates,
+                threshold, telemetry);
     }
     /** 创建意图识别服务。 */
     @Bean public IntentRecognitionService intentRecognitionService(IntentRecognitionPort model) {
@@ -94,9 +105,10 @@ public class ChatConfiguration {
                                          AnswerValidator validator, UuidGenerator ids, TimeProvider time,
                                          SupportAgentProperties properties,
                                          @Value("${support-agent.retrieval.rerank-grounded-threshold:0.35}")
-                                         double threshold) {
+                                         double threshold, OptimizationTelemetryPort telemetry) {
         var config = properties.dashscope();
         return new ChatUseCase(intents, retrieval, model, tickets, conversations, audits, validator,
-                ids, time, config.chatModel(), config.embeddingModel(), config.rerankModel(), threshold);
+                ids, time, config.chatModel(), config.embeddingModel(), config.rerankModel(), threshold,
+                telemetry);
     }
 }

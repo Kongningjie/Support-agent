@@ -18,13 +18,17 @@ import java.util.UUID;
  * @param failureMessage 整次运行失败的脱敏摘要，正常时为空
  * @param startedAt 接收运行请求的 UTC 时间
  * @param finishedAt 成功或失败结束的 UTC 时间，运行中为空
+ * @param context 数据集、提交、模型和检索参数的不可变复现上下文
+ * @param retrievalLatency 全部已完成用例的检索耗时摘要
  */
 public record RetrievalEvaluationRun(UUID evaluationRunId, RetrievalMode mode,
                                      Status status, int completedCases, int totalCases,
                                      RetrievalEvaluationMetrics metrics,
                                      List<RetrievalEvaluationCaseResult> results,
                                      String failureMessage, Instant startedAt,
-                                     Instant finishedAt) {
+                                     Instant finishedAt,
+                                     RetrievalEvaluationContext context,
+                                     LatencySummary retrievalLatency) {
     /** 评测运行生命周期。 */
     public enum Status {
         /** 已接收但尚未开始。 */ PENDING,

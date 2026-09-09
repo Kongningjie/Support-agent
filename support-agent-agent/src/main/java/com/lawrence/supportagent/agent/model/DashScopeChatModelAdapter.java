@@ -2,6 +2,8 @@ package com.lawrence.supportagent.agent.model;
 
 import com.lawrence.supportagent.model.ChatModelPort;
 import com.lawrence.supportagent.model.ModelInvocationException;
+import com.lawrence.supportagent.observability.OptimizationTelemetryPort;
+import com.lawrence.supportagent.observability.OptimizationTelemetryPort.ModelOperation;
 import com.lawrence.supportagent.retrieval.RetrievalEvidence;
 import com.lawrence.supportagent.ticket.TicketDetails;
 import io.agentscope.core.ReActAgent;
@@ -11,6 +13,7 @@ import io.agentscope.core.message.TextBlock;
 import io.agentscope.core.formatter.JsonSchema;
 import io.agentscope.core.formatter.ResponseFormat;
 import io.agentscope.core.model.Model;
+import io.agentscope.core.model.ChatUsage;
 import io.agentscope.core.model.GenerateOptions;
 import io.agentscope.core.tool.Tool;
 import io.agentscope.core.tool.ToolParam;
@@ -21,6 +24,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
 
@@ -35,19 +39,28 @@ public class DashScopeChatModelAdapter implements ChatModelPort {
     private final PromptTemplate ticketDraft = new PromptTemplate("/prompts/ticket-draft.md");
     private final PromptTemplate resolvedCase = new PromptTemplate("/prompts/resolved-case-generation.md");
     private final ObjectMapper objectMapper;
+    private final OptimizationTelemetryPort telemetry;
 
     /** 使用显式 API Key、模型和 Base URL 创建统一 Chat 模型。 */
     public DashScopeChatModelAdapter(String apiKey, String modelName, String baseUrl) {
-        this(apiKey, modelName, baseUrl, new ObjectMapper());
+        this(apiKey, modelName, baseUrl, new ObjectMapper(), OptimizationTelemetryPort.noOp());
     }
 
     /** 使用显式 JSON 编解码器创建支持严格结构化输出的 Chat 模型。 */
     public DashScopeChatModelAdapter(String apiKey, String modelName, String baseUrl,
                                      ObjectMapper objectMapper) {
+        this(apiKey, modelName, baseUrl, objectMapper, OptimizationTelemetryPort.noOp());
+    }
+
+    /** 使用显式 JSON 编解码器和低基数遥测创建 Chat 模型。 */
+    public DashScopeChatModelAdapter(String apiKey, String modelName, String baseUrl,
+                                     ObjectMapper objectMapper,
+                                     OptimizationTelemetryPort telemetry) {
         this.model = DashScopeChatModel.builder().apiKey(apiKey).modelName(modelName)
                 .baseUrl(AgentScopeDashScopeBaseUrl.normalize(baseUrl))
                 .stream(true).enableThinking(false).build();
         this.objectMapper = objectMapper;
+        this.telemetry = telemetry == null ? OptimizationTelemetryPort.noOp() : telemetry;
     }
 
     /** {@inheritDoc} */
@@ -83,13 +96,14 @@ public class DashScopeChatModelAdapter implements ChatModelPort {
                 .sysPrompt(ticketPrompt.render(Map.of("TICKET_NO", allowedTicketNo)))
                 .build();
         try (agent) {
-            firstTokenCallback.run();
             Msg response = agent.call("用户问题：" + message + "\n请查询：" + allowedTicketNo)
                     .block(TIMEOUT);
             if (response == null || response.getTextContent() == null || response.getTextContent().isBlank()
                     || tool.calls() != 1) {
                 throw unavailable(null);
             }
+            firstTokenCallback.run();
+            recordChatUsage(response.getUsage(), message.length(), response.getTextContent().length());
             return new ModelAnswer(response.getTextContent(), ticketPrompt.version(), agent.getAgentState().toJson());
         } catch (RuntimeException exception) {
             throw unavailable(exception);
@@ -136,12 +150,14 @@ public class DashScopeChatModelAdapter implements ChatModelPort {
     private ModelAnswer generate(String system, String user, List<String> recentTurns,
                                  Runnable firstTokenCallback, String promptVersion) {
         AtomicBoolean first = new AtomicBoolean();
+        AtomicReference<ChatUsage> usage = new AtomicReference<>();
         String history = recentTurns.isEmpty() ? "" : "历史上下文：\n" + String.join("\n", recentTurns) + "\n";
         List<Msg> messages = List.of(Msg.builder().role(MsgRole.SYSTEM).textContent(system).build(),
                 Msg.builder().role(MsgRole.USER).textContent(history + user).build());
         StringBuilder complete = new StringBuilder();
         try {
             model.stream(messages, List.of(), GenerateOptions.builder().build()).doOnNext(response -> {
+                if (response.getUsage() != null) usage.set(response.getUsage());
                 for (TextBlock block : response.getContent().stream()
                         .filter(TextBlock.class::isInstance).map(TextBlock.class::cast).toList()) {
                     if (block.getText() != null && !block.getText().isEmpty()) {
@@ -154,6 +170,7 @@ public class DashScopeChatModelAdapter implements ChatModelPort {
             throw unavailable(exception);
         }
         if (complete.isEmpty()) throw unavailable(null);
+        recordChatUsage(usage.get(), system.length() + history.length() + user.length(), complete.length());
         return new ModelAnswer(complete.toString(), promptVersion);
     }
 
@@ -163,8 +180,10 @@ public class DashScopeChatModelAdapter implements ChatModelPort {
                         .textContent(system).build(),
                 Msg.builder().role(MsgRole.USER).textContent(user).build());
         StringBuilder complete = new StringBuilder();
+        AtomicReference<ChatUsage> usage = new AtomicReference<>();
         try {
             model.stream(messages, List.of(), options).doOnNext(response -> {
+                if (response.getUsage() != null) usage.set(response.getUsage());
                 for (TextBlock block : response.getContent().stream()
                         .filter(TextBlock.class::isInstance).map(TextBlock.class::cast).toList()) {
                     if (block.getText() != null) complete.append(block.getText());
@@ -174,11 +193,20 @@ public class DashScopeChatModelAdapter implements ChatModelPort {
             throw unavailable(exception);
         }
         if (complete.isEmpty()) throw unavailable(null);
+        recordChatUsage(usage.get(), system.length() + user.length(), complete.length());
         return complete.toString();
     }
 
     /** 去除工单草稿固定字段名。 */
     private String value(String line) { return line.replaceFirst("^[^：:]+[：:]\\s*", "").trim(); }
+
+    /** 记录 Chat Token 与字符聚合量，不保存任何正文。 */
+    private void recordChatUsage(ChatUsage usage, long inputCharacters, long outputCharacters) {
+        long inputTokens = usage == null ? 0 : usage.getInputTokens();
+        long outputTokens = usage == null ? 0 : usage.getOutputTokens();
+        telemetry.recordUsage(ModelOperation.CHAT, inputTokens, outputTokens, 1,
+                inputCharacters + outputCharacters);
+    }
 
     /** 创建不泄露供应商正文的统一模型异常。 */
     private ModelInvocationException unavailable(Throwable cause) {

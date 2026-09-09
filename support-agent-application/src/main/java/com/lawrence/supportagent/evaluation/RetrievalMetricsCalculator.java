@@ -24,10 +24,10 @@ public class RetrievalMetricsCalculator {
         for (int index = 0; index < cases.size(); index++) {
             RetrievalEvaluationCase testCase = cases.get(index);
             RetrievalEvaluationCaseResult result = results.get(index);
-            if (!testCase.relevantSourceIds().isEmpty()) {
+            if (!testCase.relevantSourceKeys().isEmpty()) {
                 relevantCases++;
-                Set<String> relevant = new HashSet<>(testCase.relevantSourceIds());
-                List<String> ranking = result.rankedSourceIds();
+                Set<String> relevant = new HashSet<>(testCase.relevantSourceKeys());
+                List<String> ranking = result.rankedSourceKeys();
                 recall += ranking.stream().limit(5).distinct().filter(relevant::contains).count()
                         / (double) relevant.size();
                 reciprocalRank += reciprocalRank(ranking, relevant);

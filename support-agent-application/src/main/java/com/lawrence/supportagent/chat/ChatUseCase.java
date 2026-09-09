@@ -8,6 +8,8 @@ import com.lawrence.supportagent.chat.port.ConversationStorePort.CompletedTurn;
 import com.lawrence.supportagent.model.ChatModelPort;
 import com.lawrence.supportagent.model.ChatModelPort.ModelAnswer;
 import com.lawrence.supportagent.model.ModelInvocationException;
+import com.lawrence.supportagent.observability.OptimizationTelemetryPort;
+import com.lawrence.supportagent.observability.OptimizationTelemetryPort.Operation;
 import com.lawrence.supportagent.retrieval.RetrievalEvidence;
 import com.lawrence.supportagent.retrieval.RetrievalResult;
 import com.lawrence.supportagent.retrieval.RetrievalStatus;
@@ -25,6 +27,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 /** 编排意图、检索、受控模型、确定性校验、会话提交和 SSE 事件。 */
 public class ChatUseCase {
@@ -49,6 +52,7 @@ public class ChatUseCase {
     private final String embeddingModelName;
     private final String rerankModelName;
     private final double groundedThreshold;
+    private final OptimizationTelemetryPort telemetry;
 
     /** 创建不向 Agent 下放检索路由或写权限的聊天用例。 */
     public ChatUseCase(IntentRecognitionService intents, RetrievalService retrieval,
@@ -57,6 +61,19 @@ public class ChatUseCase {
                        AnswerValidator validator, UuidGenerator ids, TimeProvider time,
                        String chatModelName, String embeddingModelName,
                        String rerankModelName, double groundedThreshold) {
+        this(intents, retrieval, chatModel, tickets, conversations, audits, validator, ids, time,
+                chatModelName, embeddingModelName, rerankModelName, groundedThreshold,
+                OptimizationTelemetryPort.noOp());
+    }
+
+    /** 创建带二期低基数耗时遥测的聊天用例。 */
+    public ChatUseCase(IntentRecognitionService intents, RetrievalService retrieval,
+                       ChatModelPort chatModel, TicketQueryUseCase tickets,
+                       ConversationStorePort conversations, AgentAuditPort audits,
+                       AnswerValidator validator, UuidGenerator ids, TimeProvider time,
+                       String chatModelName, String embeddingModelName,
+                       String rerankModelName, double groundedThreshold,
+                       OptimizationTelemetryPort telemetry) {
         this.intents = intents;
         this.retrieval = retrieval;
         this.chatModel = chatModel;
@@ -70,6 +87,7 @@ public class ChatUseCase {
         this.embeddingModelName = embeddingModelName;
         this.rerankModelName = rerankModelName;
         this.groundedThreshold = groundedThreshold;
+        this.telemetry = telemetry == null ? OptimizationTelemetryPort.noOp() : telemetry;
     }
 
     /**
@@ -103,6 +121,7 @@ public class ChatUseCase {
         BeginResult begin = prepared.begin();
         if (begin.status() == ConversationStorePort.BeginStatus.REPLAY) {
             replay(begin, sink);
+            telemetry.recordDuration(Operation.CHAT_REQUEST, elapsed(started), true);
             return;
         }
         boolean committed = false;
@@ -125,7 +144,7 @@ public class ChatUseCase {
                     outcome.retrievalStatus, outcome.citations, outcome.suggestionId,
                     suggestionContext(request.message(), context), outcome.resultStatus,
                     time.now(), begin.version() + 1);
-            emitAnswerBody(sink, begin.conversationId(), runId, pending);
+            emitAnswerBody(sink, begin.conversationId(), runId, pending, started);
             Long suggestionSequence = pending.suggestionId() == null ? null
                     : conversations.nextSequence(begin.conversationId(), runId);
             long completedSequence = conversations.nextSequence(begin.conversationId(), runId);
@@ -135,13 +154,16 @@ public class ChatUseCase {
             completedPromptVersion = outcome.promptVersion;
             emitAnswerCompleted(sink, begin.conversationId(), runId, completed,
                     suggestionSequence, completedSequence);
+            telemetry.recordDuration(Operation.ANSWER_COMPLETE, elapsed(started), true);
             audits.succeed(runId, outcome.promptVersion, chatModelName, embeddingModelName,
                     rerankModelName, elapsed(started), time.now());
             sink.complete();
+            telemetry.recordDuration(Operation.CHAT_REQUEST, elapsed(started), true);
         } catch (RuntimeException exception) {
             if (committed) {
                 audits.succeed(runId, completedPromptVersion, chatModelName, embeddingModelName,
                         rerankModelName, elapsed(started), time.now());
+                telemetry.recordDuration(Operation.CHAT_REQUEST, elapsed(started), true);
                 return;
             }
             String code = exception instanceof ApplicationException application
@@ -157,6 +179,7 @@ public class ChatUseCase {
             }
             conversations.fail(begin.conversationId(), runId, time.now());
             audits.fail(runId, "FAILED", code, elapsed(started), time.now());
+            telemetry.recordDuration(Operation.CHAT_REQUEST, elapsed(started), false);
         }
     }
 
@@ -165,11 +188,18 @@ public class ChatUseCase {
                           IntentDecision decision, ChatEventSink sink) {
         return switch (decision.intent()) {
             case OUT_OF_SCOPE -> fixed(OUT_OF_SCOPE, "OUT_OF_SCOPE");
-            case GREETING -> fromModel(chatModel.greeting(message, context, () -> renew(conversationId, runId)),
-                    "GREETING", null, List.of(), null, null);
+            case GREETING -> greeting(conversationId, runId, message, context);
             case TICKET_QUERY -> ticket(conversationId, runId, message, context, decision);
             case SUPPORT_QUERY -> support(conversationId, runId, message, context, decision, sink);
         };
+    }
+
+    /** 调用问候模型并记录真实首 Token 回调耗时。 */
+    private Outcome greeting(UUID conversationId, UUID runId, String message, List<String> context) {
+        long modelStarted = System.nanoTime();
+        ModelAnswer answer = chatModel.greeting(message, context,
+                firstTokenCallback(conversationId, runId, modelStarted));
+        return fromModel(answer, "GREETING", null, List.of(), null, null);
     }
 
     /** 执行仅允许一次指定工单读取的 AgentScope 分支。 */
@@ -213,13 +243,15 @@ public class ChatUseCase {
                     RetrievalStatus.NO_RELIABLE_KNOWLEDGE, List.of(), ids.generate(), null);
         }
         List<Citation> citations = citations(result.evidence());
+        long modelStarted = System.nanoTime();
         ModelAnswer answer = chatModel.groundedAnswer(message, context, result.evidence(), null,
-                () -> renew(conversationId, runId));
+                firstTokenCallback(conversationId, runId, modelStarted));
         answer = withDisclosure(answer, result.evidence());
         List<String> failures = validator.validate(answer.text(), result.evidence());
         if (!failures.isEmpty()) {
+            modelStarted = System.nanoTime();
             answer = chatModel.groundedAnswer(message, context, result.evidence(),
-                    String.join(",", failures), () -> renew(conversationId, runId));
+                    String.join(",", failures), firstTokenCallback(conversationId, runId, modelStarted));
             answer = withDisclosure(answer, result.evidence());
             if (!validator.validate(answer.text(), result.evidence()).isEmpty()) {
                 throw new ApplicationException(ErrorCode.CHAT_ANSWER_VALIDATION_FAILED,
@@ -246,10 +278,16 @@ public class ChatUseCase {
     }
 
     /** 在落库前发送安全正文；客户端发送失败时不提交会话轮次。 */
-    private void emitAnswerBody(ChatEventSink sink, UUID conversationId, UUID runId, CompletedTurn turn) {
+    private void emitAnswerBody(ChatEventSink sink, UUID conversationId, UUID runId,
+                                CompletedTurn turn, long requestStarted) {
         emit(sink, conversationId, runId, "answer.started", Map.of("contentType", "text/markdown"));
+        boolean firstFragment = true;
         for (String fragment : fragments(turn.answer())) {
             emit(sink, conversationId, runId, "answer.delta", Map.of("text", fragment));
+            if (firstFragment) {
+                telemetry.recordDuration(Operation.SAFE_FIRST_DELTA, elapsed(requestStarted), true);
+                firstFragment = false;
+            }
         }
         for (Citation citation : turn.citations()) {
             emit(sink, conversationId, runId, "citation", citationData(citation));
@@ -382,6 +420,17 @@ public class ChatUseCase {
         if (!conversations.renew(conversationId, runId, time.now())) {
             throw new ApplicationException(ErrorCode.CHAT_CONVERSATION_BUSY, "会话运行权已经失效");
         }
+    }
+
+    /** 创建每次模型调用只记录一次首 Token 的租约续期回调。 */
+    private Runnable firstTokenCallback(UUID conversationId, UUID runId, long modelStarted) {
+        AtomicBoolean first = new AtomicBoolean();
+        return () -> {
+            if (first.compareAndSet(false, true)) {
+                telemetry.recordDuration(Operation.MODEL_FIRST_TOKEN, elapsed(modelStarted), true);
+            }
+            renew(conversationId, runId);
+        };
     }
 
     /** 按自然段优先把完整安全答案切为不超过约三百字符的片段。 */

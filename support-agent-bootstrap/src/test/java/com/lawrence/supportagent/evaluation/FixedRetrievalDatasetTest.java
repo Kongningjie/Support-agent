@@ -17,8 +17,10 @@ class FixedRetrievalDatasetTest {
     /** 验证加载器严格接受 20、10、10、5、5 共五十条用例。 */
     @Test
     void shouldLoadFrozenFiftyCases() {
-        List<RetrievalEvaluationCase> cases =
-                new ClasspathRetrievalEvaluationDatasetAdapter(new ObjectMapper()).load();
+        RetrievalEvaluationDatasetSnapshot snapshot =
+                new ClasspathRetrievalEvaluationDatasetAdapter(new ObjectMapper())
+                        .load(EvaluationDatasetKind.LOCKED_REGRESSION);
+        List<RetrievalEvaluationCase> cases = snapshot.cases();
 
         assertEquals(50, cases.size());
         assertEquals(20, count(cases, "KNOWN-"));
@@ -30,8 +32,31 @@ class FixedRetrievalDatasetTest {
                 && !value.description().isBlank()));
         Set<String> corpusIds = loadCorpusIds();
         assertEquals(15, corpusIds.size());
-        assertTrue(cases.stream().flatMap(value -> value.relevantSourceIds().stream())
+        assertTrue(cases.stream().flatMap(value -> value.relevantSourceKeys().stream())
                 .allMatch(corpusIds::contains));
+        assertEquals("locked-regression-v1", snapshot.version());
+        assertEquals(64, snapshot.contentSha256().length());
+    }
+
+    /** 验证优化开发集严格符合 30、30、30、20、20、20 共一百五十条分布。 */
+    @Test
+    void shouldLoadOptimizationDevelopmentCases() {
+        RetrievalEvaluationDatasetSnapshot snapshot =
+                new ClasspathRetrievalEvaluationDatasetAdapter(new ObjectMapper())
+                        .load(EvaluationDatasetKind.OPTIMIZATION_DEVELOPMENT);
+        List<RetrievalEvaluationCase> cases = snapshot.cases();
+
+        assertEquals(150, cases.size());
+        assertEquals(30, count(cases, "DIRECT-"));
+        assertEquals(30, count(cases, "NOISY-"));
+        assertEquals(30, count(cases, "EXACT-"));
+        assertEquals(20, count(cases, "MULTITURN-"));
+        assertEquals(20, count(cases, "NOHIT-"));
+        assertEquals(20, count(cases, "CONFLICT-"));
+        assertTrue(cases.stream().allMatch(value -> value.relevanceGrades().keySet()
+                .equals(Set.copyOf(value.relevantSourceKeys()))));
+        assertEquals("optimization-development-v1", snapshot.version());
+        assertEquals(64, snapshot.contentSha256().length());
     }
 
     /** 统计具有指定稳定前缀的用例。 */
@@ -48,7 +73,7 @@ class FixedRetrievalDatasetTest {
             String line;
             ObjectMapper mapper = new ObjectMapper();
             while ((line = reader.readLine()) != null) {
-                if (!line.isBlank()) values.add(mapper.readTree(line).path("sourceId").asText());
+                if (!line.isBlank()) values.add(mapper.readTree(line).path("sourceKey").asText());
             }
         } catch (java.io.IOException exception) {
             throw new IllegalStateException("固定检索语料无法读取", exception);

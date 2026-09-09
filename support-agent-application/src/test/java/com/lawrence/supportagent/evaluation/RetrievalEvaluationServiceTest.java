@@ -42,7 +42,10 @@ class RetrievalEvaluationServiceTest {
                         RetrievalStatus.NO_RELIABLE_KNOWLEDGE, List.of(), "验证无知识判断"));
         LinkedBlockingQueue<RetrievalEvaluationRun> reports = new LinkedBlockingQueue<>();
         AtomicInteger sequence = new AtomicInteger();
-        try (RetrievalEvaluationService service = new RetrievalEvaluationService(() -> cases,
+        RetrievalEvaluationDatasetSnapshot snapshot = new RetrievalEvaluationDatasetSnapshot(
+                EvaluationDatasetKind.LOCKED_REGRESSION, "test-v1", "abc", cases,
+                java.util.Map.of("MANAGED_DOCUMENT\u0000故障标准", "MANAGED_DOCUMENT:1"));
+        try (RetrievalEvaluationService service = new RetrievalEvaluationService(ignored -> snapshot,
                 reports::add, retrieval, new RetrievalMetricsCalculator(),
                 () -> new UUID(0, sequence.incrementAndGet()), () -> NOW)) {
             for (RetrievalMode mode : RetrievalMode.values()) {

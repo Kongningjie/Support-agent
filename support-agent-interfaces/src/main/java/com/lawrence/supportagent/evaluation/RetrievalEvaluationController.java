@@ -42,7 +42,9 @@ public class RetrievalEvaluationController {
     @PostMapping
     public ResponseEntity<ApiResult<RunResponse>> start(@Valid @RequestBody StartRequest body,
                                                          HttpServletRequest request) {
-        RetrievalEvaluationRun run = evaluations.start(body.mode(), body.caseIds());
+        EvaluationDatasetKind kind = body.datasetKind() == null
+                ? EvaluationDatasetKind.LOCKED_REGRESSION : body.datasetKind();
+        RetrievalEvaluationRun run = evaluations.start(kind, body.mode(), body.caseIds());
         return ResponseEntity.status(HttpStatus.ACCEPTED)
                 .body(responses.success(RunResponse.from(run), request));
     }
@@ -55,11 +57,18 @@ public class RetrievalEvaluationController {
         return responses.success(RunResponse.from(evaluations.get(evaluationRunId)), request);
     }
 
-    /** @param mode 四种固定模式之一 @param caseIds 可选用例 ID 子集，空表示全部 */
+    /**
+     * @param datasetKind 数据集用途；为空兼容原调用并使用锁定回归集
+     * @param mode 四种固定模式之一
+     * @param caseIds 可选用例 ID 子集，空表示当前数据集全部用例
+     */
     public record StartRequest(
+            @Schema(description = "LOCKED_REGRESSION 锁定回归集或 OPTIMIZATION_DEVELOPMENT 优化开发集；为空使用锁定集",
+                    nullable = true, example = "LOCKED_REGRESSION")
+            EvaluationDatasetKind datasetKind,
             @NotNull @Schema(description = "BM25_ONLY、VECTOR_ONLY、HYBRID 或 HYBRID_RERANK")
             RetrievalMode mode,
-            @Size(max = 50) @Schema(description = "可选固定用例 ID；为空运行全部 50 条")
+            @Size(max = 150) @Schema(description = "可选固定用例 ID；为空运行当前数据集全部用例")
             List<String> caseIds) { }
 
     /**
@@ -68,7 +77,8 @@ public class RetrievalEvaluationController {
      * @param evaluationRunId 运行 UUID @param mode 检索模式 @param status 运行状态
      * @param completedCases 已完成数 @param totalCases 总数 @param metrics 完成后的五项指标
      * @param results 逐条结果 @param failureMessage 失败摘要 @param startedAt 开始时间
-     * @param finishedAt 结束时间
+     * @param finishedAt 结束时间 @param context 数据、提交、模型与参数复现上下文
+     * @param retrievalLatency 检索耗时样本数量、平均值、P95 和最大值
      */
     public record RunResponse(
             @Schema(description = "本次评测运行 UUID") UUID evaluationRunId,
@@ -83,13 +93,18 @@ public class RetrievalEvaluationController {
             List<CaseResultResponse> results,
             @Schema(description = "评测失败的脱敏摘要", nullable = true) String failureMessage,
             @Schema(description = "评测开始 UTC 时间") Instant startedAt,
-            @Schema(description = "评测结束 UTC 时间", nullable = true) Instant finishedAt) {
+            @Schema(description = "评测结束 UTC 时间", nullable = true) Instant finishedAt,
+            @Schema(description = "数据集版本、哈希、Git 提交、模型名和检索参数快照")
+            RetrievalEvaluationContext context,
+            @Schema(description = "当前已完成用例的检索耗时统计")
+            LatencySummary retrievalLatency) {
         /** 从应用运行快照创建接口响应。 */
         public static RunResponse from(RetrievalEvaluationRun value) {
             return new RunResponse(value.evaluationRunId(), value.mode(), value.status(),
                     value.completedCases(), value.totalCases(), MetricsResponse.from(value.metrics()),
                     value.results().stream().map(CaseResultResponse::from).toList(),
-                    value.failureMessage(), value.startedAt(), value.finishedAt());
+                    value.failureMessage(), value.startedAt(), value.finishedAt(), value.context(),
+                    value.retrievalLatency());
         }
     }
 
@@ -117,20 +132,23 @@ public class RetrievalEvaluationController {
      * 单条评测结果响应。
      *
      * @param caseId 固定用例 ID @param expectedStatus 人工预期状态 @param actualStatus 实际状态
-     * @param rankedSourceIds 去重后的有序来源 ID @param exactTermsSatisfied 是否覆盖全部要求术语
-     * @param failureMessage 单条失败摘要
+     * @param rankedSourceKeys 去重后的有序稳定来源键 @param exactTermsSatisfied 是否覆盖全部要求术语
+     * @param failureMessage 单条失败摘要 @param retrievalDurationMs 单条检索耗时毫秒
      */
     public record CaseResultResponse(
             @Schema(description = "固定评测用例 ID", example = "KNOWN-001") String caseId,
             @Schema(description = "人工标注的预期三态结果") com.lawrence.supportagent.retrieval.RetrievalStatus expectedStatus,
             @Schema(description = "检索实际产生的三态结果") com.lawrence.supportagent.retrieval.RetrievalStatus actualStatus,
-            @Schema(description = "前十候选按首次出现去重后的来源类型和 ID") List<String> rankedSourceIds,
+            @Schema(description = "前十候选按首次出现去重后的稳定 sourceKey") List<String> rankedSourceKeys,
             @Schema(description = "前五候选是否覆盖要求的全部精确技术词") boolean exactTermsSatisfied,
-            @Schema(description = "单条执行失败的脱敏摘要", nullable = true) String failureMessage) {
+            @Schema(description = "单条执行失败的脱敏摘要", nullable = true) String failureMessage,
+            @Schema(description = "单条检索端到端耗时，单位毫秒", example = "125")
+            long retrievalDurationMs) {
         /** 从应用单条结果创建接口响应。 */
         public static CaseResultResponse from(RetrievalEvaluationCaseResult value) {
             return new CaseResultResponse(value.caseId(), value.expectedStatus(), value.actualStatus(),
-                    value.rankedSourceIds(), value.exactTermsSatisfied(), value.failureMessage());
+                    value.rankedSourceKeys(), value.exactTermsSatisfied(), value.failureMessage(),
+                    value.retrievalDurationMs());
         }
     }
 }

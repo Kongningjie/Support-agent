@@ -28,6 +28,7 @@ public class RetrievalEvaluationService implements AutoCloseable {
     private final RetrievalMetricsCalculator metrics;
     private final UuidGenerator ids;
     private final TimeProvider time;
+    private final EvaluationRuntimeMetadataPort runtimeMetadata;
     private final ConcurrentHashMap<UUID, RetrievalEvaluationRun> runs = new ConcurrentHashMap<>();
     private final ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor();
 
@@ -37,24 +38,47 @@ public class RetrievalEvaluationService implements AutoCloseable {
                                       RetrievalService retrieval,
                                       RetrievalMetricsCalculator metrics,
                                       UuidGenerator ids, TimeProvider time) {
+        this(dataset, reports, retrieval, metrics, ids, time, snapshot ->
+                new RetrievalEvaluationContext("1.0", snapshot.kind(), snapshot.version(),
+                        snapshot.contentSha256(), "unknown", java.util.Map.of(),
+                        java.util.Map.of()));
+    }
+
+    /** 注入数据集、报告、检索、指标、时钟及可复现运行元数据端口。 */
+    public RetrievalEvaluationService(RetrievalEvaluationDatasetPort dataset,
+                                      RetrievalEvaluationReportPort reports,
+                                      RetrievalService retrieval,
+                                      RetrievalMetricsCalculator metrics,
+                                      UuidGenerator ids, TimeProvider time,
+                                      EvaluationRuntimeMetadataPort runtimeMetadata) {
         this.dataset = dataset;
         this.reports = reports;
         this.retrieval = retrieval;
         this.metrics = metrics;
         this.ids = ids;
         this.time = time;
+        this.runtimeMetadata = runtimeMetadata;
     }
 
     /** 启动指定模式和可选用例子集的后台评测。 */
     public RetrievalEvaluationRun start(RetrievalMode mode, List<String> requestedCaseIds) {
+        return start(EvaluationDatasetKind.LOCKED_REGRESSION, mode, requestedCaseIds);
+    }
+
+    /** 启动指定数据集、检索模式和可选用例子集的后台评测。 */
+    public RetrievalEvaluationRun start(EvaluationDatasetKind kind, RetrievalMode mode,
+                                        List<String> requestedCaseIds) {
         if (mode == null) throw new IllegalArgumentException("检索评测模式不能为空");
-        List<RetrievalEvaluationCase> selected = select(dataset.load(), requestedCaseIds);
+        if (kind == null) throw new IllegalArgumentException("评测数据集用途不能为空");
+        RetrievalEvaluationDatasetSnapshot snapshot = dataset.load(kind);
+        List<RetrievalEvaluationCase> selected = select(snapshot.cases(), requestedCaseIds);
         UUID runId = ids.generate();
+        RetrievalEvaluationContext context = runtimeMetadata.create(snapshot);
         RetrievalEvaluationRun pending = new RetrievalEvaluationRun(runId, mode,
                 RetrievalEvaluationRun.Status.PENDING, 0, selected.size(), null, List.of(),
-                null, time.now(), null);
+                null, time.now(), null, context, LatencySummary.from(List.of()));
         runs.put(runId, pending);
-        executor.submit(() -> execute(runId, mode, selected));
+        executor.submit(() -> execute(runId, mode, selected, snapshot));
         return pending;
     }
 
@@ -68,13 +92,16 @@ public class RetrievalEvaluationService implements AutoCloseable {
     }
 
     /** 顺序执行用例并持续更新进度，完成后生成只读报告。 */
-    private void execute(UUID runId, RetrievalMode mode, List<RetrievalEvaluationCase> cases) {
+    private void execute(UUID runId, RetrievalMode mode, List<RetrievalEvaluationCase> cases,
+                         RetrievalEvaluationDatasetSnapshot snapshot) {
         List<RetrievalEvaluationCaseResult> results = new ArrayList<>();
         update(runId, mode, RetrievalEvaluationRun.Status.RUNNING, 0, cases.size(),
                 null, results, null, null);
         try {
             for (RetrievalEvaluationCase testCase : cases) {
-                results.add(evaluate(testCase, retrieval.rank(testCase.query(), mode)));
+                long started = System.nanoTime();
+                RetrievalRanking ranking = retrieval.rank(testCase.query(), mode);
+                results.add(evaluate(testCase, ranking, elapsed(started), snapshot));
                 update(runId, mode, RetrievalEvaluationRun.Status.RUNNING, results.size(),
                         cases.size(), null, results, null, null);
             }
@@ -92,13 +119,14 @@ public class RetrievalEvaluationService implements AutoCloseable {
 
     /** 计算单条问题的状态、去重来源排名和精确词命中情况。 */
     private RetrievalEvaluationCaseResult evaluate(RetrievalEvaluationCase testCase,
-                                                    RetrievalRanking ranking) {
+                                                    RetrievalRanking ranking, long durationMs,
+                                                    RetrievalEvaluationDatasetSnapshot snapshot) {
         RetrievalStatus status = actualStatus(ranking);
         Set<String> sources = new LinkedHashSet<>();
-        ranking.candidates().forEach(value -> sources.add(sourceId(value)));
+        ranking.candidates().forEach(value -> sources.add(sourceKey(value, snapshot)));
         boolean exact = requiredTermsPresent(testCase.requiredExactTerms(), ranking.candidates());
         return new RetrievalEvaluationCaseResult(testCase.caseId(), testCase.expectedStatus(),
-                status, List.copyOf(sources), exact, null);
+                status, List.copyOf(sources), exact, null, durationMs);
     }
 
     /** 根据当前评测模式的必要分支状态推导三态结果。 */
@@ -123,8 +151,12 @@ public class RetrievalEvaluationService implements AutoCloseable {
     }
 
     /** 生成与 JSONL 人工标注一致的稳定来源 ID。 */
-    private String sourceId(RetrievalEvidence value) {
-        return value.sourceType() + ":" + value.sourceId();
+    private String sourceKey(RetrievalEvidence value,
+                             RetrievalEvaluationDatasetSnapshot snapshot) {
+        String key = snapshot.sourceKeysByTypeAndTitle().get(
+                value.sourceType() + "\u0000" + value.title());
+        if (key == null) throw new IllegalStateException("检索结果没有稳定 sourceKey 映射");
+        return key;
     }
 
     /** 按请求 ID 保持数据集顺序筛选，并拒绝未知或重复 ID。 */
@@ -149,11 +181,17 @@ public class RetrievalEvaluationService implements AutoCloseable {
         RetrievalEvaluationRun original = runs.get(runId);
         RetrievalEvaluationRun value = new RetrievalEvaluationRun(runId, mode, status,
                 completed, total, metric, List.copyOf(results), failure,
-                original.startedAt(), finishedAt);
+                original.startedAt(), finishedAt, original.context(), LatencySummary.from(
+                results.stream().map(RetrievalEvaluationCaseResult::retrievalDurationMs).toList()));
         runs.put(runId, value);
         return value;
     }
 
     /** 关闭后台虚拟线程执行器。 */
     @Override public void close() { executor.close(); }
+
+    /** 将单调时钟纳秒差转换为非负毫秒。 */
+    private long elapsed(long started) {
+        return Math.max(0, (System.nanoTime() - started) / 1_000_000);
+    }
 }

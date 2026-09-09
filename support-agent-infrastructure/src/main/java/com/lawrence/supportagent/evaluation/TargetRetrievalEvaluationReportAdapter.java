@@ -4,6 +4,7 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.StandardOpenOption;
 import tools.jackson.databind.ObjectMapper;
 
 /** 将完成的评测快照写入 Maven target 目录，避免污染源码和配置。 */
@@ -31,7 +32,8 @@ public class TargetRetrievalEvaluationReportAdapter implements RetrievalEvaluati
             Files.createDirectories(directory);
             Path report = directory.resolve(run.evaluationRunId() + ".json");
             Files.writeString(report, mapper.writerWithDefaultPrettyPrinter()
-                    .writeValueAsString(run), StandardCharsets.UTF_8);
+                    .writeValueAsString(run), StandardCharsets.UTF_8,
+                    StandardOpenOption.CREATE_NEW, StandardOpenOption.WRITE);
         } catch (IOException exception) {
             throw new IllegalStateException("检索评测报告写入失败", exception);
         }

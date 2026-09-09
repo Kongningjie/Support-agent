@@ -73,4 +73,18 @@ class RedisConversationStoreAdapterIT {
                 UUID.randomUUID(), Instant.now())).isInstanceOfSatisfying(ApplicationException.class,
                 value -> assertThat(value.errorCode()).isEqualTo(ErrorCode.CHAT_MESSAGE_ID_REUSED));
     }
+
+    /** 同一会话已有运行租约时必须拒绝第二个不同请求。 */
+    @Test
+    void shouldRejectConcurrentRunForSameConversation() {
+        UUID firstRunId = UUID.randomUUID();
+        var begin = store.begin(null, UUID.randomUUID(), "问题一", null,
+                firstRunId, Instant.now());
+
+        assertThatThrownBy(() -> store.begin(begin.conversationId(), UUID.randomUUID(),
+                "问题二", 0L, UUID.randomUUID(), Instant.now()))
+                .isInstanceOfSatisfying(ApplicationException.class,
+                        value -> assertThat(value.errorCode())
+                                .isEqualTo(ErrorCode.CHAT_CONVERSATION_BUSY));
+    }
 }

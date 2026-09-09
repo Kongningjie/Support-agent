@@ -16,6 +16,7 @@ import com.lawrence.supportagent.knowledge.port.KnowledgeIndexPort;
 import com.lawrence.supportagent.knowledge.port.ManagedDocumentRepository;
 import com.lawrence.supportagent.model.DashScopeEmbeddingModelAdapter;
 import com.lawrence.supportagent.model.EmbeddingModelPort;
+import com.lawrence.supportagent.observability.OptimizationTelemetryPort;
 import com.lawrence.supportagent.sharedkernel.port.OperatorProvider;
 import com.lawrence.supportagent.sharedkernel.port.TimeProvider;
 import com.lawrence.supportagent.resolvedcase.ResolvedCaseCommandUseCase;
@@ -69,9 +70,11 @@ public class KnowledgeConfiguration {
 
     /** 创建不会在启动时访问远端的 DashScope Embedding 独立适配器。 */
     @Bean(destroyMethod = "close")
-    public EmbeddingModelPort embeddingModelPort(SupportAgentProperties properties) {
+    public EmbeddingModelPort embeddingModelPort(SupportAgentProperties properties,
+                                                  OptimizationTelemetryPort telemetry) {
         SupportAgentProperties.DashScope config = properties.dashscope();
-        return new DashScopeEmbeddingModelAdapter(config.apiKey(), config.embeddingModel(), config.baseUrl());
+        return new DashScopeEmbeddingModelAdapter(config.apiKey(), config.embeddingModel(),
+                config.baseUrl(), telemetry);
     }
 
     /** 创建 Elasticsearch REST5 客户端；索引仍由首个任务惰性检查。 */

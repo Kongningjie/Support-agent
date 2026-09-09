@@ -4,6 +4,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import com.lawrence.supportagent.chat.port.AgentAuditPort;
@@ -57,6 +59,25 @@ class ChatUseCaseTest {
         assertThat(sink.completed).isTrue();
     }
 
+    /** 客户端断开或慢客户端发送失败时不得提交半轮会话。 */
+    @Test
+    void shouldFailRunWithoutCommitWhenSseClientStopsAcceptingEvents() {
+        ConversationStorePort store = mock(ConversationStorePort.class);
+        UUID conversationId = UUID.randomUUID();
+        when(store.begin(any(), any(), any(), any(), any(), any())).thenReturn(
+                new BeginResult(BeginStatus.ACQUIRED, conversationId, 0, null, null));
+        when(store.recentContext(any(), anyInt(), anyInt())).thenReturn(List.of());
+        AtomicLong sequence = new AtomicLong();
+        when(store.nextSequence(any(), any())).thenAnswer(ignored -> sequence.incrementAndGet());
+        ChatUseCase useCase = useCase(store);
+
+        useCase.stream(new ChatRequest(null, UUID.randomUUID(), "告诉我股票行情", null),
+                new FailingSink());
+
+        verify(store).fail(any(), any(), any());
+        verify(store, never()).complete(any(), any(), any(), any(), any());
+    }
+
     /** 创建不允许实际模型调用的聊天用例。 */
     private ChatUseCase useCase(ConversationStorePort store) {
         IntentRecognitionPort intentModel = (message, turns) -> { throw new AssertionError("不应调用意图模型"); };
@@ -73,5 +94,17 @@ class ChatUseCaseTest {
         /** {@inheritDoc} */ @Override public void send(ChatEvent event) { events.add(event); }
         /** {@inheritDoc} */ @Override public void heartbeat() { }
         /** {@inheritDoc} */ @Override public void complete() { completed = true; }
+    }
+
+    /** 在首个安全正文片段处模拟客户端断开或慢客户端保护超时。 */
+    private static final class FailingSink implements ChatEventSink {
+        /** {@inheritDoc} */
+        @Override public void send(ChatEvent event) {
+            if ("answer.delta".equals(event.eventType())) {
+                throw new IllegalStateException("客户端已经断开");
+            }
+        }
+        /** {@inheritDoc} */ @Override public void heartbeat() { }
+        /** {@inheritDoc} */ @Override public void complete() { }
     }
 }
