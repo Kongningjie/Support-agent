@@ -29,9 +29,10 @@ support-agent:
   dashscope:
     api-key: ${DASHSCOPE_API_KEY:}
     base-url: ${DASHSCOPE_HTTP_BASE_URL:https://dashscope.aliyuncs.com/api/v1}
-    chat-model: ${SUPPORT_AGENT_CHAT_MODEL:qwen-plus}
+    chat-model: ${SUPPORT_AGENT_CHAT_MODEL:qwen3.7-plus-2026-05-26}
+    intent-model: ${SUPPORT_AGENT_INTENT_MODEL:qwen3.7-flash}
     embedding-model: ${SUPPORT_AGENT_EMBEDDING_MODEL:text-embedding-v4}
-    rerank-model: ${SUPPORT_AGENT_RERANK_MODEL:gte-rerank-v2}
+    rerank-model: ${SUPPORT_AGENT_RERANK_MODEL:qwen3-rerank}
   elasticsearch:
     url: ${SUPPORT_AGENT_ELASTICSEARCH_URL:http://localhost:9200}
     username: ${SUPPORT_AGENT_ELASTICSEARCH_USERNAME:}

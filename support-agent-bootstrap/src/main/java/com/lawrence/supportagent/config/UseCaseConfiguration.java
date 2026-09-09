@@ -9,6 +9,9 @@ import com.lawrence.supportagent.asynctask.port.AsyncTaskCompletionPort;
 import com.lawrence.supportagent.idempotency.IdempotentExecutor;
 import com.lawrence.supportagent.knowledge.port.ManagedDocumentRepository;
 import com.lawrence.supportagent.resolvedcase.port.ResolvedCaseRepository;
+import com.lawrence.supportagent.resolvedcase.ResolvedCaseQueryUseCase;
+import com.lawrence.supportagent.resolvedcase.ResolvedCaseGenerationTaskHandler;
+import com.lawrence.supportagent.knowledge.ExactTermExtractor;
 import com.lawrence.supportagent.sharedkernel.port.OperatorProvider;
 import com.lawrence.supportagent.sharedkernel.port.TimeProvider;
 import com.lawrence.supportagent.ticket.TicketCommandUseCase;
@@ -37,9 +40,10 @@ public class UseCaseConfiguration {
                                                       TicketQueryUseCase queryUseCase,
                                                       IdempotentExecutor executor,
                                                       OperatorProvider operatorProvider,
-                                                      TimeProvider timeProvider) {
+                                                      TimeProvider timeProvider,
+                                                      AsyncTaskCreator taskCreator) {
         return new TicketCommandUseCase(repository, queryUseCase, executor,
-                operatorProvider, timeProvider);
+                operatorProvider, timeProvider, taskCreator);
     }
 
     /** 创建显式消费会话建议的工单草稿用例。 */
@@ -80,5 +84,20 @@ public class UseCaseConfiguration {
                                               TimeProvider timeProvider) {
         return new AsyncTaskUseCase(taskRepository, ticketRepository, documentRepository,
                 caseRepository, executor, operatorProvider, timeProvider);
+    }
+
+    /** 创建已解决案例查询用例。 */
+    @Bean
+    public ResolvedCaseQueryUseCase resolvedCaseQueryUseCase(ResolvedCaseRepository cases,
+                                                              TicketRepository tickets) {
+        return new ResolvedCaseQueryUseCase(cases, tickets);
+    }
+
+    /** 注册已解决工单的异步案例草稿生成处理器。 */
+    @Bean
+    public ResolvedCaseGenerationTaskHandler resolvedCaseGenerationTaskHandler(
+            TicketRepository tickets, ResolvedCaseRepository cases,
+            ChatModelPort model, ExactTermExtractor terms, TimeProvider time) {
+        return new ResolvedCaseGenerationTaskHandler(tickets, cases, model, terms, time);
     }
 }

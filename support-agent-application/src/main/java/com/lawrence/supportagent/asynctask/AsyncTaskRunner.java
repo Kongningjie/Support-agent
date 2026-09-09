@@ -16,7 +16,7 @@ public class AsyncTaskRunner {
     private final AsyncTaskRepository repository;
     private final AsyncTaskCompletionPort completionPort;
     private final TimeProvider timeProvider;
-    private final Map<AsyncTaskType, AsyncTaskHandler> handlers;
+    private final Map<AsyncTaskType, List<AsyncTaskHandler>> handlers;
 
     /** 注入任务仓储、统一时间和可为空的生产 Handler 集合。 */
     public AsyncTaskRunner(AsyncTaskRepository repository, AsyncTaskCompletionPort completionPort,
@@ -28,14 +28,21 @@ public class AsyncTaskRunner {
         this.handlers = indexHandlers(handlers);
     }
 
-    /** 执行单个已抢占任务；缺失 Handler 时直接记录不可重试死亡。 */
+    /** 执行单个已抢占任务；缺失或路由冲突时直接记录不可重试死亡。 */
     public void run(AsyncTask task, String workerId) {
-        AsyncTaskHandler handler = handlers.get(task.taskType());
-        if (handler == null) {
+        List<AsyncTaskHandler> matches = handlers.getOrDefault(task.taskType(), List.of()).stream()
+                .filter(candidate -> candidate.supports(task)).toList();
+        if (matches.isEmpty()) {
             fail(task, workerId, null, new AsyncTaskExecutionException(
                     "ASYNC_TASK_HANDLER_MISSING", "当前任务类型未注册处理器", false));
             return;
         }
+        if (matches.size() > 1) {
+            fail(task, workerId, null, new AsyncTaskExecutionException(
+                    "ASYNC_TASK_HANDLER_AMBIGUOUS", "当前任务匹配到多个处理器", false));
+            return;
+        }
+        AsyncTaskHandler handler = matches.getFirst();
         if (task.attemptCount() >= task.maxAttempts()
                 && "ASYNC_TASK_WORKER_LEASE_EXPIRED".equals(task.lastErrorCode())) {
             fail(task, workerId, handler, new AsyncTaskExecutionException(
@@ -92,16 +99,17 @@ public class AsyncTaskRunner {
         return RETRY_DELAYS.get(index);
     }
 
-    /** 建立任务类型到唯一 Handler 的不可变索引并拒绝重复注册。 */
-    private Map<AsyncTaskType, AsyncTaskHandler> indexHandlers(List<AsyncTaskHandler> values) {
-        Map<AsyncTaskType, AsyncTaskHandler> indexed = new EnumMap<>(AsyncTaskType.class);
+    /** 建立任务类型到按聚合继续路由的 Handler 不可变索引。 */
+    private Map<AsyncTaskType, List<AsyncTaskHandler>> indexHandlers(List<AsyncTaskHandler> values) {
+        Map<AsyncTaskType, List<AsyncTaskHandler>> indexed = new EnumMap<>(AsyncTaskType.class);
         if (values != null) {
             for (AsyncTaskHandler handler : values) {
-                if (indexed.putIfAbsent(handler.taskType(), handler) != null) {
-                    throw new IllegalArgumentException("同一异步任务类型不能注册多个处理器");
-                }
+                indexed.computeIfAbsent(handler.taskType(), ignored -> new java.util.ArrayList<>())
+                        .add(handler);
             }
         }
-        return Map.copyOf(indexed);
+        Map<AsyncTaskType, List<AsyncTaskHandler>> immutable = new EnumMap<>(AsyncTaskType.class);
+        indexed.forEach((type, handlers) -> immutable.put(type, List.copyOf(handlers)));
+        return Map.copyOf(immutable);
     }
 }

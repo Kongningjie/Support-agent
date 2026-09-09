@@ -18,6 +18,11 @@ import com.lawrence.supportagent.model.DashScopeEmbeddingModelAdapter;
 import com.lawrence.supportagent.model.EmbeddingModelPort;
 import com.lawrence.supportagent.sharedkernel.port.OperatorProvider;
 import com.lawrence.supportagent.sharedkernel.port.TimeProvider;
+import com.lawrence.supportagent.resolvedcase.ResolvedCaseCommandUseCase;
+import com.lawrence.supportagent.resolvedcase.ResolvedCaseDeleteTaskHandler;
+import com.lawrence.supportagent.resolvedcase.ResolvedCaseIndexTaskHandler;
+import com.lawrence.supportagent.resolvedcase.ResolvedCaseQueryUseCase;
+import com.lawrence.supportagent.resolvedcase.port.ResolvedCaseRepository;
 import java.net.URI;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -100,5 +105,32 @@ public class KnowledgeConfiguration {
     public KnowledgeDeleteTaskHandler knowledgeDeleteTaskHandler(
             ManagedDocumentRepository repository, KnowledgeIndexPort indexPort) {
         return new KnowledgeDeleteTaskHandler(repository, indexPort);
+    }
+
+    /** 创建案例人工审核、发布和归档命令用例。 */
+    @Bean
+    public ResolvedCaseCommandUseCase resolvedCaseCommandUseCase(
+            ResolvedCaseRepository repository, ResolvedCaseQueryUseCase queries,
+            AsyncTaskCreator taskCreator, IdempotentExecutor idempotency,
+            OperatorProvider operators, TimeProvider time, DocumentContentPolicy policy) {
+        return new ResolvedCaseCommandUseCase(repository, queries, taskCreator,
+                idempotency, operators, time, policy);
+    }
+
+    /** 注册案例异步知识索引处理器。 */
+    @Bean
+    public ResolvedCaseIndexTaskHandler resolvedCaseIndexTaskHandler(
+            ResolvedCaseRepository repository, DocumentContentPolicy policy,
+            DocumentChunker chunker, EmbeddingModelPort embeddings,
+            KnowledgeIndexPort index, TimeProvider time) {
+        return new ResolvedCaseIndexTaskHandler(repository, policy, chunker,
+                embeddings, index, time);
+    }
+
+    /** 注册案例归档后的索引删除处理器。 */
+    @Bean
+    public ResolvedCaseDeleteTaskHandler resolvedCaseDeleteTaskHandler(
+            ResolvedCaseRepository repository, KnowledgeIndexPort index) {
+        return new ResolvedCaseDeleteTaskHandler(repository, index);
     }
 }

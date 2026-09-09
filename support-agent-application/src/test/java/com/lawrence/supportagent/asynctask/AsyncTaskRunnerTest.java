@@ -5,6 +5,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -65,6 +66,46 @@ class AsyncTaskRunnerTest {
 
         verify(completionPort).fail(1L, "worker-1", AsyncTaskStatus.DEAD, NOW,
                 "ASYNC_TASK_HANDLER_MISSING", "当前任务类型未注册处理器", NOW, NOW,
+                AsyncTaskBusinessMutation.NONE);
+    }
+
+    /** 验证同任务类型的多个处理器会按关联聚合选择唯一实现。 */
+    @Test
+    void shouldRouteSameTaskTypeByAggregateType() {
+        AsyncTaskRepository repository = repository();
+        AsyncTaskCompletionPort completionPort = mock(AsyncTaskCompletionPort.class);
+        AsyncTaskHandler document = mock(AsyncTaskHandler.class);
+        AsyncTaskHandler resolvedCase = mock(AsyncTaskHandler.class);
+        when(document.taskType()).thenReturn(AsyncTaskType.KNOWLEDGE_INDEX);
+        when(resolvedCase.taskType()).thenReturn(AsyncTaskType.KNOWLEDGE_INDEX);
+        when(document.supports(any())).thenAnswer(invocation -> invocation.<AsyncTask>getArgument(0)
+                .aggregateType() == AggregateType.MANAGED_DOCUMENT);
+        when(resolvedCase.supports(any())).thenAnswer(invocation -> invocation.<AsyncTask>getArgument(0)
+                .aggregateType() == AggregateType.RESOLVED_CASE);
+        when(document.execute(any())).thenReturn(AsyncTaskBusinessMutation.NONE);
+        AsyncTaskRunner runner = new AsyncTaskRunner(repository, completionPort, () -> NOW,
+                List.of(document, resolvedCase));
+
+        runner.run(runningTask(), "worker-1");
+
+        verify(document).execute(any());
+        verify(resolvedCase, never()).execute(any());
+    }
+
+    /** 验证路由配置冲突时任务死亡，而不是依赖 Bean 注册顺序。 */
+    @Test
+    void shouldFailPermanentlyWhenMultipleHandlersMatch() {
+        AsyncTaskRepository repository = repository();
+        AsyncTaskCompletionPort completionPort = mock(AsyncTaskCompletionPort.class);
+        AsyncTaskHandler first = handler(context -> { });
+        AsyncTaskHandler second = handler(context -> { });
+        AsyncTaskRunner runner = new AsyncTaskRunner(repository, completionPort, () -> NOW,
+                List.of(first, second));
+
+        runner.run(runningTask(), "worker-1");
+
+        verify(completionPort).fail(1L, "worker-1", AsyncTaskStatus.DEAD, NOW,
+                "ASYNC_TASK_HANDLER_AMBIGUOUS", "当前任务匹配到多个处理器", NOW, NOW,
                 AsyncTaskBusinessMutation.NONE);
     }
 

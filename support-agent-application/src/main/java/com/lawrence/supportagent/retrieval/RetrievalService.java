@@ -77,6 +77,27 @@ public class RetrievalService implements AutoCloseable {
                 selected, fused, elapsed(started));
     }
 
+    /** 按固定评测模式返回最多十个有效候选，不应用回答可靠性门槛。 */
+    public RetrievalRanking rank(String query, RetrievalMode mode) {
+        if (query == null || query.isBlank() || mode == null) {
+            throw new IllegalArgumentException("评测问题和检索模式不能为空");
+        }
+        BranchResult bm25 = mode == RetrievalMode.VECTOR_ONLY
+                ? new BranchResult(BranchStatus.SKIPPED, List.of()) : callBm25(query);
+        BranchResult vector = mode == RetrievalMode.BM25_ONLY
+                ? new BranchResult(BranchStatus.SKIPPED, List.of()) : callVector(query);
+        List<RetrievalEvidence> candidates = switch (mode) {
+            case BM25_ONLY -> validSources(bm25.items);
+            case VECTOR_ONLY -> validSources(vector.items);
+            case HYBRID, HYBRID_RERANK -> validSources(fuse(bm25.items, vector.items));
+        };
+        RerankOutcome reranked = mode == RetrievalMode.HYBRID_RERANK
+                ? rerank(query, candidates)
+                : new RerankOutcome(BranchStatus.SKIPPED, candidates);
+        return new RetrievalRanking(mode, reranked.items.stream().limit(10).toList(),
+                bm25.status, vector.status, reranked.status);
+    }
+
     /** 安全执行 BM25 分支并把异常收敛为分支失败。 */
     private BranchResult callBm25(String query) {
         try {
@@ -168,6 +189,7 @@ public class RetrievalService implements AutoCloseable {
             List<RetrievalEvidence> sorted = candidates.stream().map(value -> copy(value,
                             value.bm25Rank(), value.vectorRank(), value.rrfScore(), byId.get(value.chunkId())))
                     .sorted(Comparator.comparing(RetrievalEvidence::rerankScore).reversed()
+                            .thenComparingInt(this::sourcePriority)
                             .thenComparing(rrfOrder())).toList();
             return new RerankOutcome(BranchStatus.SUCCEEDED, sorted);
         } catch (RuntimeException exception) {
@@ -213,11 +235,17 @@ public class RetrievalService implements AutoCloseable {
     /** 返回 RRF 并列时仍可重复的稳定排序器。 */
     private Comparator<RetrievalEvidence> rrfOrder() {
         return Comparator.comparingDouble(RetrievalEvidence::rrfScore).reversed()
+                .thenComparingInt(this::sourcePriority)
                 .thenComparing(value -> value.bm25Rank() != null && value.vectorRank() != null ? 0 : 1)
                 .thenComparingInt(value -> Math.min(value.bm25Rank() == null ? Integer.MAX_VALUE : value.bm25Rank(),
                         value.vectorRank() == null ? Integer.MAX_VALUE : value.vectorRank()))
                 .thenComparingInt(value -> value.bm25Rank() == null ? Integer.MAX_VALUE : value.bm25Rank())
                 .thenComparing(RetrievalEvidence::chunkId);
+    }
+
+    /** 在分数完全相同时优先选择人工维护的托管文档。 */
+    private int sourcePriority(RetrievalEvidence value) {
+        return "MANAGED_DOCUMENT".equals(value.sourceType()) ? 0 : 1;
     }
 
     /** 复制候选并替换检索阶段分数。 */

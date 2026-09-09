@@ -21,6 +21,9 @@ public interface ChatModelPort {
     /** 从冻结对话上下文生成结构化工单草稿。 */
     TicketDraft generateTicketDraft(String frozenContext);
 
+    /** 仅根据已解决工单事实生成结构化案例标题和问题描述。 */
+    ResolvedCaseDraft generateResolvedCaseDraft(String ticketFacts);
+
     /** @param text 完整模型正文 @param promptVersion Prompt 短哈希版本 @param serializedAgentState AgentScope 不透明状态 */
     record ModelAnswer(String text, String promptVersion, String serializedAgentState) {
         /** 创建不携带 Agent 状态的普通模型答案。 */
@@ -31,4 +34,7 @@ public interface ChatModelPort {
 
     /** @param title 标题 @param problemDescription 问题描述 @param attemptedActions 已尝试操作 */
     record TicketDraft(String title, String problemDescription, String attemptedActions) { }
+
+    /** @param title 案例标题 @param problem 问题现象和适用背景 */
+    record ResolvedCaseDraft(String title, String problem) { }
 }

@@ -194,7 +194,7 @@ class ApplicationStartupIT {
         assertEquals(404, get(client, "/api/v1/knowledge/documents/" + documentId).statusCode());
     }
 
-    /** 验证 OpenAPI 已注册当前阶段接口且未提前开放解决工单接口。 */
+    /** 验证 OpenAPI 已注册阶段五允许的工单、案例和评测接口。 */
     @Test
     void shouldExposeOnlyCurrentStageTicketOperations() throws Exception {
         JsonNode paths = objectMapper.readTree(get(HttpClient.newHttpClient(), "/v3/api-docs").body())
@@ -206,7 +206,10 @@ class ApplicationStartupIT {
         assertTrue(paths.has("/api/v1/knowledge/documents/{documentId}/publish"));
         assertTrue(paths.has("/api/v1/chat/stream"));
         assertTrue(paths.has("/api/v1/tickets/drafts/from-conversation"));
-        assertFalse(paths.has("/api/v1/tickets/{ticketNo}/resolve"));
+        assertTrue(paths.has("/api/v1/tickets/{ticketNo}/resolve"));
+        assertTrue(paths.has("/api/v1/resolved-cases/{caseId}"));
+        assertTrue(paths.has("/api/v1/resolved-cases/{caseId}/publish"));
+        assertTrue(paths.has("/api/v1/retrieval-evaluations"));
     }
 
     /** 向本地随机端口发送健康检查请求。 */

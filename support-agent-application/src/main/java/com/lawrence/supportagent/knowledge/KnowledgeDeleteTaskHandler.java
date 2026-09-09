@@ -33,6 +33,13 @@ public class KnowledgeDeleteTaskHandler implements AsyncTaskHandler {
 
     /** {@inheritDoc} */
     @Override
+    public boolean supports(AsyncTask task) {
+        return task != null && task.taskType() == taskType()
+                && task.aggregateType() == AggregateType.MANAGED_DOCUMENT;
+    }
+
+    /** {@inheritDoc} */
+    @Override
     public AsyncTaskBusinessMutation execute(AsyncTaskExecutionContext context) {
         AsyncTask task = context.task();
         requireCurrentArchivedDocument(task);

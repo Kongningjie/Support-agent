@@ -1,0 +1,55 @@
+@baseUrl = http://localhost:8080/api/v1
+
+### 查询案例列表；异步生成完成后取得 caseId 和 version
+# @name listCases
+GET {{baseUrl}}/resolved-cases?sourceTicketNo={{ticketNo}}&page=1&size=20
+Accept: application/json
+
+> {% if (response.body.data.items.length > 0) { client.global.set("caseId", response.body.data.items[0].caseId); client.global.set("caseVersion", response.body.data.items[0].version); } %}
+
+### 查询案例及来源工单摘要
+GET {{baseUrl}}/resolved-cases/{{caseId}}
+Accept: application/json
+
+### 人工审核并修改案例；允许人工修正 cause 和 solution
+PUT {{baseUrl}}/resolved-cases/{{caseId}}/draft
+Content-Type: application/json
+
+{
+  "title": "Spring Boot 连接 MySQL 时端口配置错误",
+  "problem": "应用启动时连接 localhost:3307 失败，MySQL 实际监听 3306。",
+  "cause": "JDBC 地址使用了错误的 MySQL 宿主机端口",
+  "solution": "把 JDBC 地址修正为 localhost:3306 后重新启动，连接恢复正常",
+  "version": {{caseVersion}}
+}
+
+> {% client.global.set("caseVersion", response.body.data.version); %}
+
+### 审核通过并异步发布到统一知识索引
+POST {{baseUrl}}/resolved-cases/{{caseId}}/publish
+Content-Type: application/json
+
+{
+  "version": {{caseVersion}},
+  "idempotencyKey": "case-publish-local-001"
+}
+
+### 拒绝分支；与发布互斥，只能对另一条 DRAFT 案例执行
+POST {{baseUrl}}/resolved-cases/{{caseId}}/reject
+Content-Type: application/json
+
+{
+  "rejectionReason": "该问题只适用于一次性测试环境，不适合沉淀为知识",
+  "version": {{caseVersion}},
+  "idempotencyKey": "case-reject-local-001"
+}
+
+### 归档分支；仅允许对 PUBLISHED 案例执行
+POST {{baseUrl}}/resolved-cases/{{caseId}}/archive
+Content-Type: application/json
+
+{
+  "archiveReason": "正式知识文档已替代该历史案例",
+  "version": {{caseVersion}},
+  "idempotencyKey": "case-archive-local-001"
+}

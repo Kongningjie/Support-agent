@@ -1,5 +1,8 @@
 package com.lawrence.supportagent.ticket;
 
+import com.lawrence.supportagent.asynctask.AggregateType;
+import com.lawrence.supportagent.asynctask.AsyncTaskCreator;
+import com.lawrence.supportagent.asynctask.AsyncTaskType;
 import com.lawrence.supportagent.idempotency.IdempotencyCommand;
 import com.lawrence.supportagent.idempotency.IdempotentExecutor;
 import com.lawrence.supportagent.idempotency.IdempotentResource;
@@ -22,16 +25,19 @@ public class TicketCommandUseCase {
     private final IdempotentExecutor idempotentExecutor;
     private final OperatorProvider operatorProvider;
     private final TimeProvider timeProvider;
+    private final AsyncTaskCreator taskCreator;
 
     /** 注入工单持久化、查询、幂等、操作者和时间端口。 */
     public TicketCommandUseCase(TicketRepository repository, TicketQueryUseCase queryUseCase,
                                 IdempotentExecutor idempotentExecutor,
-                                OperatorProvider operatorProvider, TimeProvider timeProvider) {
+                                OperatorProvider operatorProvider, TimeProvider timeProvider,
+                                AsyncTaskCreator taskCreator) {
         this.repository = repository;
         this.queryUseCase = queryUseCase;
         this.idempotentExecutor = idempotentExecutor;
         this.operatorProvider = operatorProvider;
         this.timeProvider = timeProvider;
+        this.taskCreator = taskCreator;
     }
 
     /** 手工创建工单草稿，并由内部主键确定性生成对外编号。 */
@@ -111,6 +117,27 @@ public class TicketCommandUseCase {
             }
             Ticket saved = repository.save(current.close(normalizedReason,
                     operatorProvider.currentOperator().value(), timeProvider.now()));
+            return new IdempotentResource<>("TICKET", saved.id(), TicketDetails.from(saved));
+        }, queryUseCase::getByInternalId);
+    }
+
+    /** 幂等解决开放工单，并在同一事务创建案例生成任务。 */
+    public TicketDetails resolve(String ticketNo, String rootCause, String solution,
+                                 long version, String idempotencyKey) {
+        String normalizedCause = required(rootCause, "根因", 4000);
+        String normalizedSolution = required(solution, "解决方案", 8000);
+        IdempotencyCommand command = command("TICKET_RESOLVE", idempotencyKey,
+                RequestFingerprint.sha256(ticketNo, Long.toString(version),
+                        normalizedCause, normalizedSolution));
+        return idempotentExecutor.execute(command, () -> {
+            Ticket current = requireVersion(queryUseCase.requireTicket(ticketNo), version);
+            requireStatus(current, TicketStatus.OPEN, "只有开放工单可以解决");
+            String operator = operatorProvider.currentOperator().value();
+            Ticket saved = repository.save(current.resolve(normalizedCause, normalizedSolution,
+                    operator, timeProvider.now()));
+            taskCreator.create(AsyncTaskType.CASE_GENERATION, AggregateType.TICKET,
+                    saved.id(), saved.version(),
+                    "case-generation:" + saved.id() + ":" + saved.version(), operator);
             return new IdempotentResource<>("TICKET", saved.id(), TicketDetails.from(saved));
         }, queryUseCase::getByInternalId);
     }

@@ -119,6 +119,19 @@ public class TicketController {
         return responses.success(TicketResponse.from(result), request);
     }
 
+    /** 使用人工确认的根因和解决方案解决开放工单。 */
+    @Operation(summary = "解决工单并异步生成案例草稿")
+    @PostMapping("/{ticketNo}/resolve")
+    public ApiResult<TicketResponse> resolve(
+            @Parameter(description = "待解决的开放工单编号", example = "T000000000001")
+            @PathVariable String ticketNo,
+            @Valid @RequestBody ResolveTicketRequest body,
+            HttpServletRequest request) {
+        TicketDetails result = commandUseCase.resolve(ticketNo, body.rootCause(), body.solution(),
+                body.version(), body.idempotencyKey());
+        return responses.success(TicketResponse.from(result), request);
+    }
+
     /** 按状态和关键词分页查询工单摘要。 */
     @Operation(summary = "分页查询工单")
     @GetMapping
@@ -225,6 +238,28 @@ public class TicketController {
             @NotNull @PositiveOrZero Long version,
             @Schema(description = "必填的本次关闭操作幂等键，1～160 字符",
                     example = "ticket-close-20260904-001")
+            @NotBlank @Size(max = 160) String idempotencyKey) {
+    }
+
+    /**
+     * 解决工单请求。
+     *
+     * @param rootCause 人工确认的真实根因，1～4000 字符
+     * @param solution 实际执行且有效的解决方案，1～8000 字符
+     * @param version 客户端读取到的开放工单版本
+     * @param idempotencyKey 本次解决操作的幂等键
+     */
+    public record ResolveTicketRequest(
+            @Schema(description = "人工确认的真实根因，1～4000 字符",
+                    example = "MySQL 连接地址仍指向旧端口")
+            @NotBlank @Size(max = 4000) String rootCause,
+            @Schema(description = "实际验证有效的解决方案，1～8000 字符",
+                    example = "修正 JDBC 地址并重新启动应用")
+            @NotBlank @Size(max = 8000) String solution,
+            @Schema(description = "当前开放工单的乐观锁版本", example = "1")
+            @NotNull @PositiveOrZero Long version,
+            @Schema(description = "本次解决操作的幂等键，1～160 字符",
+                    example = "ticket-resolve-20260908-001")
             @NotBlank @Size(max = 160) String idempotencyKey) {
     }
 

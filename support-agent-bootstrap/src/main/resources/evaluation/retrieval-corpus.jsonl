@@ -1,0 +1,15 @@
+{"sourceId":"MANAGED_DOCUMENT:1","title":"MySQL 连接故障标准","content":"MySQL 8.4.11 出现 Connection refused 时，先使用 Get-NetTCPConnection -LocalPort 3306 检查端口，再核对 JDBC URL。连接超时统一为 10 秒。"}
+{"sourceId":"MANAGED_DOCUMENT:2","title":"Spring Boot 端口冲突处理","content":"出现 Port 8080 was already in use 时，使用 Get-NetTCPConnection -LocalPort 8080 查找进程。开发环境优先修改 server.port，禁止直接终止未知进程。"}
+{"sourceId":"MANAGED_DOCUMENT:3","title":"Redis 认证配置","content":"Redis 返回 NOAUTH Authentication required 时，检查 SUPPORT_AGENT_REDIS_PASSWORD 是否与服务端一致。密码变更后重启应用以重建连接。"}
+{"sourceId":"MANAGED_DOCUMENT:4","title":"Elasticsearch ICU 插件","content":"support_icu 依赖 analysis-icu 插件。插件版本必须与 Elasticsearch 9.5.2 完全一致，安装后重启节点并检查 readiness。"}
+{"sourceId":"MANAGED_DOCUMENT:5","title":"Flyway 校验失败处理","content":"出现 Validate failed: Migrations have failed validation 时禁止直接修改已执行迁移。先确认差异来源；只有确认数据库历史表需要修复时才评审后执行 repair。"}
+{"sourceId":"MANAGED_DOCUMENT:6","title":"Maven 使用 Java 21","content":"release version 21 not supported 表示 Maven 实际使用了旧 JDK。PowerShell 执行 java -version 和 mvn -version，确保两者均指向 Java 21。"}
+{"sourceId":"MANAGED_DOCUMENT:7","title":"Docker MySQL 端口映射","content":"容器健康但宿主机无法访问 3306 时，检查 compose.yml 是否绑定 127.0.0.1:3306:3306，并用 docker compose ps 查看端口。"}
+{"sourceId":"MANAGED_DOCUMENT:8","title":"DashScope 鉴权排查","content":"InvalidApiKey 表示调用使用的 DASHSCOPE_API_KEY 无效或未注入目标进程。IDEA Run Configuration 的变量只在启动的应用进程中生效。"}
+{"sourceId":"MANAGED_DOCUMENT:9","title":"SSE 连接稳定性","content":"SSE 连接过早中断时检查反向代理读取超时、服务端心跳和客户端取消。生成期间持续发送心跳，但未校验答案不得发送 answer.delta。"}
+{"sourceId":"MANAGED_DOCUMENT:10","title":"工单乐观锁冲突","content":"TICKET_VERSION_CONFLICT 表示客户端版本已过期。重新查询工单取得最新 version，确认内容后使用新的幂等键再次提交。"}
+{"sourceId":"RESOLVED_CASE:1","title":"MySQL 个案处理","content":"某次 Connection refused 通过把连接超时改为 30 秒后恢复。该个案参数不得覆盖托管文档规定的 10 秒标准。"}
+{"sourceId":"RESOLVED_CASE:2","title":"端口占用个案","content":"某次 Port 8080 冲突通过强制终止占用进程解决。托管文档要求优先修改端口并确认进程身份。"}
+{"sourceId":"RESOLVED_CASE:3","title":"Redis 密码个案","content":"某次 NOAUTH 通过清空客户端密码解决，但托管文档要求密码必须与服务端配置一致。"}
+{"sourceId":"RESOLVED_CASE:4","title":"ICU 插件个案","content":"某次在 Elasticsearch 9.5.2 上安装旧版 ICU 后暂时启动，托管文档要求插件版本严格一致。"}
+{"sourceId":"RESOLVED_CASE:5","title":"Flyway repair 个案","content":"某次 Validate failed 后直接执行 repair 恢复启动，托管文档要求先核实差异并评审。"}

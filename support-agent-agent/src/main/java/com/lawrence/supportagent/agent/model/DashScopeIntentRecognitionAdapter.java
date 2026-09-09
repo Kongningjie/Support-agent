@@ -26,7 +26,8 @@ public class DashScopeIntentRecognitionAdapter implements IntentRecognitionPort 
     /** 使用与回答适配器隔离的模型实例和显式 Base URL。 */
     public DashScopeIntentRecognitionAdapter(String apiKey, String modelName, String baseUrl) {
         this.model = DashScopeChatModel.builder().apiKey(apiKey).modelName(modelName)
-                .baseUrl(baseUrl).stream(false).enableThinking(false).build();
+                .baseUrl(AgentScopeDashScopeBaseUrl.normalize(baseUrl))
+                .stream(false).enableThinking(false).build();
     }
 
     /** {@inheritDoc} */

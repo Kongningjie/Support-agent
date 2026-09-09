@@ -17,11 +17,12 @@ public record SupportAgentProperties(String operatorId, DashScope dashscope,
      *
      * @param apiKey DashScope API 密钥；不得写入仓库或日志
      * @param baseUrl DashScope 原生 API 根地址
-     * @param chatModel 对话与意图模型名称
+     * @param chatModel 对话与结构化生成模型名称
+     * @param intentModel 独立意图识别模型名称
      * @param embeddingModel 文档与查询向量模型名称
      * @param rerankModel 候选重排模型名称
      */
-    public record DashScope(String apiKey, String baseUrl, String chatModel,
+    public record DashScope(String apiKey, String baseUrl, String chatModel, String intentModel,
                             String embeddingModel, String rerankModel) { }
 
     /**

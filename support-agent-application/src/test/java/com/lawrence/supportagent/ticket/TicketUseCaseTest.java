@@ -5,8 +5,11 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.times;
 
 import com.lawrence.supportagent.idempotency.IdempotencyCommand;
+import com.lawrence.supportagent.asynctask.AsyncTaskCreator;
 import com.lawrence.supportagent.idempotency.IdempotentExecutor;
 import com.lawrence.supportagent.idempotency.IdempotentResource;
 import com.lawrence.supportagent.sharedkernel.OperatorId;
@@ -30,6 +33,7 @@ class TicketUseCaseTest {
     private TicketCommandUseCase commands;
     private TicketQueryUseCase queries;
     private AtomicReference<Ticket> stored;
+    private AsyncTaskCreator taskCreator;
 
     /** 为每个测试创建可观察的内存仓储行为和幂等执行器。 */
     @BeforeEach
@@ -52,8 +56,9 @@ class TicketUseCaseTest {
         when(repository.findByTicketNo("T000000000001"))
                 .thenAnswer(invocation -> Optional.ofNullable(stored.get()));
         queries = new TicketQueryUseCase(repository);
+        taskCreator = mock(AsyncTaskCreator.class);
         commands = new TicketCommandUseCase(repository, queries, new MemoryIdempotentExecutor(),
-                () -> new OperatorId("dev-operator"), () -> NOW);
+                () -> new OperatorId("dev-operator"), () -> NOW, taskCreator);
     }
 
     /** 验证草稿编号格式及同 Key 同请求复用首次工单。 */
@@ -75,6 +80,26 @@ class TicketUseCaseTest {
         ApplicationException exception = assertThrows(ApplicationException.class,
                 () -> commands.createDraft("另一个问题", "无法连接数据库", null, "create-1"));
         assertEquals(ErrorCode.COMMON_IDEMPOTENCY_KEY_REUSED, exception.errorCode());
+    }
+
+    /** 验证解决工单时保存人工结论并以解决后版本创建案例任务。 */
+    @Test
+    void shouldResolveOpenTicketAndCreateCaseTask() {
+        TicketDetails draft = commands.createDraft("启动失败", "无法连接数据库", null, "create-1");
+        TicketDetails open = commands.submit(draft.ticketNo(), draft.version(), "submit-1");
+
+        TicketDetails resolved = commands.resolve(open.ticketNo(), "端口配置错误",
+                "修正端口并重启", open.version(), "resolve-1");
+        TicketDetails replayed = commands.resolve(open.ticketNo(), "端口配置错误",
+                "修正端口并重启", open.version(), "resolve-1");
+
+        assertEquals(TicketStatus.RESOLVED, resolved.status());
+        assertEquals(resolved, replayed);
+        assertEquals("端口配置错误", resolved.rootCause());
+        assertEquals("修正端口并重启", resolved.solution());
+        verify(taskCreator, times(1)).create(com.lawrence.supportagent.asynctask.AsyncTaskType.CASE_GENERATION,
+                com.lawrence.supportagent.asynctask.AggregateType.TICKET, 1,
+                resolved.version(), "case-generation:1:" + resolved.version(), "dev-operator");
     }
 
     /** 验证草稿修改、提交、关闭及版本冲突使用稳定业务错误。 */

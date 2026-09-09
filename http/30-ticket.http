@@ -48,7 +48,22 @@ Content-Type: application/json
 GET {{baseUrl}}/tickets?status=OPEN&keyword=MySQL&page=1&size=20
 Accept: application/json
 
+### 使用人工确认的根因和有效方案解决开放工单，并创建 CASE_GENERATION 任务
+# @name resolveTicket
+POST {{baseUrl}}/tickets/{{ticketNo}}/resolve
+Content-Type: application/json
+
+{
+  "rootCause": "JDBC 地址使用了错误的 MySQL 宿主机端口",
+  "solution": "把 JDBC 地址修正为 localhost:3306 后重新启动，连接恢复正常",
+  "version": {{ticketVersion}},
+  "idempotencyKey": "ticket-resolve-local-001"
+}
+
+> {% client.global.set("ticketVersion", response.body.data.version); %}
+
 ### 关闭开放工单
+# 该请求与上面的解决请求互斥；请重新创建一张 OPEN 工单后验证关闭分支。
 POST {{baseUrl}}/tickets/{{ticketNo}}/close
 Content-Type: application/json
 

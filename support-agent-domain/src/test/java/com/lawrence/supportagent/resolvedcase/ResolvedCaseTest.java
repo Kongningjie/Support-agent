@@ -50,6 +50,19 @@ class ResolvedCaseTest {
                 () -> publishing.archive("归档", "reviewer", NOW));
     }
 
+    /** 验证人工可修改草稿事实，但拒绝后不能再修改或恢复。 */
+    @Test
+    void shouldAllowHumanRevisionOnlyBeforeTerminalReview() {
+        ResolvedCase revised = draft().revise("人工标题", "人工问题", "人工根因",
+                "人工方案", "new-hash", "reviewer", NOW.plusSeconds(1));
+        ResolvedCase rejected = revised.reject("不沉淀", "reviewer", NOW.plusSeconds(2));
+
+        assertEquals("人工根因", revised.cause());
+        assertEquals("人工方案", revised.solution());
+        assertThrows(IllegalStateException.class, () -> rejected.revise("标题", "问题",
+                "根因", "方案", "hash", "reviewer", NOW.plusSeconds(3)));
+    }
+
     /** 验证案例来源主键和核心事实字段必须有效。 */
     @Test
     void shouldRejectMissingRequiredFacts() {

@@ -1,0 +1,26 @@
+@baseUrl = http://localhost:8080/api/v1
+
+### 启动完整混合检索加重排序评测；仅 dev/test Profile 注册
+# @name startEvaluation
+POST {{baseUrl}}/retrieval-evaluations
+Content-Type: application/json
+
+{
+  "mode": "HYBRID_RERANK",
+  "caseIds": []
+}
+
+> {% client.global.set("evaluationRunId", response.body.data.evaluationRunId); %}
+
+### 查询进度、五项指标和失败用例；结果仅保存在当前进程内存
+GET {{baseUrl}}/retrieval-evaluations/{{evaluationRunId}}
+Accept: application/json
+
+### 只运行精确词用例，便于局部排障
+POST {{baseUrl}}/retrieval-evaluations
+Content-Type: application/json
+
+{
+  "mode": "BM25_ONLY",
+  "caseIds": ["EXACT-001", "EXACT-002", "EXACT-003"]
+}

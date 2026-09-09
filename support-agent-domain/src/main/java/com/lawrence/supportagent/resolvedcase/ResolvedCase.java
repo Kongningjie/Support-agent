@@ -27,6 +27,28 @@ public record ResolvedCase(Long id, long sourceTicketId, String title, String pr
         DomainAssertions.version(version);
     }
 
+    /** 创建等待人工审核的案例草稿。 */
+    public static ResolvedCase draft(long sourceTicketId, String title, String problem,
+                                     String cause, String solution, String contentHash,
+                                     String operator, Instant now) {
+        return new ResolvedCase(null, sourceTicketId, title, problem, cause, solution,
+                ResolvedCaseStatus.DRAFT, contentHash, 0, null, null, null,
+                false, null, null, operator, now, operator, now,
+                null, null, null, null);
+    }
+
+    /** 由人工审核人修改草稿或发布失败案例的完整内容。 */
+    public ResolvedCase revise(String newTitle, String newProblem, String newCause,
+                               String newSolution, String newContentHash,
+                               String operator, Instant now) {
+        DomainAssertions.state(status == ResolvedCaseStatus.DRAFT
+                || status == ResolvedCaseStatus.PUBLISH_FAILED, "当前案例不能修改");
+        return new ResolvedCase(id, sourceTicketId, newTitle, newProblem, newCause,
+                newSolution, ResolvedCaseStatus.DRAFT, newContentHash, version + 1,
+                null, null, null, deleted, deletedBy, deletedAt, createdBy, createdAt,
+                operator, now, null, null, null, null);
+    }
+
     /** 开始把人工审核后的案例写入知识索引。 */
     public ResolvedCase startPublishing(String operator, Instant now) {
         DomainAssertions.state(status == ResolvedCaseStatus.DRAFT

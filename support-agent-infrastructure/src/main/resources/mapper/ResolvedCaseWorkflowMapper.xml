@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.lawrence.supportagent.persistence.mapper.ResolvedCaseWorkflowMapper">
+    <sql id="caseColumns">
+        c.id,c.source_ticket_id,c.title,c.problem,c.cause,c.solution,c.status,c.content_hash,c.version,
+        c.publish_failure_reason,c.rejection_reason,c.archive_reason,c.deleted,c.deleted_by,c.deleted_at,
+        c.created_by,c.created_at,c.updated_by,c.updated_at,c.published_by,c.published_at,c.archived_by,c.archived_at
+    </sql>
+
+    <select id="findBySourceTicketId" resultType="com.lawrence.supportagent.persistence.record.ResolvedCaseDO">
+        SELECT <include refid="caseColumns"/> FROM resolved_case c
+        WHERE c.source_ticket_id=#{sourceTicketId}
+    </select>
+
+    <select id="findPage" resultType="com.lawrence.supportagent.persistence.record.ResolvedCaseDO">
+        SELECT <include refid="caseColumns"/> FROM resolved_case c
+        JOIN ticket t ON t.id=c.source_ticket_id
+        <where>
+            c.deleted=FALSE
+            <if test="status != null">AND c.status=#{status}</if>
+            <if test="sourceTicketNo != null">AND t.ticket_no=#{sourceTicketNo}</if>
+            <if test="keyword != null">
+                AND (c.title LIKE CONCAT('%',#{keyword},'%')
+                  OR c.problem LIKE CONCAT('%',#{keyword},'%'))
+            </if>
+        </where>
+        ORDER BY c.created_at DESC,c.id DESC LIMIT #{size} OFFSET #{offset}
+    </select>
+
+    <select id="count" resultType="long">
+        SELECT COUNT(*) FROM resolved_case c JOIN ticket t ON t.id=c.source_ticket_id
+        <where>
+            c.deleted=FALSE
+            <if test="status != null">AND c.status=#{status}</if>
+            <if test="sourceTicketNo != null">AND t.ticket_no=#{sourceTicketNo}</if>
+            <if test="keyword != null">
+                AND (c.title LIKE CONCAT('%',#{keyword},'%')
+                  OR c.problem LIKE CONCAT('%',#{keyword},'%'))
+            </if>
+        </where>
+    </select>
+</mapper>

@@ -7,6 +7,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.lawrence.supportagent.asynctask.AggregateType;
 import com.lawrence.supportagent.asynctask.AsyncTask;
+import com.lawrence.supportagent.asynctask.AsyncTaskCreator;
 import com.lawrence.supportagent.asynctask.AsyncTaskStatus;
 import com.lawrence.supportagent.asynctask.AsyncTaskType;
 import com.lawrence.supportagent.asynctask.port.AsyncTaskRepository;
@@ -154,6 +155,13 @@ class FoundationRepositoryIT {
 
         assertNotNull(inserted.id());
         assertEquals(inserted, caseRepository.findById(inserted.id()).orElseThrow());
+        assertEquals(inserted, caseRepository.findBySourceTicketId(source.id()).orElseThrow());
+        assertTrue(caseRepository.findPage(ResolvedCaseStatus.DRAFT, null, "案例", 0, 20)
+                .contains(inserted));
+        assertThrows(RuntimeException.class, () -> caseRepository.save(ResolvedCase.draft(
+                source.id(), "重复案例", "问题", "根因", "方案",
+                "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+                "tester", NOW)));
     }
 
     /** 验证异步任务的调度、租约和执行状态字段往返。 */
@@ -177,7 +185,7 @@ class FoundationRepositoryIT {
         TicketQueryUseCase queryUseCase = new TicketQueryUseCase(ticketRepository);
         TicketCommandUseCase commandUseCase = new TicketCommandUseCase(ticketRepository,
                 queryUseCase, idempotentExecutor, () -> new com.lawrence.supportagent.sharedkernel.OperatorId("tester"),
-                Instant::now);
+                Instant::now, new AsyncTaskCreator(taskRepository, Instant::now));
         String key = "integration-ticket-" + UUID.randomUUID();
 
         TicketDetails first = commandUseCase.createDraft("幂等工单", "相同请求只创建一次",
@@ -190,6 +198,62 @@ class FoundationRepositoryIT {
         assertEquals(first.ticketNo(), replayed.ticketNo());
         assertEquals(ErrorCode.COMMON_IDEMPOTENCY_KEY_REUSED, conflict.errorCode());
         assertEquals(1, ticketRepository.count(null, first.ticketNo()));
+    }
+
+    /** 验证解决工单和案例生成任务在同一幂等事务中持久化。 */
+    @Test
+    void shouldResolveTicketAndInsertCaseGenerationTaskAtomically() {
+        TicketQueryUseCase queryUseCase = new TicketQueryUseCase(ticketRepository);
+        TicketCommandUseCase commandUseCase = new TicketCommandUseCase(ticketRepository,
+                queryUseCase, idempotentExecutor,
+                () -> new com.lawrence.supportagent.sharedkernel.OperatorId("tester"),
+                Instant::now, new AsyncTaskCreator(taskRepository, Instant::now));
+        String suffix = UUID.randomUUID().toString();
+        TicketDetails draft = commandUseCase.createDraft("待解决工单", "连接失败", null,
+                "create-resolve-" + suffix);
+        TicketDetails open = commandUseCase.submit(draft.ticketNo(), draft.version(),
+                "submit-resolve-" + suffix);
+
+        TicketDetails resolved = commandUseCase.resolve(open.ticketNo(), "端口错误",
+                "修正端口", open.version(), "resolve-" + suffix);
+
+        assertEquals(com.lawrence.supportagent.ticket.TicketStatus.RESOLVED, resolved.status());
+        assertEquals(1, taskRepository.count(AsyncTaskType.CASE_GENERATION,
+                AsyncTaskStatus.PENDING, AggregateType.TICKET, null));
+    }
+
+    /** 验证案例任务插入失败时解决状态随同一业务事务回滚。 */
+    @Test
+    void shouldRollbackTicketResolutionWhenCaseTaskInsertFails() {
+        TicketQueryUseCase queryUseCase = new TicketQueryUseCase(ticketRepository);
+        AsyncTaskCreator failingCreator = new AsyncTaskCreator(taskRepository, Instant::now) {
+            /** 模拟数据库无法插入案例生成任务。 */
+            @Override
+            public AsyncTask create(AsyncTaskType taskType, AggregateType aggregateType,
+                                    long aggregateId, long aggregateVersion,
+                                    String internalIdempotencyKey, String createdBy) {
+                throw new IllegalStateException("模拟任务插入失败");
+            }
+        };
+        TicketCommandUseCase commandUseCase = new TicketCommandUseCase(ticketRepository,
+                queryUseCase, idempotentExecutor,
+                () -> new com.lawrence.supportagent.sharedkernel.OperatorId("tester"),
+                Instant::now, failingCreator);
+        String suffix = UUID.randomUUID().toString();
+        TicketDetails draft = commandUseCase.createDraft("事务回滚工单", "连接失败", null,
+                "create-rollback-" + suffix);
+        TicketDetails open = commandUseCase.submit(draft.ticketNo(), draft.version(),
+                "submit-rollback-" + suffix);
+        long tasksBefore = taskRepository.count(AsyncTaskType.CASE_GENERATION,
+                AsyncTaskStatus.PENDING, AggregateType.TICKET, null);
+
+        assertThrows(IllegalStateException.class, () -> commandUseCase.resolve(open.ticketNo(),
+                "端口错误", "修正端口", open.version(), "resolve-rollback-" + suffix));
+
+        assertEquals(com.lawrence.supportagent.ticket.TicketStatus.OPEN,
+                ticketRepository.findByTicketNo(open.ticketNo()).orElseThrow().status());
+        assertEquals(tasksBefore, taskRepository.count(AsyncTaskType.CASE_GENERATION,
+                AsyncTaskStatus.PENDING, AggregateType.TICKET, null));
     }
 
     /** 验证首次请求执行期间，并发相同请求快速返回执行中而不重复执行业务。 */

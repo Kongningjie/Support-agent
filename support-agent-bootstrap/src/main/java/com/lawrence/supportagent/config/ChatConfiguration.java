@@ -41,13 +41,15 @@ public class ChatConfiguration {
     @Bean public IntentRecognitionPort intentRecognitionPort(SupportAgentProperties properties) {
         var config = properties.dashscope();
         if (config.apiKey() == null || config.apiKey().isBlank()) return new UnavailableIntentRecognitionAdapter();
-        return new DashScopeIntentRecognitionAdapter(config.apiKey(), config.chatModel(), config.baseUrl());
+        return new DashScopeIntentRecognitionAdapter(config.apiKey(), config.intentModel(), config.baseUrl());
     }
     /** 创建内部流式 Chat 与受控工单 Agent 端口。 */
-    @Bean public ChatModelPort chatModelPort(SupportAgentProperties properties) {
+    @Bean public ChatModelPort chatModelPort(SupportAgentProperties properties,
+                                              ObjectMapper objectMapper) {
         var config = properties.dashscope();
         if (config.apiKey() == null || config.apiKey().isBlank()) return new UnavailableChatModelAdapter();
-        return new DashScopeChatModelAdapter(config.apiKey(), config.chatModel(), config.baseUrl());
+        return new DashScopeChatModelAdapter(config.apiKey(), config.chatModel(),
+                config.baseUrl(), objectMapper);
     }
     /** 创建独立 Rerank 模型端口。 */
     @Bean public RerankModelPort rerankModelPort(SupportAgentProperties properties) {

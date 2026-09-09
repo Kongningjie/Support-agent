@@ -41,10 +41,48 @@ class RetrievalServiceTest {
         }
     }
 
+    /** 验证高相关案例优先于低相关文档，避免来源类型覆盖检索分数。 */
+    @Test
+    void shouldRankByRelevanceBeforeSourceType() {
+        RetrievalEvidence resolvedCase = evidence("case", "RESOLVED_CASE", 2);
+        RetrievalEvidence managedDocument = evidence("document", "MANAGED_DOCUMENT", 1);
+        KnowledgeSearchPort search = search(List.of(resolvedCase, managedDocument),
+                List.of(resolvedCase, managedDocument));
+        try (RetrievalService service = new RetrievalService(search, sources -> Set.copyOf(sources),
+                embedding(), (query, documents) -> List.of(), 0.20, 200, 0.50)) {
+            RetrievalRanking ranking = service.rank("连接失败", RetrievalMode.HYBRID);
+
+            assertThat(ranking.candidates()).extracting(RetrievalEvidence::chunkId)
+                    .containsExactly("case", "document");
+        }
+    }
+
+    /** 验证融合分数相同时优先人工维护的托管文档。 */
+    @Test
+    void shouldPreferManagedDocumentWhenScoresTie() {
+        RetrievalEvidence resolvedCase = evidence("case", "RESOLVED_CASE", 2);
+        RetrievalEvidence managedDocument = evidence("document", "MANAGED_DOCUMENT", 1);
+        KnowledgeSearchPort search = search(List.of(managedDocument, resolvedCase),
+                List.of(resolvedCase, managedDocument));
+        try (RetrievalService service = new RetrievalService(search, sources -> Set.copyOf(sources),
+                embedding(), (query, documents) -> List.of(), 0.20, 200, 0.50)) {
+            RetrievalRanking ranking = service.rank("连接失败", RetrievalMode.HYBRID);
+
+            assertThat(ranking.candidates()).extracting(RetrievalEvidence::chunkId)
+                    .containsExactly("document", "case");
+        }
+    }
+
     /** 创建无阶段分数的原始检索候选。 */
     private RetrievalEvidence evidence(String id, Set<String> matches) {
         return new RetrievalEvidence(id, "MANAGED_DOCUMENT", 1, 2, "标题", "章节",
                 "连接失败排查", List.of(), matches, null, null, 0, null);
+    }
+
+    /** 创建指定来源类型的原始检索候选。 */
+    private RetrievalEvidence evidence(String id, String sourceType, long sourceId) {
+        return new RetrievalEvidence(id, sourceType, sourceId, 2, "标题", "章节",
+                "连接失败排查", List.of(), Set.of(), null, null, 0, null);
     }
     /** 创建返回固定候选的搜索端口。 */
     private KnowledgeSearchPort search(List<RetrievalEvidence> bm25, List<RetrievalEvidence> vector) {

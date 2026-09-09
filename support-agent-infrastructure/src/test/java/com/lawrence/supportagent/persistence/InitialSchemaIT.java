@@ -31,8 +31,9 @@ class InitialSchemaIT {
             long commented = count(statement, "SELECT COUNT(*) FROM information_schema.columns WHERE table_schema='support_agent' AND table_name IN ('ticket','managed_document','resolved_case','async_task','idempotency_record','agent_run','retrieval_trace') AND column_comment <> ''");
             assertEquals(132, columns);
             assertEquals(columns, commented);
-            assertEquals(26, count(statement, "SELECT COUNT(DISTINCT table_name, index_name) FROM information_schema.statistics WHERE table_schema='support_agent' AND table_name IN ('ticket','managed_document','resolved_case','async_task','idempotency_record','agent_run','retrieval_trace')"));
-            assertEquals(15, count(statement, "SELECT COUNT(*) FROM information_schema.table_constraints WHERE table_schema='support_agent' AND table_name IN ('ticket','managed_document','resolved_case','async_task','idempotency_record','agent_run','retrieval_trace')"));
+            assertEquals(27, count(statement, "SELECT COUNT(DISTINCT table_name, index_name) FROM information_schema.statistics WHERE table_schema='support_agent' AND table_name IN ('ticket','managed_document','resolved_case','async_task','idempotency_record','agent_run','retrieval_trace')"));
+            assertEquals(16, count(statement, "SELECT COUNT(*) FROM information_schema.table_constraints WHERE table_schema='support_agent' AND table_name IN ('ticket','managed_document','resolved_case','async_task','idempotency_record','agent_run','retrieval_trace')"));
+            assertEquals(1, count(statement, "SELECT COUNT(*) FROM information_schema.table_constraints WHERE table_schema='support_agent' AND table_name='resolved_case' AND constraint_name='uk_resolved_case_source_ticket' AND constraint_type='UNIQUE'"));
             assertEquals(1, count(statement, "SELECT COUNT(*) FROM information_schema.columns WHERE table_schema='support_agent' AND table_name='managed_document' AND column_name='active_content_hash' AND extra LIKE '%STORED GENERATED%'"));
             assertTrue(count(statement, "SELECT COUNT(*) FROM information_schema.table_constraints WHERE table_schema='support_agent' AND constraint_type='FOREIGN KEY'") >= 2);
         }
