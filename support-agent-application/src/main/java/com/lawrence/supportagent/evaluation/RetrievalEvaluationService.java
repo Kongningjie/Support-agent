@@ -1,11 +1,9 @@
 package com.lawrence.supportagent.evaluation;
 
-import com.lawrence.supportagent.retrieval.BranchStatus;
 import com.lawrence.supportagent.retrieval.RetrievalEvidence;
 import com.lawrence.supportagent.retrieval.RetrievalMode;
 import com.lawrence.supportagent.retrieval.RetrievalRanking;
 import com.lawrence.supportagent.retrieval.RetrievalService;
-import com.lawrence.supportagent.retrieval.RetrievalStatus;
 import com.lawrence.supportagent.sharedkernel.error.ApplicationException;
 import com.lawrence.supportagent.sharedkernel.error.ErrorCode;
 import com.lawrence.supportagent.sharedkernel.port.TimeProvider;
@@ -39,7 +37,7 @@ public class RetrievalEvaluationService implements AutoCloseable {
                                       RetrievalMetricsCalculator metrics,
                                       UuidGenerator ids, TimeProvider time) {
         this(dataset, reports, retrieval, metrics, ids, time, snapshot ->
-                new RetrievalEvaluationContext("1.0", snapshot.kind(), snapshot.version(),
+                new RetrievalEvaluationContext("1.1", snapshot.kind(), snapshot.version(),
                         snapshot.contentSha256(), "unknown", java.util.Map.of(),
                         java.util.Map.of()));
     }
@@ -75,7 +73,7 @@ public class RetrievalEvaluationService implements AutoCloseable {
         UUID runId = ids.generate();
         RetrievalEvaluationContext context = runtimeMetadata.create(snapshot);
         RetrievalEvaluationRun pending = new RetrievalEvaluationRun(runId, mode,
-                RetrievalEvaluationRun.Status.PENDING, 0, selected.size(), null, List.of(),
+                RetrievalEvaluationRun.Status.PENDING, 0, selected.size(), null, null, List.of(),
                 null, time.now(), null, context, LatencySummary.from(List.of()));
         runs.put(runId, pending);
         executor.submit(() -> execute(runId, mode, selected, snapshot));
@@ -96,24 +94,26 @@ public class RetrievalEvaluationService implements AutoCloseable {
                          RetrievalEvaluationDatasetSnapshot snapshot) {
         List<RetrievalEvaluationCaseResult> results = new ArrayList<>();
         update(runId, mode, RetrievalEvaluationRun.Status.RUNNING, 0, cases.size(),
-                null, results, null, null);
+                null, null, results, null, null);
         try {
             for (RetrievalEvaluationCase testCase : cases) {
                 long started = System.nanoTime();
                 RetrievalRanking ranking = retrieval.rank(testCase.query(), mode);
                 results.add(evaluate(testCase, ranking, elapsed(started), snapshot));
                 update(runId, mode, RetrievalEvaluationRun.Status.RUNNING, results.size(),
-                        cases.size(), null, results, null, null);
+                        cases.size(), null, null, results, null, null);
             }
             RetrievalEvaluationMetrics calculated = metrics.calculate(cases, results);
+            RetrievalEvaluationDiagnostics diagnostics =
+                    RetrievalEvaluationDiagnostics.calculate(cases, results);
             RetrievalEvaluationRun complete = update(runId, mode,
                     RetrievalEvaluationRun.Status.SUCCEEDED, results.size(), cases.size(),
-                    calculated, results, null, time.now());
+                    calculated, diagnostics, results, null, time.now());
             reports.write(complete);
         } catch (RuntimeException exception) {
             String safe = "检索评测执行失败，请检查模型和检索依赖";
             update(runId, mode, RetrievalEvaluationRun.Status.FAILED, results.size(),
-                    cases.size(), null, results, safe, time.now());
+                    cases.size(), null, null, results, safe, time.now());
         }
     }
 
@@ -121,25 +121,15 @@ public class RetrievalEvaluationService implements AutoCloseable {
     private RetrievalEvaluationCaseResult evaluate(RetrievalEvaluationCase testCase,
                                                     RetrievalRanking ranking, long durationMs,
                                                     RetrievalEvaluationDatasetSnapshot snapshot) {
-        RetrievalStatus status = actualStatus(ranking);
         Set<String> sources = new LinkedHashSet<>();
         ranking.candidates().forEach(value -> sources.add(sourceKey(value, snapshot)));
         boolean exact = requiredTermsPresent(testCase.requiredExactTerms(), ranking.candidates());
+        Double highestScore = ranking.candidates().stream()
+                .map(RetrievalEvidence::rerankScore).filter(java.util.Objects::nonNull)
+                .max(Double::compareTo).orElse(null);
         return new RetrievalEvaluationCaseResult(testCase.caseId(), testCase.expectedStatus(),
-                status, List.copyOf(sources), exact, null, durationMs);
-    }
-
-    /** 根据当前评测模式的必要分支状态推导三态结果。 */
-    private RetrievalStatus actualStatus(RetrievalRanking ranking) {
-        boolean failed = switch (ranking.mode()) {
-            case BM25_ONLY -> ranking.bm25Status() == BranchStatus.FAILED;
-            case VECTOR_ONLY -> ranking.vectorStatus() == BranchStatus.FAILED;
-            case HYBRID, HYBRID_RERANK -> ranking.bm25Status() == BranchStatus.FAILED
-                    && ranking.vectorStatus() == BranchStatus.FAILED;
-        };
-        if (failed) return RetrievalStatus.RETRIEVAL_FAILED;
-        return ranking.candidates().isEmpty() ? RetrievalStatus.NO_RELIABLE_KNOWLEDGE
-                : RetrievalStatus.GROUNDED;
+                ranking.status(), List.copyOf(sources), exact, highestScore,
+                ranking.reliableEvidence().size(), ranking.decisionReason(), null, durationMs);
     }
 
     /** 判断前五候选是否覆盖用例要求的全部精确技术词。 */
@@ -176,11 +166,12 @@ public class RetrievalEvaluationService implements AutoCloseable {
                                           RetrievalEvaluationRun.Status status,
                                           int completed, int total,
                                           RetrievalEvaluationMetrics metric,
+                                          RetrievalEvaluationDiagnostics diagnostics,
                                           List<RetrievalEvaluationCaseResult> results,
                                           String failure, java.time.Instant finishedAt) {
         RetrievalEvaluationRun original = runs.get(runId);
         RetrievalEvaluationRun value = new RetrievalEvaluationRun(runId, mode, status,
-                completed, total, metric, List.copyOf(results), failure,
+                completed, total, metric, diagnostics, List.copyOf(results), failure,
                 original.startedAt(), finishedAt, original.context(), LatencySummary.from(
                 results.stream().map(RetrievalEvaluationCaseResult::retrievalDurationMs).toList()));
         runs.put(runId, value);

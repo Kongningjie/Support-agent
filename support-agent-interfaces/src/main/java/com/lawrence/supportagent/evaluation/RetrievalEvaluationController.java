@@ -76,6 +76,7 @@ public class RetrievalEvaluationController {
      *
      * @param evaluationRunId 运行 UUID @param mode 检索模式 @param status 运行状态
      * @param completedCases 已完成数 @param totalCases 总数 @param metrics 完成后的五项指标
+     * @param diagnostics 完成后的可靠性门槛诊断
      * @param results 逐条结果 @param failureMessage 失败摘要 @param startedAt 开始时间
      * @param finishedAt 结束时间 @param context 数据、提交、模型与参数复现上下文
      * @param retrievalLatency 检索耗时样本数量、平均值、P95 和最大值
@@ -89,6 +90,9 @@ public class RetrievalEvaluationController {
             @Schema(description = "本次需要执行的用例总数") int totalCases,
             @Schema(description = "成功完成后生成的五项 0～1 指标", nullable = true)
             MetricsResponse metrics,
+            @Schema(description = "成功完成后生成的可靠性门槛混淆计数和分类分数范围",
+                    nullable = true)
+            DiagnosticsResponse diagnostics,
             @Schema(description = "保持固定数据集顺序的逐条评测结果")
             List<CaseResultResponse> results,
             @Schema(description = "评测失败的脱敏摘要", nullable = true) String failureMessage,
@@ -102,9 +106,63 @@ public class RetrievalEvaluationController {
         public static RunResponse from(RetrievalEvaluationRun value) {
             return new RunResponse(value.evaluationRunId(), value.mode(), value.status(),
                     value.completedCases(), value.totalCases(), MetricsResponse.from(value.metrics()),
+                    DiagnosticsResponse.from(value.diagnostics()),
                     value.results().stream().map(CaseResultResponse::from).toList(),
                     value.failureMessage(), value.startedAt(), value.finishedAt(), value.context(),
                     value.retrievalLatency());
+        }
+    }
+
+    /**
+     * 可靠性门槛诊断响应。
+     *
+     * @param expectedGroundedCount 人工预期有知识的用例数
+     * @param correctGroundedCount 有知识且被正确接受的用例数
+     * @param falseNoHitCount 有知识但被错误拒绝的用例数
+     * @param expectedNoHitCount 人工预期无知识的用例数
+     * @param correctNoHitCount 无知识且被正确拒绝的用例数
+     * @param falseGroundedCount 无知识但被错误接受的用例数
+     * @param technicalFailureCount 实际发生检索技术故障的用例数
+     * @param highestRerankScoreByCategory 各问题分类的候选最高分范围
+     */
+    public record DiagnosticsResponse(
+            @Schema(description = "人工预期为有可靠知识的用例数量") int expectedGroundedCount,
+            @Schema(description = "有知识且被可靠性规则正确接受的用例数量") int correctGroundedCount,
+            @Schema(description = "有知识但被错误拒绝为无知识的用例数量") int falseNoHitCount,
+            @Schema(description = "人工预期为无可靠知识的用例数量") int expectedNoHitCount,
+            @Schema(description = "无知识且被可靠性规则正确拒绝的用例数量") int correctNoHitCount,
+            @Schema(description = "无知识但被错误接受为有知识的用例数量") int falseGroundedCount,
+            @Schema(description = "实际判定为检索技术故障的用例数量") int technicalFailureCount,
+            @Schema(description = "按 DIRECT、NOISY 等冻结分类汇总的候选最高分范围")
+            java.util.Map<String, ScoreRangeResponse> highestRerankScoreByCategory) {
+        /** 从应用层诊断创建接口响应；运行未完成时保持为空。 */
+        public static DiagnosticsResponse from(RetrievalEvaluationDiagnostics value) {
+            if (value == null) return null;
+            java.util.Map<String, ScoreRangeResponse> ranges = new java.util.LinkedHashMap<>();
+            value.highestRerankScoreByCategory().forEach((category, range) ->
+                    ranges.put(category, ScoreRangeResponse.from(range)));
+            return new DiagnosticsResponse(value.expectedGroundedCount(),
+                    value.correctGroundedCount(), value.falseNoHitCount(),
+                    value.expectedNoHitCount(), value.correctNoHitCount(),
+                    value.falseGroundedCount(), value.technicalFailureCount(),
+                    java.util.Map.copyOf(ranges));
+        }
+    }
+
+    /**
+     * 单个问题分类的候选最高分范围。
+     *
+     * @param sampleCount 具有有效 Rerank 分数的样本数量
+     * @param minimum 分类内最低的候选最高分
+     * @param maximum 分类内最高的候选最高分
+     */
+    public record ScoreRangeResponse(
+            @Schema(description = "具有有效 Rerank 分数的样本数量") int sampleCount,
+            @Schema(description = "分类内最低的候选最高分") double minimum,
+            @Schema(description = "分类内最高的候选最高分") double maximum) {
+        /** 从应用层分数范围创建接口响应。 */
+        public static ScoreRangeResponse from(RetrievalEvaluationScoreRange value) {
+            return new ScoreRangeResponse(value.sampleCount(), value.minimum(), value.maximum());
         }
     }
 
@@ -133,6 +191,9 @@ public class RetrievalEvaluationController {
      *
      * @param caseId 固定用例 ID @param expectedStatus 人工预期状态 @param actualStatus 实际状态
      * @param rankedSourceKeys 去重后的有序稳定来源键 @param exactTermsSatisfied 是否覆盖全部要求术语
+     * @param highestRerankScore 原始候选中的最高 Rerank 分数
+     * @param reliableEvidenceCount 通过可靠性规则的最终证据数量
+     * @param decisionReason 接受、拒绝或失败的稳定原因
      * @param failureMessage 单条失败摘要 @param retrievalDurationMs 单条检索耗时毫秒
      */
     public record CaseResultResponse(
@@ -141,14 +202,22 @@ public class RetrievalEvaluationController {
             @Schema(description = "检索实际产生的三态结果") com.lawrence.supportagent.retrieval.RetrievalStatus actualStatus,
             @Schema(description = "前十候选按首次出现去重后的稳定 sourceKey") List<String> rankedSourceKeys,
             @Schema(description = "前五候选是否覆盖要求的全部精确技术词") boolean exactTermsSatisfied,
+            @Schema(description = "原始候选中的最高 Rerank 分数；未执行或降级时为空",
+                    nullable = true) Double highestRerankScore,
+            @Schema(description = "应用生产可靠性规则后保留的证据数量")
+            int reliableEvidenceCount,
+            @Schema(description = "RETRIEVAL_BRANCH_FAILED、NO_CANDIDATE、BELOW_GROUNDED_THRESHOLD、"
+                    + "INSUFFICIENT_DEGRADED_SIGNAL 或 RELIABLE_EVIDENCE_PRESENT")
+            com.lawrence.supportagent.retrieval.RetrievalDecisionReason decisionReason,
             @Schema(description = "单条执行失败的脱敏摘要", nullable = true) String failureMessage,
             @Schema(description = "单条检索端到端耗时，单位毫秒", example = "125")
             long retrievalDurationMs) {
         /** 从应用单条结果创建接口响应。 */
         public static CaseResultResponse from(RetrievalEvaluationCaseResult value) {
             return new CaseResultResponse(value.caseId(), value.expectedStatus(), value.actualStatus(),
-                    value.rankedSourceKeys(), value.exactTermsSatisfied(), value.failureMessage(),
-                    value.retrievalDurationMs());
+                    value.rankedSourceKeys(), value.exactTermsSatisfied(),
+                    value.highestRerankScore(), value.reliableEvidenceCount(),
+                    value.decisionReason(), value.failureMessage(), value.retrievalDurationMs());
         }
     }
 }

@@ -7,6 +7,7 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
 import com.lawrence.supportagent.retrieval.BranchStatus;
+import com.lawrence.supportagent.retrieval.RetrievalDecisionReason;
 import com.lawrence.supportagent.retrieval.RetrievalEvidence;
 import com.lawrence.supportagent.retrieval.RetrievalMode;
 import com.lawrence.supportagent.retrieval.RetrievalRanking;
@@ -32,7 +33,8 @@ class RetrievalEvaluationServiceTest {
         when(retrieval.rank(anyString(), any())).thenAnswer(invocation -> {
             String query = invocation.getArgument(0);
             RetrievalMode mode = invocation.getArgument(1);
-            return ranking(mode, query.equals("未知问题") ? List.of() : List.of(evidence()));
+            return query.equals("未知问题") ? rejectedRanking(mode, evidence())
+                    : ranking(mode, List.of(evidence()));
         });
         List<RetrievalEvaluationCase> cases = List.of(
                 new RetrievalEvaluationCase("KNOWN-001", "已知问题",
@@ -57,6 +59,8 @@ class RetrievalEvaluationServiceTest {
                 assertThat(report.status()).isEqualTo(RetrievalEvaluationRun.Status.SUCCEEDED);
                 assertThat(report.metrics()).isEqualTo(
                         new RetrievalEvaluationMetrics(1, 1, 1, 1, 1));
+                assertThat(report.diagnostics().falseGroundedCount()).isZero();
+                assertThat(report.diagnostics().falseNoHitCount()).isZero();
             }
         }
     }
@@ -69,7 +73,27 @@ class RetrievalEvaluationServiceTest {
                 ? BranchStatus.SKIPPED : BranchStatus.SUCCEEDED;
         BranchStatus rerank = mode == RetrievalMode.HYBRID_RERANK
                 ? BranchStatus.SUCCEEDED : BranchStatus.SKIPPED;
-        return new RetrievalRanking(mode, candidates, bm25, vector, rerank);
+        RetrievalStatus status = candidates.isEmpty()
+                ? RetrievalStatus.NO_RELIABLE_KNOWLEDGE : RetrievalStatus.GROUNDED;
+        RetrievalDecisionReason reason = candidates.isEmpty()
+                ? RetrievalDecisionReason.NO_CANDIDATE
+                : RetrievalDecisionReason.RELIABLE_EVIDENCE_PRESENT;
+        return new RetrievalRanking(mode, candidates, candidates, status, reason,
+                bm25, vector, rerank);
+    }
+
+    /** 创建保留原始候选但被可靠性规则拒绝的排名结果。 */
+    private RetrievalRanking rejectedRanking(RetrievalMode mode, RetrievalEvidence candidate) {
+        BranchStatus bm25 = mode == RetrievalMode.VECTOR_ONLY
+                ? BranchStatus.SKIPPED : BranchStatus.SUCCEEDED;
+        BranchStatus vector = mode == RetrievalMode.BM25_ONLY
+                ? BranchStatus.SKIPPED : BranchStatus.SUCCEEDED;
+        BranchStatus rerank = mode == RetrievalMode.HYBRID_RERANK
+                ? BranchStatus.SUCCEEDED : BranchStatus.SKIPPED;
+        return new RetrievalRanking(mode, List.of(candidate), List.of(),
+                RetrievalStatus.NO_RELIABLE_KNOWLEDGE,
+                RetrievalDecisionReason.BELOW_GROUNDED_THRESHOLD,
+                bm25, vector, rerank);
     }
 
     /** 创建同时命中相关来源和精确词的固定候选。 */

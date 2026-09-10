@@ -9,7 +9,7 @@
 {"sourceId":"MANAGED_DOCUMENT:9","title":"SSE 连接稳定性","content":"SSE 连接过早中断时检查反向代理读取超时、服务端心跳和客户端取消。生成期间持续发送心跳，但未校验答案不得发送 answer.delta。","sourceKey":"DOC-sse-stability-standard"}
 {"sourceId":"MANAGED_DOCUMENT:10","title":"工单乐观锁冲突","content":"TICKET_VERSION_CONFLICT 表示客户端版本已过期。重新查询工单取得最新 version，确认内容后使用新的幂等键再次提交。","sourceKey":"DOC-ticket-optimistic-lock-standard"}
 {"sourceId":"RESOLVED_CASE:1","title":"MySQL 个案处理","content":"某次 Connection refused 通过把连接超时改为 30 秒后恢复。该个案参数不得覆盖托管文档规定的 10 秒标准。","sourceKey":"CASE-mysql-connection-case"}
-{"sourceId":"RESOLVED_CASE:2","title":"端口占用个案","content":"某次 Port 8080 冲突通过强制终止占用进程解决。托管文档要求优先修改端口并确认进程身份。","sourceKey":"CASE-spring-port-case"}
+{"sourceId":"RESOLVED_CASE:2","title":"端口占用个案","content":"某次 Port 8080 冲突通过强制终止进程解决。托管文档要求优先修改端口并确认进程身份。","sourceKey":"CASE-spring-port-case"}
 {"sourceId":"RESOLVED_CASE:3","title":"Redis 密码个案","content":"某次 NOAUTH 通过清空客户端密码解决，但托管文档要求密码必须与服务端配置一致。","sourceKey":"CASE-redis-auth-case"}
 {"sourceId":"RESOLVED_CASE:4","title":"ICU 插件个案","content":"某次在 Elasticsearch 9.5.2 上安装旧版 ICU 后暂时启动，托管文档要求插件版本严格一致。","sourceKey":"CASE-elasticsearch-icu-case"}
 {"sourceId":"RESOLVED_CASE:5","title":"Flyway repair 个案","content":"某次 Validate failed 后直接执行 repair 恢复启动，托管文档要求先核实差异并评审。","sourceKey":"CASE-flyway-repair-case"}

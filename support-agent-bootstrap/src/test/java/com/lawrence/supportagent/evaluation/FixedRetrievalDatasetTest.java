@@ -34,7 +34,7 @@ class FixedRetrievalDatasetTest {
         assertEquals(15, corpusIds.size());
         assertTrue(cases.stream().flatMap(value -> value.relevantSourceKeys().stream())
                 .allMatch(corpusIds::contains));
-        assertEquals("locked-regression-v1", snapshot.version());
+        assertEquals("locked-regression-v1.1", snapshot.version());
         assertEquals(64, snapshot.contentSha256().length());
     }
 
@@ -55,7 +55,7 @@ class FixedRetrievalDatasetTest {
         assertEquals(20, count(cases, "CONFLICT-"));
         assertTrue(cases.stream().allMatch(value -> value.relevanceGrades().keySet()
                 .equals(Set.copyOf(value.relevantSourceKeys()))));
-        assertEquals("optimization-development-v1", snapshot.version());
+        assertEquals("optimization-development-v1.1", snapshot.version());
         assertEquals(64, snapshot.contentSha256().length());
     }
 

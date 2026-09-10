@@ -12,7 +12,7 @@ Content-Type: application/json
 
 > {% client.global.set("evaluationRunId", response.body.data.evaluationRunId); %}
 
-### 查询进度、五项指标和失败用例；结果仅保存在当前进程内存
+### 查询进度、五项指标、可靠性诊断和失败用例；结果仅保存在当前进程内存
 GET {{baseUrl}}/retrieval-evaluations/{{evaluationRunId}}
 Accept: application/json
 

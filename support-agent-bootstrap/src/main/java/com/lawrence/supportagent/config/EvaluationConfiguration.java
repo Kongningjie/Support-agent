@@ -9,14 +9,14 @@ import com.lawrence.supportagent.evaluation.RetrievalEvaluationContext;
 import com.lawrence.supportagent.evaluation.WorkingTreeGitCommitResolver;
 import com.lawrence.supportagent.evaluation.RetrievalMetricsCalculator;
 import com.lawrence.supportagent.evaluation.TargetRetrievalEvaluationReportAdapter;
+import com.lawrence.supportagent.retrieval.RetrievalParameters;
 import com.lawrence.supportagent.retrieval.RetrievalService;
 import com.lawrence.supportagent.sharedkernel.port.TimeProvider;
 import com.lawrence.supportagent.sharedkernel.port.UuidGenerator;
+import java.util.Map;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Profile;
-import org.springframework.beans.factory.annotation.Value;
-import java.util.Map;
 import tools.jackson.databind.ObjectMapper;
 
 /** 仅在开发和测试环境装配固定检索评测能力。 */
@@ -51,19 +51,12 @@ public class EvaluationConfiguration {
     @Bean
     public EvaluationRuntimeMetadataPort evaluationRuntimeMetadataPort(
             SupportAgentProperties properties,
-            @Value("${support-agent.retrieval.vector-minimum-similarity:0.20}") double similarity,
-            @Value("${support-agent.retrieval.vector-candidates:200}") int vectorCandidates,
-            @Value("${support-agent.retrieval.rerank-grounded-threshold:0.35}") double threshold) {
+            RetrievalParameters parameters) {
         String commit = new WorkingTreeGitCommitResolver().resolve();
-        return dataset -> new RetrievalEvaluationContext("1.0", dataset.kind(), dataset.version(),
+        return dataset -> new RetrievalEvaluationContext("1.1", dataset.kind(), dataset.version(),
                 dataset.contentSha256(), commit, Map.of(
                 "chat", properties.dashscope().chatModel(),
                 "embedding", properties.dashscope().embeddingModel(),
-                "rerank", properties.dashscope().rerankModel()), Map.of(
-                "vectorMinimumSimilarity", Double.toString(similarity),
-                "vectorCandidates", Integer.toString(vectorCandidates),
-                "rerankGroundedThreshold", Double.toString(threshold),
-                "bm25TopK", "50", "vectorTopK", "50", "rrfK", "60",
-                "fusionTopK", "30", "finalTopK", "5"));
+                "rerank", properties.dashscope().rerankModel()), parameters.asReportMap());
     }
 }

@@ -40,9 +40,36 @@ support-agent:
     knowledge-index: ${SUPPORT_AGENT_KNOWLEDGE_INDEX:support_knowledge_v1}
     knowledge-alias: ${SUPPORT_AGENT_KNOWLEDGE_ALIAS:support_knowledge_current}
   retrieval:
+    # BM25 分支最多返回的候选数，允许 1～1000。
+    bm25-top-k: ${SUPPORT_AGENT_BM25_TOP_K:30}
+    # 向量分支最多返回的候选数，允许 1～1000。
+    vector-top-k: ${SUPPORT_AGENT_VECTOR_TOP_K:30}
+    # 向量候选最低余弦相似度，允许 -1～1。
     vector-minimum-similarity: ${SUPPORT_AGENT_VECTOR_MINIMUM_SIMILARITY:0.20}
-    vector-candidates: ${SUPPORT_AGENT_VECTOR_CANDIDATES:200}
-    rerank-grounded-threshold: ${SUPPORT_AGENT_RERANK_GROUNDED_THRESHOLD:0.35}
+    # Elasticsearch 近似向量候选池，必须不小于 vector-top-k，最多 10000。
+    vector-candidates: ${SUPPORT_AGENT_VECTOR_CANDIDATES:100}
+    # RRF 名次平滑常数，允许 1～10000；值越大，靠前名次差异越平缓。
+    rrf-k: ${SUPPORT_AGENT_RRF_K:20}
+    # RRF 融合后保留的候选数，允许 1～1000，且不能超过双分支候选总数。
+    fusion-top-k: ${SUPPORT_AGENT_FUSION_TOP_K:20}
+    # 送入 Rerank 的候选数，不能超过 fusion-top-k。
+    rerank-top-k: ${SUPPORT_AGENT_RERANK_TOP_K:20}
+    # 离线排名指标保留的原始候选数，不能超过 rerank-top-k。
+    ranked-top-k: ${SUPPORT_AGENT_RANKED_TOP_K:10}
+    # 最终回答证据数，允许 1～5，且不能超过 rerank-top-k。
+    final-top-k: ${SUPPORT_AGENT_FINAL_TOP_K:5}
+    # Rerank 成功时接受可靠知识的全局最低分，允许 0～1。
+    rerank-grounded-threshold: ${SUPPORT_AGENT_RERANK_GROUNDED_THRESHOLD:0.30}
+    # 文本分析方案；ICU_ONLY 为基线，ICU_WITH_CJK 增加内置 CJK 辅助字段。
+    analysis-profile: ${SUPPORT_AGENT_ANALYSIS_PROFILE:ICU_ONLY}
+    # BM25 来源标题权重，允许大于 0 且不超过 20。
+    title-weight: ${SUPPORT_AGENT_TITLE_WEIGHT:3.0}
+    # BM25 标题路径权重，允许大于 0 且不超过 20。
+    heading-weight: ${SUPPORT_AGENT_HEADING_WEIGHT:2.0}
+    # BM25 分块正文权重，允许大于 0 且不超过 20。
+    content-weight: ${SUPPORT_AGENT_CONTENT_WEIGHT:1.0}
+    # BM25 精确技术词完全匹配权重，允许大于 0 且不超过 20。
+    exact-term-weight: ${SUPPORT_AGENT_EXACT_TERM_WEIGHT:5.0}
   async-task:
     enabled: true
     worker-id: ${SUPPORT_AGENT_WORKER_ID:}

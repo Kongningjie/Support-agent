@@ -24,6 +24,7 @@ import com.lawrence.supportagent.resolvedcase.ResolvedCaseDeleteTaskHandler;
 import com.lawrence.supportagent.resolvedcase.ResolvedCaseIndexTaskHandler;
 import com.lawrence.supportagent.resolvedcase.ResolvedCaseQueryUseCase;
 import com.lawrence.supportagent.resolvedcase.port.ResolvedCaseRepository;
+import com.lawrence.supportagent.retrieval.RetrievalParameters;
 import java.net.URI;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -86,11 +87,12 @@ public class KnowledgeConfiguration {
     /** 创建知识索引持久化端口。 */
     @Bean
     public ElasticsearchKnowledgeIndexAdapter knowledgeIndexPort(Rest5Client client, ObjectMapper objectMapper,
-                                                                  SupportAgentProperties properties) {
+                                                                  SupportAgentProperties properties,
+                                                                  RetrievalParameters retrievalParameters) {
         SupportAgentProperties.Elasticsearch config = properties.elasticsearch();
         return new ElasticsearchKnowledgeIndexAdapter(client, objectMapper,
                 config.knowledgeIndex(), config.knowledgeAlias(),
-                config.username(), config.password());
+                config.username(), config.password(), retrievalParameters);
     }
 
     /** 注册托管文档异步索引任务处理器。 */

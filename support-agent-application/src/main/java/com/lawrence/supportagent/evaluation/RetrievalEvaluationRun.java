@@ -14,6 +14,7 @@ import java.util.UUID;
  * @param completedCases 已完成用例数量
  * @param totalCases 本次选中的用例总数
  * @param metrics 全部成功后计算的五项指标，未完成或失败时为空
+ * @param diagnostics 全部成功后计算的可靠性门槛诊断，未完成或失败时为空
  * @param results 按固定数据集顺序保存的逐条结果
  * @param failureMessage 整次运行失败的脱敏摘要，正常时为空
  * @param startedAt 接收运行请求的 UTC 时间
@@ -24,6 +25,7 @@ import java.util.UUID;
 public record RetrievalEvaluationRun(UUID evaluationRunId, RetrievalMode mode,
                                      Status status, int completedCases, int totalCases,
                                      RetrievalEvaluationMetrics metrics,
+                                     RetrievalEvaluationDiagnostics diagnostics,
                                      List<RetrievalEvaluationCaseResult> results,
                                      String failureMessage, Instant startedAt,
                                      Instant finishedAt,

@@ -22,10 +22,30 @@ class RetrievalServiceTest {
         RerankModelPort rerank = (query, documents) -> documents.stream()
                 .map(item -> new RerankModelPort.RerankScore(item.chunkId(), 0.91)).toList();
         try (RetrievalService service = new RetrievalService(search, validity, embedding,
-                rerank, 0.20, 200, 0.50)) {
+                rerank, parameters(0.50))) {
             RetrievalResult result = service.retrieve("连接失败");
             assertThat(result.status()).isEqualTo(RetrievalStatus.GROUNDED);
             assertThat(result.evidence()).extracting(RetrievalEvidence::chunkId).containsExactly("chunk-1");
+        }
+    }
+
+    /** 原始排名存在候选时，可靠性门槛仍必须能把最终状态判为无知识。 */
+    @Test
+    void shouldKeepRawRankingWhenGroundedThresholdRejectsCandidate() {
+        RetrievalEvidence candidate = evidence("chunk-1", Set.of("content"));
+        RerankModelPort rerank = (query, documents) -> List.of(
+                new RerankModelPort.RerankScore("chunk-1", 0.20));
+        try (RetrievalService service = new RetrievalService(
+                search(List.of(candidate), List.of(candidate)),
+                sources -> Set.copyOf(sources), embedding(), rerank, parameters(0.50))) {
+            RetrievalRanking ranking = service.rank("不相关问题", RetrievalMode.HYBRID_RERANK);
+
+            assertThat(ranking.candidates()).extracting(RetrievalEvidence::chunkId)
+                    .containsExactly("chunk-1");
+            assertThat(ranking.reliableEvidence()).isEmpty();
+            assertThat(ranking.status()).isEqualTo(RetrievalStatus.NO_RELIABLE_KNOWLEDGE);
+            assertThat(ranking.decisionReason())
+                    .isEqualTo(RetrievalDecisionReason.BELOW_GROUNDED_THRESHOLD);
         }
     }
 
@@ -34,7 +54,7 @@ class RetrievalServiceTest {
     void shouldDistinguishTechnicalFailureFromNoKnowledge() {
         KnowledgeSearchPort search = searchFailure();
         try (RetrievalService service = new RetrievalService(search, sources -> Set.of(), embeddingFailure(),
-                (query, documents) -> List.of(), 0.20, 200, 0.50)) {
+                (query, documents) -> List.of(), parameters(0.50))) {
             RetrievalResult result = service.retrieve("连接失败");
             assertThat(result.status()).isEqualTo(RetrievalStatus.RETRIEVAL_FAILED);
             assertThat(result.rerankStatus()).isEqualTo(BranchStatus.SKIPPED);
@@ -49,7 +69,7 @@ class RetrievalServiceTest {
         KnowledgeSearchPort search = search(List.of(resolvedCase, managedDocument),
                 List.of(resolvedCase, managedDocument));
         try (RetrievalService service = new RetrievalService(search, sources -> Set.copyOf(sources),
-                embedding(), (query, documents) -> List.of(), 0.20, 200, 0.50)) {
+                embedding(), (query, documents) -> List.of(), parameters(0.50))) {
             RetrievalRanking ranking = service.rank("连接失败", RetrievalMode.HYBRID);
 
             assertThat(ranking.candidates()).extracting(RetrievalEvidence::chunkId)
@@ -65,7 +85,7 @@ class RetrievalServiceTest {
         KnowledgeSearchPort search = search(List.of(managedDocument, resolvedCase),
                 List.of(resolvedCase, managedDocument));
         try (RetrievalService service = new RetrievalService(search, sources -> Set.copyOf(sources),
-                embedding(), (query, documents) -> List.of(), 0.20, 200, 0.50)) {
+                embedding(), (query, documents) -> List.of(), parameters(0.50))) {
             RetrievalRanking ranking = service.rank("连接失败", RetrievalMode.HYBRID);
 
             assertThat(ranking.candidates()).extracting(RetrievalEvidence::chunkId)
@@ -113,5 +133,10 @@ class RetrievalServiceTest {
             /** {@inheritDoc} */ public List<List<Double>> embedDocuments(List<String> values, Runnable callback) { return List.of(); }
             /** {@inheritDoc} */ public List<Double> embedQuery(String query) { throw new IllegalStateException(); }
         };
+    }
+
+    /** 创建只覆盖可靠性门槛、其余保持阶段七冻结值的检索参数。 */
+    private RetrievalParameters parameters(double threshold) {
+        return RetrievalParameters.baseline().withGroundedThreshold(threshold);
     }
 }

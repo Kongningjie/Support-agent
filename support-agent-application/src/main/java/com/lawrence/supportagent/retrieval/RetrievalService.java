@@ -23,47 +23,32 @@ import java.util.concurrent.Executors;
 
 /** 并行执行双路召回、RRF、来源回查、Rerank 和可靠知识门槛。 */
 public class RetrievalService implements AutoCloseable {
-    private static final int BRANCH_LIMIT = 50;
-    private static final int FUSION_LIMIT = 30;
-    private static final int EVIDENCE_LIMIT = 5;
-    private static final int RRF_K = 60;
     private final KnowledgeSearchPort searchPort;
     private final KnowledgeSourceValidityPort validityPort;
     private final EmbeddingModelPort embeddingModel;
     private final RerankModelPort rerankModel;
-    private final double vectorMinimumSimilarity;
-    private final int vectorCandidates;
-    private final double groundedThreshold;
+    private final RetrievalParameters parameters;
     private final OptimizationTelemetryPort telemetry;
     private final ExecutorService branches = Executors.newVirtualThreadPerTaskExecutor();
 
-    /** 创建参数固定且不执行在线调优的混合检索服务。 */
+    /** 创建使用显式参数快照且不执行在线调优的混合检索服务。 */
     public RetrievalService(KnowledgeSearchPort searchPort, KnowledgeSourceValidityPort validityPort,
                             EmbeddingModelPort embeddingModel, RerankModelPort rerankModel,
-                            double vectorMinimumSimilarity, int vectorCandidates,
-                            double groundedThreshold) {
-        this(searchPort, validityPort, embeddingModel, rerankModel, vectorMinimumSimilarity,
-                vectorCandidates, groundedThreshold, OptimizationTelemetryPort.noOp());
+                            RetrievalParameters parameters) {
+        this(searchPort, validityPort, embeddingModel, rerankModel, parameters,
+                OptimizationTelemetryPort.noOp());
     }
 
     /** 创建带二期低基数遥测的混合检索服务。 */
     public RetrievalService(KnowledgeSearchPort searchPort, KnowledgeSourceValidityPort validityPort,
                             EmbeddingModelPort embeddingModel, RerankModelPort rerankModel,
-                            double vectorMinimumSimilarity, int vectorCandidates,
-                            double groundedThreshold, OptimizationTelemetryPort telemetry) {
-        if (!Double.isFinite(vectorMinimumSimilarity) || vectorMinimumSimilarity < -1
-                || vectorMinimumSimilarity > 1 || vectorCandidates < BRANCH_LIMIT
-                || !Double.isFinite(groundedThreshold) || groundedThreshold < 0
-                || groundedThreshold > 1) {
-            throw new IllegalArgumentException("混合检索参数超出允许范围");
-        }
+                            RetrievalParameters parameters,
+                            OptimizationTelemetryPort telemetry) {
         this.searchPort = searchPort;
         this.validityPort = validityPort;
         this.embeddingModel = embeddingModel;
         this.rerankModel = rerankModel;
-        this.vectorMinimumSimilarity = vectorMinimumSimilarity;
-        this.vectorCandidates = vectorCandidates;
-        this.groundedThreshold = groundedThreshold;
+        this.parameters = java.util.Objects.requireNonNull(parameters, "检索参数不能为空");
         this.telemetry = telemetry == null ? OptimizationTelemetryPort.noOp() : telemetry;
     }
 
@@ -95,7 +80,7 @@ public class RetrievalService implements AutoCloseable {
         }
     }
 
-    /** 按固定评测模式返回最多十个有效候选，不应用回答可靠性门槛。 */
+    /** 按固定评测模式同时返回原始排名和应用生产可靠性规则后的最终判断。 */
     public RetrievalRanking rank(String query, RetrievalMode mode) {
         if (query == null || query.isBlank() || mode == null) {
             throw new IllegalArgumentException("评测问题和检索模式不能为空");
@@ -112,7 +97,15 @@ public class RetrievalService implements AutoCloseable {
         RerankOutcome reranked = mode == RetrievalMode.HYBRID_RERANK
                 ? rerank(query, candidates)
                 : new RerankOutcome(BranchStatus.SKIPPED, candidates);
-        return new RetrievalRanking(mode, reranked.items.stream().limit(10).toList(),
+        boolean failed = requiredBranchesFailed(mode, bm25.status, vector.status);
+        List<RetrievalEvidence> reliable = failed ? List.of()
+                : selectReliable(reranked.items, reranked.status);
+        RetrievalStatus status = failed ? RetrievalStatus.RETRIEVAL_FAILED
+                : reliable.isEmpty() ? RetrievalStatus.NO_RELIABLE_KNOWLEDGE
+                : RetrievalStatus.GROUNDED;
+        return new RetrievalRanking(mode,
+                reranked.items.stream().limit(parameters.rankedTopK()).toList(),
+                reliable, status, decisionReason(status, reranked),
                 bm25.status, vector.status, reranked.status);
     }
 
@@ -120,7 +113,8 @@ public class RetrievalService implements AutoCloseable {
     private BranchResult callBm25(String query) {
         try {
             return new BranchResult(BranchStatus.SUCCEEDED,
-                    ranked(searchPort.searchBm25(query, BRANCH_LIMIT), true));
+                    ranked(searchPort.searchBm25(query, parameters.bm25TopK()), true,
+                            parameters.bm25TopK()));
         } catch (RuntimeException exception) {
             return new BranchResult(BranchStatus.FAILED, List.of());
         }
@@ -131,19 +125,20 @@ public class RetrievalService implements AutoCloseable {
         try {
             List<Double> vector = embeddingModel.embedQuery(query);
             return new BranchResult(BranchStatus.SUCCEEDED, ranked(searchPort.searchVector(vector,
-                    BRANCH_LIMIT, vectorCandidates, vectorMinimumSimilarity), false));
+                    parameters.vectorTopK(), parameters.vectorCandidates(),
+                    parameters.vectorMinimumSimilarity()), false, parameters.vectorTopK()));
         } catch (RuntimeException exception) {
             return new BranchResult(BranchStatus.FAILED, List.of());
         }
     }
 
     /** 为分支结果写入从一开始的稳定排名。 */
-    private List<RetrievalEvidence> ranked(List<RetrievalEvidence> items, boolean bm25) {
+    private List<RetrievalEvidence> ranked(List<RetrievalEvidence> items, boolean bm25, int limit) {
         if (items == null) {
             return List.of();
         }
         List<RetrievalEvidence> result = new ArrayList<>();
-        for (int index = 0; index < Math.min(BRANCH_LIMIT, items.size()); index++) {
+        for (int index = 0; index < Math.min(limit, items.size()); index++) {
             RetrievalEvidence value = items.get(index);
             result.add(copy(value, bm25 ? index + 1 : null, bm25 ? null : index + 1, 0, null));
         }
@@ -160,7 +155,7 @@ public class RetrievalService implements AutoCloseable {
         }
         return values.values().stream().map(value -> copy(value, value.bm25Rank(),
                         value.vectorRank(), rrf(value), null))
-                .sorted(rrfOrder()).limit(FUSION_LIMIT).toList();
+                .sorted(rrfOrder()).limit(parameters.fusionTopK()).toList();
     }
 
     /** 合并同一分块的两个分支排名和命中字段。 */
@@ -187,7 +182,9 @@ public class RetrievalService implements AutoCloseable {
             return new RerankOutcome(BranchStatus.SKIPPED, candidates);
         }
         try {
-            List<RerankDocument> documents = candidates.stream().map(value ->
+            List<RetrievalEvidence> rerankCandidates = candidates.stream()
+                    .limit(parameters.rerankTopK()).toList();
+            List<RerankDocument> documents = rerankCandidates.stream().map(value ->
                     new RerankDocument(value.chunkId(), value.title() + "\n" + value.headingPath()
                             + "\n" + value.content())).toList();
             List<RerankScore> scores = rerankModel.rerank(query, documents);
@@ -199,12 +196,12 @@ public class RetrievalService implements AutoCloseable {
                     throw new IllegalArgumentException("Rerank 返回结构不合法");
                 }
             }
-            if (byId.size() != candidates.size()
-                    || !byId.keySet().equals(candidates.stream().map(
+            if (byId.size() != rerankCandidates.size()
+                    || !byId.keySet().equals(rerankCandidates.stream().map(
                     RetrievalEvidence::chunkId).collect(java.util.stream.Collectors.toSet()))) {
                 throw new IllegalArgumentException("Rerank 返回 ID 不完整");
             }
-            List<RetrievalEvidence> sorted = candidates.stream().map(value -> copy(value,
+            List<RetrievalEvidence> sorted = rerankCandidates.stream().map(value -> copy(value,
                             value.bm25Rank(), value.vectorRank(), value.rrfScore(), byId.get(value.chunkId())))
                     .sorted(Comparator.comparing(RetrievalEvidence::rerankScore).reversed()
                             .thenComparingInt(this::sourcePriority)
@@ -221,13 +218,13 @@ public class RetrievalService implements AutoCloseable {
         List<RetrievalEvidence> selected = new ArrayList<>();
         for (RetrievalEvidence item : items) {
             boolean reliable = status == BranchStatus.SUCCEEDED
-                    ? item.rerankScore() >= groundedThreshold : degradedReliable(item);
+                    ? item.rerankScore() >= parameters.groundedThreshold() : degradedReliable(item);
             String source = item.sourceType() + ":" + item.sourceId();
             if (reliable && perSource.getOrDefault(source, 0) < 2) {
                 selected.add(item);
                 perSource.merge(source, 1, Integer::sum);
             }
-            if (selected.size() == EVIDENCE_LIMIT) {
+            if (selected.size() == parameters.finalTopK()) {
                 break;
             }
         }
@@ -245,9 +242,37 @@ public class RetrievalService implements AutoCloseable {
     /** 计算单个候选的固定 RRF 分数。 */
     private double rrf(RetrievalEvidence value) {
         double score = 0;
-        if (value.bm25Rank() != null) score += 1.0 / (RRF_K + value.bm25Rank());
-        if (value.vectorRank() != null) score += 1.0 / (RRF_K + value.vectorRank());
+        if (value.bm25Rank() != null) score += 1.0 / (parameters.rrfK() + value.bm25Rank());
+        if (value.vectorRank() != null) score += 1.0 / (parameters.rrfK() + value.vectorRank());
         return score;
+    }
+
+    /** 判断当前评测模式是否丢失了得出结果所需的全部召回分支。 */
+    private boolean requiredBranchesFailed(RetrievalMode mode, BranchStatus bm25,
+                                           BranchStatus vector) {
+        return switch (mode) {
+            case BM25_ONLY -> bm25 == BranchStatus.FAILED;
+            case VECTOR_ONLY -> vector == BranchStatus.FAILED;
+            case HYBRID, HYBRID_RERANK -> bm25 == BranchStatus.FAILED
+                    && vector == BranchStatus.FAILED;
+        };
+    }
+
+    /** 把最终状态转换为不会依赖正文的稳定诊断原因。 */
+    private RetrievalDecisionReason decisionReason(RetrievalStatus status,
+                                                   RerankOutcome reranked) {
+        if (status == RetrievalStatus.RETRIEVAL_FAILED) {
+            return RetrievalDecisionReason.RETRIEVAL_BRANCH_FAILED;
+        }
+        if (status == RetrievalStatus.GROUNDED) {
+            return RetrievalDecisionReason.RELIABLE_EVIDENCE_PRESENT;
+        }
+        if (reranked.items.isEmpty()) {
+            return RetrievalDecisionReason.NO_CANDIDATE;
+        }
+        return reranked.status == BranchStatus.SUCCEEDED
+                ? RetrievalDecisionReason.BELOW_GROUNDED_THRESHOLD
+                : RetrievalDecisionReason.INSUFFICIENT_DEGRADED_SIGNAL;
     }
 
     /** 返回 RRF 并列时仍可重复的稳定排序器。 */

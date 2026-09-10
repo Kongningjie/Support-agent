@@ -10,6 +10,8 @@ import com.lawrence.supportagent.knowledge.ExactTerm;
 import com.lawrence.supportagent.knowledge.ExactTermExtractor;
 import com.lawrence.supportagent.knowledge.ExactTermType;
 import com.lawrence.supportagent.retrieval.RetrievalEvidence;
+import com.lawrence.supportagent.retrieval.RetrievalAnalysisProfile;
+import com.lawrence.supportagent.retrieval.RetrievalParameters;
 import com.lawrence.supportagent.retrieval.port.KnowledgeSearchPort;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
@@ -30,23 +32,36 @@ import tools.jackson.databind.ObjectMapper;
 /** 使用 Elasticsearch REST5 客户端维护版本化知识索引和固定业务别名。 */
 public class ElasticsearchKnowledgeIndexAdapter implements KnowledgeIndexPort, KnowledgeSearchPort {
     private static final String ICU_ANALYZER = "support_icu";
+    private static final double CJK_AUXILIARY_WEIGHT = 0.5;
     private final Rest5Client client;
     private final ObjectMapper objectMapper;
     private final String indexName;
     private final String aliasName;
     private final String authorization;
     private final ExactTermExtractor exactTermExtractor;
+    private final RetrievalParameters retrievalParameters;
 
     /** 注入客户端、JSON 编解码器、冻结索引名称、别名和可选基础认证。 */
     public ElasticsearchKnowledgeIndexAdapter(Rest5Client client, ObjectMapper objectMapper,
                                                String indexName, String aliasName,
                                                String username, String password) {
+        this(client, objectMapper, indexName, aliasName, username, password,
+                RetrievalParameters.baseline());
+    }
+
+    /** 注入客户端、索引、认证以及本次运行使用的完整检索参数快照。 */
+    public ElasticsearchKnowledgeIndexAdapter(Rest5Client client, ObjectMapper objectMapper,
+                                               String indexName, String aliasName,
+                                               String username, String password,
+                                               RetrievalParameters retrievalParameters) {
         this.client = client;
         this.objectMapper = objectMapper;
         this.indexName = requiredName(indexName, "物理索引名");
         this.aliasName = requiredName(aliasName, "业务别名");
         this.authorization = basicAuthorization(username, password);
         this.exactTermExtractor = new ExactTermExtractor();
+        this.retrievalParameters = java.util.Objects.requireNonNull(retrievalParameters,
+                "检索参数不能为空");
     }
 
     /** {@inheritDoc} */
@@ -54,11 +69,12 @@ public class ElasticsearchKnowledgeIndexAdapter implements KnowledgeIndexPort, K
     public List<RetrievalEvidence> searchBm25(String query, int limit) {
         List<Object> should = new ArrayList<>();
         should.add(Map.of("multi_match", Map.of("query", query, "type", "best_fields",
-                "fields", List.of("title^3", "headingPath^2", "content"),
+                "fields", weightedTextFields(),
                 "minimum_should_match", "30%", "_name", "text")));
         should.add(Map.of("multi_match", Map.of("query", query,
-                "fields", List.of("title", "headingPath"), "_name", "title_or_heading")));
+                "fields", titleAndHeadingFields(), "_name", "title_or_heading")));
         should.add(Map.of("match", Map.of("content", Map.of("query", query,
+                "boost", retrievalParameters.contentWeight(),
                 "_name", "content"))));
         for (ExactTerm term : exactTermExtractor.extract(query)) {
             should.add(Map.of("nested", Map.of("path", "exactTerms", "query", Map.of(
@@ -66,7 +82,7 @@ public class ElasticsearchKnowledgeIndexAdapter implements KnowledgeIndexPort, K
                             Map.of("term", Map.of("exactTerms.type", term.type().name())),
                             Map.of("term", Map.of("exactTerms.normalizedValue",
                                     term.normalizedValue()))))), "score_mode", "max",
-                    "_name", "exact_term", "boost", 5)));
+                    "_name", "exact_term", "boost", retrievalParameters.exactTermWeight())));
         }
         Map<String, Object> body = Map.of("size", limit, "track_total_hits", false,
                 "_source", true, "query", Map.of("bool", Map.of(
@@ -216,9 +232,9 @@ public class ElasticsearchKnowledgeIndexAdapter implements KnowledgeIndexPort, K
         properties.put("sourceId", Map.of("type", "long"));
         properties.put("sourceVersion", Map.of("type", "long"));
         properties.put("chunkIndex", Map.of("type", "integer"));
-        properties.put("title", Map.of("type", "text", "analyzer", ICU_ANALYZER));
-        properties.put("headingPath", Map.of("type", "text", "analyzer", ICU_ANALYZER));
-        properties.put("content", Map.of("type", "text", "analyzer", ICU_ANALYZER));
+        properties.put("title", textField());
+        properties.put("headingPath", textField());
+        properties.put("content", textField());
         properties.put("exactTerms", Map.of("type", "nested", "properties", Map.of(
                 "type", Map.of("type", "keyword"),
                 "normalizedValue", Map.of("type", "keyword"),
@@ -247,12 +263,66 @@ public class ElasticsearchKnowledgeIndexAdapter implements KnowledgeIndexPort, K
         boolean valid = "strict".equals(root.path("mappings").path("dynamic").asText())
                 && "icu_tokenizer".equals(analyzer.path("tokenizer").asText())
                 && "support_icu".equals(mapping.path("content").path("analyzer").asText())
+                && cjkMappingMatches(mapping)
                 && "nested".equals(mapping.path("exactTerms").path("type").asText())
                 && mapping.path("embedding").path("dims").asInt() == 1024;
         if (!valid) {
             throw failure("KNOWLEDGE_INDEX_MAPPING_MISMATCH",
                     "Elasticsearch 物理索引映射与阶段 3 契约不一致", false, null);
         }
+    }
+
+    /** 返回 ICU 主字段以及可选低权重 CJK 辅助字段的加权查询字段。 */
+    private List<String> weightedTextFields() {
+        List<String> fields = new ArrayList<>(List.of(
+                weightedField("title", retrievalParameters.titleWeight()),
+                weightedField("headingPath", retrievalParameters.headingWeight()),
+                weightedField("content", retrievalParameters.contentWeight())));
+        if (retrievalParameters.analysisProfile() == RetrievalAnalysisProfile.ICU_WITH_CJK) {
+            fields.add(weightedField("title.cjk",
+                    retrievalParameters.titleWeight() * CJK_AUXILIARY_WEIGHT));
+            fields.add(weightedField("headingPath.cjk",
+                    retrievalParameters.headingWeight() * CJK_AUXILIARY_WEIGHT));
+            fields.add(weightedField("content.cjk",
+                    retrievalParameters.contentWeight() * CJK_AUXILIARY_WEIGHT));
+        }
+        return List.copyOf(fields);
+    }
+
+    /** 返回用于命名命中信号的标题与标题路径字段。 */
+    private List<String> titleAndHeadingFields() {
+        if (retrievalParameters.analysisProfile() == RetrievalAnalysisProfile.ICU_WITH_CJK) {
+            return List.of(weightedField("title", retrievalParameters.titleWeight()),
+                    weightedField("headingPath", retrievalParameters.headingWeight()),
+                    weightedField("title.cjk", retrievalParameters.titleWeight()
+                            * CJK_AUXILIARY_WEIGHT),
+                    weightedField("headingPath.cjk", retrievalParameters.headingWeight()
+                            * CJK_AUXILIARY_WEIGHT));
+        }
+        return List.of(weightedField("title", retrievalParameters.titleWeight()),
+                weightedField("headingPath", retrievalParameters.headingWeight()));
+    }
+
+    /** 生成 Elasticsearch 支持的字段权重表达式。 */
+    private String weightedField(String field, double weight) {
+        return field + "^" + Double.toString(weight);
+    }
+
+    /** 创建 ICU 主字段，并在候选配置启用时增加内置 CJK 多字段。 */
+    private Map<String, Object> textField() {
+        if (retrievalParameters.analysisProfile() == RetrievalAnalysisProfile.ICU_WITH_CJK) {
+            return Map.of("type", "text", "analyzer", ICU_ANALYZER,
+                    "fields", Map.of("cjk", Map.of("type", "text", "analyzer", "cjk")));
+        }
+        return Map.of("type", "text", "analyzer", ICU_ANALYZER);
+    }
+
+    /** 校验物理索引是否与当前分析配置具有相同的 CJK 辅助字段。 */
+    private boolean cjkMappingMatches(JsonNode mapping) {
+        boolean hasCjk = "cjk".equals(mapping.path("content").path("fields")
+                .path("cjk").path("analyzer").asText());
+        return retrievalParameters.analysisProfile() == RetrievalAnalysisProfile.ICU_WITH_CJK
+                ? hasCjk : !hasCjk;
     }
 
     /** 把应用层分块转换为不包含空字段的索引文档。 */

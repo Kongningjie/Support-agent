@@ -1,10 +1,10 @@
 {
   "LOCKED_REGRESSION": {
-    "version": "locked-regression-v1",
-    "contentSha256": "95593ee6cc94bea2781b5b189fab27b22912c64796ec285cb1c96c22190ab8b0"
+    "version": "locked-regression-v1.1",
+    "contentSha256": "7fded930707f2fa158c5e13a86c538be60c270940c586d2f0c0133c55c10448b"
   },
   "OPTIMIZATION_DEVELOPMENT": {
-    "version": "optimization-development-v1",
-    "contentSha256": "7f9dd06e37a24a0d8bf66cfcb09f4bd89e250256d1d28f0b6fd5252e9161b716"
+    "version": "optimization-development-v1.1",
+    "contentSha256": "4f63db147ac5fe326b623c2bd63015f40a711494f87fa891203d9e72bd86aec9"
   }
 }

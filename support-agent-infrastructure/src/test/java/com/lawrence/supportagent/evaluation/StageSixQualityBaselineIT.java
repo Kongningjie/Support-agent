@@ -10,6 +10,7 @@ import com.lawrence.supportagent.knowledge.IndexedKnowledgeChunk;
 import com.lawrence.supportagent.model.EmbeddingModelPort;
 import com.lawrence.supportagent.model.RerankModelPort;
 import com.lawrence.supportagent.retrieval.RetrievalMode;
+import com.lawrence.supportagent.retrieval.RetrievalParameters;
 import com.lawrence.supportagent.retrieval.RetrievalService;
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
@@ -65,7 +66,7 @@ class StageSixQualityBaselineIT {
             EmbeddingModelPort embeddings = new DeterministicEmbeddingModel();
             RerankModelPort rerank = new DeterministicRerankModel();
             try (RetrievalService retrieval = new RetrievalService(index, requested -> Set.copyOf(requested),
-                    embeddings, rerank, 0.20, 200, 0.35)) {
+                    embeddings, rerank, RetrievalParameters.stageSixBaseline())) {
                 ClasspathRetrievalEvaluationDatasetAdapter datasets =
                         new ClasspathRetrievalEvaluationDatasetAdapter(mapper);
                 Map<String, QualityResult> first = evaluateAll(datasets, retrieval);

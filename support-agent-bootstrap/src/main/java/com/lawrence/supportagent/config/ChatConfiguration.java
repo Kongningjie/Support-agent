@@ -24,6 +24,8 @@ import com.lawrence.supportagent.model.RerankModelPort;
 import com.lawrence.supportagent.observability.OptimizationTelemetryPort;
 import com.lawrence.supportagent.persistence.mapper.AgentAuditMapper;
 import com.lawrence.supportagent.resolvedcase.port.ResolvedCaseRepository;
+import com.lawrence.supportagent.retrieval.RetrievalAnalysisProfile;
+import com.lawrence.supportagent.retrieval.RetrievalParameters;
 import com.lawrence.supportagent.retrieval.RetrievalService;
 import com.lawrence.supportagent.retrieval.port.KnowledgeSourceValidityPort;
 import com.lawrence.supportagent.sharedkernel.port.TimeProvider;
@@ -78,16 +80,35 @@ public class ChatConfiguration {
             ManagedDocumentRepository documents, ResolvedCaseRepository cases) {
         return new MySqlKnowledgeSourceValidityAdapter(documents, cases);
     }
+    /** 使用配置文件中的完整字段创建不可变检索参数快照。 */
+    @Bean public RetrievalParameters retrievalParameters(
+            @Value("${support-agent.retrieval.bm25-top-k:30}") int bm25TopK,
+            @Value("${support-agent.retrieval.vector-top-k:30}") int vectorTopK,
+            @Value("${support-agent.retrieval.vector-candidates:100}") int vectorCandidates,
+            @Value("${support-agent.retrieval.vector-minimum-similarity:0.20}") double similarity,
+            @Value("${support-agent.retrieval.rrf-k:20}") int rrfK,
+            @Value("${support-agent.retrieval.fusion-top-k:20}") int fusionTopK,
+            @Value("${support-agent.retrieval.rerank-top-k:20}") int rerankTopK,
+            @Value("${support-agent.retrieval.ranked-top-k:10}") int rankedTopK,
+            @Value("${support-agent.retrieval.final-top-k:5}") int finalTopK,
+            @Value("${support-agent.retrieval.rerank-grounded-threshold:0.30}") double threshold,
+            @Value("${support-agent.retrieval.analysis-profile:ICU_ONLY}")
+            RetrievalAnalysisProfile analysisProfile,
+            @Value("${support-agent.retrieval.title-weight:3.0}") double titleWeight,
+            @Value("${support-agent.retrieval.heading-weight:2.0}") double headingWeight,
+            @Value("${support-agent.retrieval.content-weight:1.0}") double contentWeight,
+            @Value("${support-agent.retrieval.exact-term-weight:5.0}") double exactTermWeight) {
+        return new RetrievalParameters(bm25TopK, vectorTopK, vectorCandidates, similarity,
+                rrfK, fusionTopK, rerankTopK, rankedTopK, finalTopK, threshold,
+                analysisProfile, titleWeight, headingWeight, contentWeight, exactTermWeight);
+    }
     /** 创建混合检索编排器。 */
     @Bean(destroyMethod = "close") public RetrievalService retrievalService(
             ElasticsearchKnowledgeIndexAdapter search, KnowledgeSourceValidityPort validity,
             EmbeddingModelPort embedding, RerankModelPort rerank,
-            @Value("${support-agent.retrieval.vector-minimum-similarity:0.20}") double similarity,
-            @Value("${support-agent.retrieval.vector-candidates:200}") int candidates,
-            @Value("${support-agent.retrieval.rerank-grounded-threshold:0.35}") double threshold,
+            RetrievalParameters parameters,
             OptimizationTelemetryPort telemetry) {
-        return new RetrievalService(search, validity, embedding, rerank, similarity, candidates,
-                threshold, telemetry);
+        return new RetrievalService(search, validity, embedding, rerank, parameters, telemetry);
     }
     /** 创建意图识别服务。 */
     @Bean public IntentRecognitionService intentRecognitionService(IntentRecognitionPort model) {
@@ -104,11 +125,11 @@ public class ChatConfiguration {
                                          ConversationStorePort conversations, AgentAuditPort audits,
                                          AnswerValidator validator, UuidGenerator ids, TimeProvider time,
                                          SupportAgentProperties properties,
-                                         @Value("${support-agent.retrieval.rerank-grounded-threshold:0.35}")
-                                         double threshold, OptimizationTelemetryPort telemetry) {
+                                         RetrievalParameters parameters,
+                                         OptimizationTelemetryPort telemetry) {
         var config = properties.dashscope();
         return new ChatUseCase(intents, retrieval, model, tickets, conversations, audits, validator,
-                ids, time, config.chatModel(), config.embeddingModel(), config.rerankModel(), threshold,
-                telemetry);
+                ids, time, config.chatModel(), config.embeddingModel(), config.rerankModel(),
+                parameters.groundedThreshold(), telemetry);
     }
 }
