@@ -57,7 +57,7 @@ java -jar .\support-agent-bootstrap\target\support-agent-bootstrap-0.1.0-SNAPSHO
 | `SUPPORT_AGENT_REDIS_URL` | Redis 地址 |
 | `SUPPORT_AGENT_ELASTICSEARCH_URL` | Elasticsearch 根地址 |
 
-默认模型为 Chat `qwen3.7-plus-2026-05-26`、Intent `qwen3.7-flash`、Embedding `text-embedding-v4`、Rerank `qwen3-rerank`。
+默认模型为 Chat `qwen3.8-flash`、Intent `qwen3.7-flash`、Embedding `text-embedding-v4`、Rerank `qwen3-rerank`。
 
 ## 验证与接口
 

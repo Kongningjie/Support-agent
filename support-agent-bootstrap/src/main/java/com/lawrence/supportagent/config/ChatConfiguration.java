@@ -1,5 +1,10 @@
 package com.lawrence.supportagent.config;
 
+import com.lawrence.supportagent.agent.model.DashScopeChatModelAdapter;
+import com.lawrence.supportagent.agent.model.DashScopeIntentRecognitionAdapter;
+import com.lawrence.supportagent.agent.model.ModelGenerationSettings;
+import com.lawrence.supportagent.agent.model.UnavailableChatModelAdapter;
+import com.lawrence.supportagent.agent.model.UnavailableIntentRecognitionAdapter;
 import com.lawrence.supportagent.chat.AnswerValidator;
 import com.lawrence.supportagent.chat.ChatUseCase;
 import com.lawrence.supportagent.chat.IntentRecognitionService;
@@ -13,10 +18,6 @@ import com.lawrence.supportagent.knowledge.ExactTermExtractor;
 import com.lawrence.supportagent.knowledge.MySqlKnowledgeSourceValidityAdapter;
 import com.lawrence.supportagent.knowledge.port.ManagedDocumentRepository;
 import com.lawrence.supportagent.model.ChatModelPort;
-import com.lawrence.supportagent.agent.model.DashScopeChatModelAdapter;
-import com.lawrence.supportagent.agent.model.DashScopeIntentRecognitionAdapter;
-import com.lawrence.supportagent.agent.model.UnavailableChatModelAdapter;
-import com.lawrence.supportagent.agent.model.UnavailableIntentRecognitionAdapter;
 import com.lawrence.supportagent.model.DashScopeRerankModelAdapter;
 import com.lawrence.supportagent.model.EmbeddingModelPort;
 import com.lawrence.supportagent.model.IntentRecognitionPort;
@@ -31,11 +32,11 @@ import com.lawrence.supportagent.retrieval.port.KnowledgeSourceValidityPort;
 import com.lawrence.supportagent.sharedkernel.port.TimeProvider;
 import com.lawrence.supportagent.sharedkernel.port.UuidGenerator;
 import com.lawrence.supportagent.ticket.TicketQueryUseCase;
+import io.micrometer.core.instrument.MeterRegistry;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.redis.core.StringRedisTemplate;
-import io.micrometer.core.instrument.MeterRegistry;
 import tools.jackson.databind.ObjectMapper;
 
 /** 装配阶段四聊天、混合检索、模型适配和会话审计能力。 */
@@ -49,7 +50,8 @@ public class ChatConfiguration {
     @Bean public IntentRecognitionPort intentRecognitionPort(SupportAgentProperties properties) {
         var config = properties.dashscope();
         if (config.apiKey() == null || config.apiKey().isBlank()) return new UnavailableIntentRecognitionAdapter();
-        return new DashScopeIntentRecognitionAdapter(config.apiKey(), config.intentModel(), config.baseUrl());
+        return new DashScopeIntentRecognitionAdapter(config.apiKey(), config.intentModel(), config.baseUrl(),
+                generationSettings(config));
     }
     /** 创建内部流式 Chat 与受控工单 Agent 端口。 */
     @Bean public ChatModelPort chatModelPort(SupportAgentProperties properties,
@@ -58,7 +60,8 @@ public class ChatConfiguration {
         var config = properties.dashscope();
         if (config.apiKey() == null || config.apiKey().isBlank()) return new UnavailableChatModelAdapter();
         return new DashScopeChatModelAdapter(config.apiKey(), config.chatModel(),
-                config.baseUrl(), objectMapper, telemetry);
+                config.baseUrl(), objectMapper, telemetry, generationSettings(config),
+                config.groundedPromptVariant());
     }
     /** 创建独立 Rerank 模型端口。 */
     @Bean public RerankModelPort rerankModelPort(SupportAgentProperties properties,
@@ -131,5 +134,12 @@ public class ChatConfiguration {
         return new ChatUseCase(intents, retrieval, model, tickets, conversations, audits, validator,
                 ids, time, config.chatModel(), config.embeddingModel(), config.rerankModel(),
                 parameters.groundedThreshold(), telemetry);
+    }
+
+    /** 将启动模块配置转换为模型适配层不可变生成参数。 */
+    private ModelGenerationSettings generationSettings(SupportAgentProperties.DashScope config) {
+        return new ModelGenerationSettings(config.chatTimeout(), config.intentTimeout(),
+                config.ticketTimeout(), config.resolvedCaseTimeout(), config.chatMaxOutputTokens(),
+                config.intentMaxOutputTokens(), config.structuredMaxOutputTokens());
     }
 }

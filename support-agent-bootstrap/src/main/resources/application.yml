@@ -29,10 +29,26 @@ support-agent:
   dashscope:
     api-key: ${DASHSCOPE_API_KEY:}
     base-url: ${DASHSCOPE_HTTP_BASE_URL:https://dashscope.aliyuncs.com/api/v1}
-    chat-model: ${SUPPORT_AGENT_CHAT_MODEL:qwen3.7-plus-2026-05-26}
+    chat-model: ${SUPPORT_AGENT_CHAT_MODEL:qwen3.8-flash}
     intent-model: ${SUPPORT_AGENT_INTENT_MODEL:qwen3.7-flash}
     embedding-model: ${SUPPORT_AGENT_EMBEDDING_MODEL:text-embedding-v4}
     rerank-model: ${SUPPORT_AGENT_RERANK_MODEL:qwen3-rerank}
+    # 普通 Chat 完整生成超时；首片段与完整请求延迟仍由阶段 8 门禁独立判断。
+    chat-timeout: ${SUPPORT_AGENT_CHAT_TIMEOUT:120s}
+    # 意图识别总超时，失败时由应用层降级为 SUPPORT_QUERY。
+    intent-timeout: ${SUPPORT_AGENT_INTENT_TIMEOUT:3s}
+    # 工单草稿结构化生成单次超时。
+    ticket-timeout: ${SUPPORT_AGENT_TICKET_TIMEOUT:30s}
+    # 已解决案例结构化生成单次超时。
+    resolved-case-timeout: ${SUPPORT_AGENT_RESOLVED_CASE_TIMEOUT:60s}
+    # 普通问候、知识回答和工单查询的最大输出 Token。
+    chat-max-output-tokens: ${SUPPORT_AGENT_CHAT_MAX_OUTPUT_TOKENS:1200}
+    # 意图结构化识别的最大输出 Token。
+    intent-max-output-tokens: ${SUPPORT_AGENT_INTENT_MAX_OUTPUT_TOKENS:256}
+    # 工单草稿和案例草稿结构化生成的最大输出 Token。
+    structured-max-output-tokens: ${SUPPORT_AGENT_STRUCTURED_MAX_OUTPUT_TOKENS:800}
+    # 知识回答 Prompt 版本；只有压缩版通过完整 A/B 门禁后才允许设为 COMPACT。
+    grounded-prompt-variant: ${SUPPORT_AGENT_GROUNDED_PROMPT_VARIANT:ORIGINAL}
   elasticsearch:
     url: ${SUPPORT_AGENT_ELASTICSEARCH_URL:http://localhost:9200}
     username: ${SUPPORT_AGENT_ELASTICSEARCH_USERNAME:}

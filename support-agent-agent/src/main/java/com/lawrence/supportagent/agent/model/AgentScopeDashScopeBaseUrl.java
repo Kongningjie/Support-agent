@@ -3,6 +3,7 @@ package com.lawrence.supportagent.agent.model;
 /** 规范化传给 AgentScope DashScope Chat 适配器的服务根地址。 */
 final class AgentScopeDashScopeBaseUrl {
     private static final String API_V1_SUFFIX = "/api/v1";
+    private static final String COMPATIBLE_V1_SUFFIX = "/compatible-mode/v1";
 
     /** 禁止实例化仅承载地址规范化规则的类型。 */
     private AgentScopeDashScopeBaseUrl() {
@@ -26,5 +27,17 @@ final class AgentScopeDashScopeBaseUrl {
             normalized = normalized.substring(0, normalized.length() - API_V1_SUFFIX.length());
         }
         return normalized;
+    }
+
+    /**
+     * 将 DashScope 原生地址或兼容地址统一为 OpenAI 兼容根地址。
+     *
+     * @param baseUrl 工作空间或公共 DashScope API 根地址
+     * @return 以 {@code /compatible-mode/v1} 结尾的兼容地址
+     */
+    static String openAiCompatible(String baseUrl) {
+        String host = normalize(baseUrl);
+        if (host.endsWith("/compatible-mode/v1")) return host;
+        return host + COMPATIBLE_V1_SUFFIX;
     }
 }

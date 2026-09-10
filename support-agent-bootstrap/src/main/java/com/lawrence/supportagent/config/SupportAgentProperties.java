@@ -1,5 +1,7 @@
 package com.lawrence.supportagent.config;
 
+import com.lawrence.supportagent.agent.model.GroundedPromptVariant;
+import java.time.Duration;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 
 /**
@@ -21,9 +23,21 @@ public record SupportAgentProperties(String operatorId, DashScope dashscope,
      * @param intentModel 独立意图识别模型名称
      * @param embeddingModel 文档与查询向量模型名称
      * @param rerankModel 候选重排模型名称
+     * @param chatTimeout 普通 Chat 完整生成超时
+     * @param intentTimeout 意图识别总超时
+     * @param ticketTimeout 工单结构化生成超时
+     * @param resolvedCaseTimeout 案例结构化生成超时
+     * @param chatMaxOutputTokens 普通 Chat 最大输出 Token
+     * @param intentMaxOutputTokens 意图识别最大输出 Token
+     * @param structuredMaxOutputTokens 工单和案例结构化生成最大输出 Token
+     * @param groundedPromptVariant 知识回答 Prompt A/B 版本
      */
     public record DashScope(String apiKey, String baseUrl, String chatModel, String intentModel,
-                            String embeddingModel, String rerankModel) { }
+                            String embeddingModel, String rerankModel, Duration chatTimeout,
+                            Duration intentTimeout, Duration ticketTimeout,
+                            Duration resolvedCaseTimeout, int chatMaxOutputTokens,
+                            int intentMaxOutputTokens, int structuredMaxOutputTokens,
+                            GroundedPromptVariant groundedPromptVariant) { }
 
     /**
      * Elasticsearch 健康探测配置。

@@ -59,8 +59,7 @@ class DependencyHealthIndicatorTest {
         server.start();
         try {
             SupportAgentProperties configured = new SupportAgentProperties("test-operator",
-                    new SupportAgentProperties.DashScope("", "https://dashscope.aliyuncs.com/api/v1",
-                            "qwen3.7-plus-2026-05-26", "qwen3.7-flash", "text-embedding-v4", "qwen3-rerank"),
+                    dashScope(""),
                     new SupportAgentProperties.Elasticsearch(
                             "http://127.0.0.1:" + server.getAddress().getPort(), "elastic", "secret",
                             "support_knowledge_v1", "support_knowledge_current"));
@@ -75,9 +74,18 @@ class DependencyHealthIndicatorTest {
     /** 构造健康探测测试所需的最小配置。 */
     private SupportAgentProperties properties(String apiKey, String elasticsearchUrl) {
         return new SupportAgentProperties("test-operator",
-                new SupportAgentProperties.DashScope(apiKey, "https://dashscope.aliyuncs.com/api/v1",
-                        "qwen3.7-plus-2026-05-26", "qwen3.7-flash", "text-embedding-v4", "qwen3-rerank"),
+                dashScope(apiKey),
                 new SupportAgentProperties.Elasticsearch(elasticsearchUrl, "", "",
                         "support_knowledge_v1", "support_knowledge_current"));
+    }
+
+    /** 创建包含阶段 8 默认生成参数的测试 DashScope 配置。 */
+    private SupportAgentProperties.DashScope dashScope(String apiKey) {
+        return new SupportAgentProperties.DashScope(apiKey,
+                "https://dashscope.aliyuncs.com/api/v1", "qwen3.8-flash",
+                "qwen3.7-flash", "text-embedding-v4", "qwen3-rerank",
+                java.time.Duration.ofSeconds(120), java.time.Duration.ofSeconds(3),
+                java.time.Duration.ofSeconds(30), java.time.Duration.ofSeconds(60), 1200, 256, 800,
+                com.lawrence.supportagent.agent.model.GroundedPromptVariant.ORIGINAL);
     }
 }

@@ -32,4 +32,15 @@ class AgentScopeDashScopeBaseUrlTest {
         assertThrows(IllegalArgumentException.class,
                 () -> AgentScopeDashScopeBaseUrl.normalize(" "));
     }
+
+    /** 验证工作空间原生地址会转换为同主机 OpenAI 兼容地址。 */
+    @Test
+    void shouldBuildOpenAiCompatibleWorkspaceUrl() {
+        assertEquals("https://example.maas.aliyuncs.com/compatible-mode/v1",
+                AgentScopeDashScopeBaseUrl.openAiCompatible(
+                        "https://example.maas.aliyuncs.com/api/v1"));
+        assertEquals("https://example.maas.aliyuncs.com/compatible-mode/v1",
+                AgentScopeDashScopeBaseUrl.openAiCompatible(
+                        "https://example.maas.aliyuncs.com/compatible-mode/v1"));
+    }
 }

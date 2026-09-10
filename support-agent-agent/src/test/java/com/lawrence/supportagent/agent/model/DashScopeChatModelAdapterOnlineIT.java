@@ -43,7 +43,7 @@ class DashScopeChatModelAdapterOnlineIT {
     /** 返回在线测试使用的显式 Chat 模型，默认与应用配置一致。 */
     private String modelName() {
         return System.getenv().getOrDefault("SUPPORT_AGENT_CHAT_MODEL",
-                "qwen3.7-plus-2026-05-26");
+                "qwen3.8-flash");
     }
 
     /** 返回在线环境显式地址，未配置时使用 DashScope 公共地址。 */

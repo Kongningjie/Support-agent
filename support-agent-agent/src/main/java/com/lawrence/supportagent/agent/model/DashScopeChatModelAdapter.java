@@ -18,7 +18,7 @@ import io.agentscope.core.model.GenerateOptions;
 import io.agentscope.core.tool.Tool;
 import io.agentscope.core.tool.ToolParam;
 import io.agentscope.core.tool.Toolkit;
-import io.agentscope.extensions.model.dashscope.DashScopeChatModel;
+import io.agentscope.extensions.model.openai.OpenAIChatModel;
 import java.time.Duration;
 import java.util.List;
 import java.util.Map;
@@ -30,35 +30,58 @@ import tools.jackson.databind.ObjectMapper;
 
 /** 使用 AgentScope DashScope 模型实现内部流式 Chat 和受控工单 Agent。 */
 public class DashScopeChatModelAdapter implements ChatModelPort {
-    private static final Duration TIMEOUT = Duration.ofSeconds(120);
     private static final int TICKET_AGENT_MAX_ITERATIONS = 2;
     private final Model model;
     private final PromptTemplate greeting = new PromptTemplate("/prompts/greeting.md");
-    private final PromptTemplate grounded = new PromptTemplate("/prompts/grounded-answer.md");
+    private final PromptTemplate grounded;
     private final PromptTemplate ticketPrompt = new PromptTemplate("/prompts/ticket-agent.md");
     private final PromptTemplate ticketDraft = new PromptTemplate("/prompts/ticket-draft.md");
     private final PromptTemplate resolvedCase = new PromptTemplate("/prompts/resolved-case-generation.md");
     private final ObjectMapper objectMapper;
     private final OptimizationTelemetryPort telemetry;
+    private final ModelGenerationSettings settings;
 
     /** 使用显式 API Key、模型和 Base URL 创建统一 Chat 模型。 */
     public DashScopeChatModelAdapter(String apiKey, String modelName, String baseUrl) {
-        this(apiKey, modelName, baseUrl, new ObjectMapper(), OptimizationTelemetryPort.noOp());
+        this(apiKey, modelName, baseUrl, new ObjectMapper(), OptimizationTelemetryPort.noOp(),
+                ModelGenerationSettings.stageEightDefaults());
     }
 
     /** 使用显式 JSON 编解码器创建支持严格结构化输出的 Chat 模型。 */
     public DashScopeChatModelAdapter(String apiKey, String modelName, String baseUrl,
                                      ObjectMapper objectMapper) {
-        this(apiKey, modelName, baseUrl, objectMapper, OptimizationTelemetryPort.noOp());
+        this(apiKey, modelName, baseUrl, objectMapper, OptimizationTelemetryPort.noOp(),
+                ModelGenerationSettings.stageEightDefaults());
     }
 
     /** 使用显式 JSON 编解码器和低基数遥测创建 Chat 模型。 */
     public DashScopeChatModelAdapter(String apiKey, String modelName, String baseUrl,
                                      ObjectMapper objectMapper,
                                      OptimizationTelemetryPort telemetry) {
-        this.model = DashScopeChatModel.builder().apiKey(apiKey).modelName(modelName)
-                .baseUrl(AgentScopeDashScopeBaseUrl.normalize(baseUrl))
-                .stream(true).enableThinking(false).build();
+        this(apiKey, modelName, baseUrl, objectMapper, telemetry,
+                ModelGenerationSettings.stageEightDefaults());
+    }
+
+    /** 使用显式生成参数创建 Chat 模型，保证超时和输出上限可配置。 */
+    public DashScopeChatModelAdapter(String apiKey, String modelName, String baseUrl,
+                                     ObjectMapper objectMapper,
+                                     OptimizationTelemetryPort telemetry,
+                                     ModelGenerationSettings settings) {
+        this(apiKey, modelName, baseUrl, objectMapper, telemetry, settings,
+                GroundedPromptVariant.ORIGINAL);
+    }
+
+    /** 使用显式生成参数和知识回答 Prompt 版本创建 Chat 模型。 */
+    public DashScopeChatModelAdapter(String apiKey, String modelName, String baseUrl,
+                                     ObjectMapper objectMapper,
+                                     OptimizationTelemetryPort telemetry,
+                                     ModelGenerationSettings settings,
+                                     GroundedPromptVariant groundedPromptVariant) {
+        this.settings = settings;
+        this.grounded = new PromptTemplate(groundedPromptVariant.resource());
+        this.model = OpenAIChatModel.builder().apiKey(apiKey).modelName(modelName)
+                .baseUrl(AgentScopeDashScopeBaseUrl.openAiCompatible(baseUrl)).stream(true)
+                .generateOptions(options(settings.chatMaxOutputTokens())).build();
         this.objectMapper = objectMapper;
         this.telemetry = telemetry == null ? OptimizationTelemetryPort.noOp() : telemetry;
     }
@@ -93,11 +116,12 @@ public class DashScopeChatModelAdapter implements ChatModelPort {
         toolkit.registerTool(tool);
         ReActAgent agent = ReActAgent.builder().name("ticket-reader").model(model).toolkit(toolkit)
                 .maxIters(TICKET_AGENT_MAX_ITERATIONS)
+                .generateOptions(options(settings.chatMaxOutputTokens()))
                 .sysPrompt(ticketPrompt.render(Map.of("TICKET_NO", allowedTicketNo)))
                 .build();
         try (agent) {
             Msg response = agent.call("用户问题：" + message + "\n请查询：" + allowedTicketNo)
-                    .block(TIMEOUT);
+                    .block(settings.chatTimeout());
             if (response == null || response.getTextContent() == null || response.getTextContent().isBlank()
                     || tool.calls() != 1) {
                 throw unavailable(null);
@@ -114,7 +138,8 @@ public class DashScopeChatModelAdapter implements ChatModelPort {
     @Override
     public TicketDraft generateTicketDraft(String frozenContext) {
         ModelAnswer answer = generate(ticketDraft.render(Map.of()), frozenContext, List.of(),
-                () -> { }, ticketDraft.version());
+                () -> { }, ticketDraft.version(), settings.structuredMaxOutputTokens(),
+                settings.ticketTimeout());
         String[] lines = answer.text().split("\\R", 3);
         if (lines.length != 3) throw unavailable(null);
         return new TicketDraft(value(lines[0]), value(lines[1]), value(lines[2]));
@@ -133,6 +158,8 @@ public class DashScopeChatModelAdapter implements ChatModelPort {
                 .schema(schema).strict(true).build();
         String raw = generateRaw(resolvedCase.render(Map.of()), ticketFacts,
                 GenerateOptions.builder().temperature(0.0)
+                        .maxTokens(settings.structuredMaxOutputTokens())
+                        .additionalBodyParam("enable_thinking", false)
                         .responseFormat(ResponseFormat.jsonSchema(jsonSchema)).build());
         try {
             JsonNode node = objectMapper.readTree(raw);
@@ -149,6 +176,14 @@ public class DashScopeChatModelAdapter implements ChatModelPort {
     /** 内部消费原始流，只在完整响应生成后返回应用层。 */
     private ModelAnswer generate(String system, String user, List<String> recentTurns,
                                  Runnable firstTokenCallback, String promptVersion) {
+        return generate(system, user, recentTurns, firstTokenCallback, promptVersion,
+                settings.chatMaxOutputTokens(), settings.chatTimeout());
+    }
+
+    /** 使用指定输出上限和超时完整消费模型流。 */
+    private ModelAnswer generate(String system, String user, List<String> recentTurns,
+                                 Runnable firstTokenCallback, String promptVersion,
+                                 int maximumOutputTokens, Duration timeout) {
         AtomicBoolean first = new AtomicBoolean();
         AtomicReference<ChatUsage> usage = new AtomicReference<>();
         String history = recentTurns.isEmpty() ? "" : "历史上下文：\n" + String.join("\n", recentTurns) + "\n";
@@ -156,7 +191,7 @@ public class DashScopeChatModelAdapter implements ChatModelPort {
                 Msg.builder().role(MsgRole.USER).textContent(history + user).build());
         StringBuilder complete = new StringBuilder();
         try {
-            model.stream(messages, List.of(), GenerateOptions.builder().build()).doOnNext(response -> {
+            model.stream(messages, List.of(), options(maximumOutputTokens)).doOnNext(response -> {
                 if (response.getUsage() != null) usage.set(response.getUsage());
                 for (TextBlock block : response.getContent().stream()
                         .filter(TextBlock.class::isInstance).map(TextBlock.class::cast).toList()) {
@@ -165,7 +200,7 @@ public class DashScopeChatModelAdapter implements ChatModelPort {
                         complete.append(block.getText());
                     }
                 }
-            }).blockLast(TIMEOUT);
+            }).blockLast(timeout);
         } catch (RuntimeException exception) {
             throw unavailable(exception);
         }
@@ -188,7 +223,7 @@ public class DashScopeChatModelAdapter implements ChatModelPort {
                         .filter(TextBlock.class::isInstance).map(TextBlock.class::cast).toList()) {
                     if (block.getText() != null) complete.append(block.getText());
                 }
-            }).blockLast(Duration.ofSeconds(60));
+            }).blockLast(settings.resolvedCaseTimeout());
         } catch (RuntimeException exception) {
             throw unavailable(exception);
         }
@@ -199,6 +234,12 @@ public class DashScopeChatModelAdapter implements ChatModelPort {
 
     /** 去除工单草稿固定字段名。 */
     private String value(String line) { return line.replaceFirst("^[^：:]+[：:]\\s*", "").trim(); }
+
+    /** 创建关闭思考模式且带显式输出上限的通用生成参数。 */
+    private GenerateOptions options(int maximumOutputTokens) {
+        return GenerateOptions.builder().temperature(0.0).maxTokens(maximumOutputTokens)
+                .additionalBodyParam("enable_thinking", false).build();
+    }
 
     /** 记录 Chat Token 与字符聚合量，不保存任何正文。 */
     private void recordChatUsage(ChatUsage usage, long inputCharacters, long outputCharacters) {
