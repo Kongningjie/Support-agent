@@ -17,6 +17,7 @@ import org.springframework.boot.test.web.server.LocalServerPort;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
+import org.springframework.test.annotation.DirtiesContext;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.containers.GenericContainer;
@@ -27,6 +28,7 @@ import tools.jackson.databind.ObjectMapper;
 
 /** 验证开发环境无需 DashScope 密钥即可启动及健康分组的降级状态。 */
 @Testcontainers
+@DirtiesContext(classMode = DirtiesContext.ClassMode.AFTER_CLASS)
 @ActiveProfiles("dev")
 @SpringBootTest(classes = SupportAgentApplication.class,
         webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT,
@@ -113,10 +115,10 @@ class ApplicationStartupIT {
         HttpResponse<String> replayed = sendJson(client, "POST", "/api/v1/tickets/drafts", createBody);
         JsonNode createdJson = objectMapper.readTree(created.body());
         JsonNode replayedJson = objectMapper.readTree(replayed.body());
-        String ticketNo = createdJson.path("data").path("ticketNo").asText();
+        String ticketNo = createdJson.path("data").path("ticketNo").stringValue();
 
         assertEquals(201, created.statusCode());
-        assertEquals(ticketNo, replayedJson.path("data").path("ticketNo").asText());
+        assertEquals(ticketNo, replayedJson.path("data").path("ticketNo").stringValue());
         assertTrue(ticketNo.matches("T\\d{12}"));
         assertFalse(createdJson.path("data").has("id"));
 
@@ -134,7 +136,7 @@ class ApplicationStartupIT {
                         {"version":%d,"idempotencyKey":"%s"}
                         """.formatted(revisedVersion, "startup-it-submit-" + UUID.randomUUID()));
         JsonNode submittedJson = objectMapper.readTree(submitted.body());
-        assertEquals("OPEN", submittedJson.path("data").path("status").asText());
+        assertEquals("OPEN", submittedJson.path("data").path("status").stringValue());
 
         HttpResponse<String> page = get(client,
                 "/api/v1/tickets?status=OPEN&keyword=MySQL&page=1&size=20");
@@ -147,11 +149,11 @@ class ApplicationStartupIT {
                         {"closeReason":"用户确认关闭","version":%d,"idempotencyKey":"%s"}
                         """.formatted(openVersion, "startup-it-close-" + UUID.randomUUID()));
         assertEquals("CLOSED", objectMapper.readTree(closed.body())
-                .path("data").path("status").asText());
+                .path("data").path("status").stringValue());
 
         HttpResponse<String> details = get(client, "/api/v1/tickets/" + ticketNo);
         assertEquals("CLOSED", objectMapper.readTree(details.body())
-                .path("data").path("status").asText());
+                .path("data").path("status").stringValue());
     }
 
     /** 验证直接文本知识草稿的创建、幂等、分页、修改及软删除 HTTP 主路径。 */
@@ -168,11 +170,11 @@ class ApplicationStartupIT {
         HttpResponse<String> replayed = sendJson(client, "POST",
                 "/api/v1/knowledge/documents/text", createBody);
         JsonNode createdJson = objectMapper.readTree(created.body()).path("data");
-        String documentId = createdJson.path("documentId").asText();
+        String documentId = createdJson.path("documentId").stringValue();
 
         assertEquals(201, created.statusCode());
         assertEquals(documentId, objectMapper.readTree(replayed.body())
-                .path("data").path("documentId").asText());
+                .path("data").path("documentId").stringValue());
         assertTrue(documentId.matches("\\d+"));
 
         HttpResponse<String> page = get(client,

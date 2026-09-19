@@ -114,7 +114,10 @@ public class DashScopeChatModelAdapter implements ChatModelPort {
         TicketLookupTool tool = new TicketLookupTool(allowedTicketNo, ticket);
         Toolkit toolkit = new Toolkit();
         toolkit.registerTool(tool);
-        ReActAgent agent = ReActAgent.builder().name("ticket-reader").model(model).toolkit(toolkit)
+        ReActAgent agent = ReActAgent.builder()
+                .name("ticket-reader")
+                .model(model)
+                .toolkit(toolkit)
                 .maxIters(TICKET_AGENT_MAX_ITERATIONS)
                 .generateOptions(options(settings.chatMaxOutputTokens()))
                 .sysPrompt(ticketPrompt.render(Map.of("TICKET_NO", allowedTicketNo)))
@@ -166,7 +169,8 @@ public class DashScopeChatModelAdapter implements ChatModelPort {
             if (!node.isObject() || node.size() != 2 || !node.has("title") || !node.has("problem")) {
                 throw new IllegalArgumentException("案例结构化字段不完整");
             }
-            return new ResolvedCaseDraft(node.path("title").asText(), node.path("problem").asText());
+            return new ResolvedCaseDraft(node.path("title").stringValue(),
+                    node.path("problem").stringValue());
         } catch (RuntimeException exception) {
             throw new ModelInvocationException("CASE_GENERATION_SCHEMA_INVALID",
                     "案例结构化结果不合法", true, exception);
@@ -191,7 +195,8 @@ public class DashScopeChatModelAdapter implements ChatModelPort {
                 Msg.builder().role(MsgRole.USER).textContent(history + user).build());
         StringBuilder complete = new StringBuilder();
         try {
-            model.stream(messages, List.of(), options(maximumOutputTokens)).doOnNext(response -> {
+            model.stream(messages, List.of(), options(maximumOutputTokens))
+                    .doOnNext(response -> {
                 if (response.getUsage() != null) usage.set(response.getUsage());
                 for (TextBlock block : response.getContent().stream()
                         .filter(TextBlock.class::isInstance).map(TextBlock.class::cast).toList()) {

@@ -57,6 +57,13 @@ class ElasticsearchKnowledgeIndexAdapterIT {
             adapter.deleteVersion("MANAGED_DOCUMENT", 7L, 2L);
             assertFalse(adapter.sourceExists("MANAGED_DOCUMENT", 7L));
 
+            client.performRequest(new Request("DELETE", "/support_knowledge_v1"));
+            adapter.ensureReady();
+            assertFalse(adapter.sourceExists("MANAGED_DOCUMENT", 7L));
+            adapter.indexChunks(List.of(chunk));
+            assertTrue(adapter.verifyVersion("MANAGED_DOCUMENT", 7L, 2L,
+                    List.of(chunk.contentHash())));
+
             Request createOther = new Request("PUT", "/support_knowledge_other");
             createOther.setJsonEntity("{}");
             client.performRequest(createOther);

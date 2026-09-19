@@ -39,6 +39,39 @@ class InitialSchemaIT {
         }
     }
 
+    /** 在一次性测试容器内验证业务表数据可通过逻辑备份删除后完整恢复。 */
+    @Test
+    void shouldBackupAndRestoreBusinessData() throws Exception {
+        Flyway.configure().dataSource(MYSQL.getJdbcUrl(), MYSQL.getUsername(), MYSQL.getPassword())
+                .locations("classpath:db/migration").load().migrate();
+        String ticketNo = "T999999999999";
+        try (Connection connection = MYSQL.createConnection("");
+             Statement statement = connection.createStatement()) {
+            statement.executeUpdate("""
+                    INSERT INTO ticket(ticket_no,title,problem_description,status,created_by,
+                    created_at,updated_by,updated_at) VALUES ('T999999999999','恢复演练',
+                    '验证逻辑备份恢复','DRAFT','test',UTC_TIMESTAMP(6),'test',UTC_TIMESTAMP(6))
+                    """);
+        }
+        var backup = MYSQL.execInContainer("sh", "-c",
+                "mysqldump --no-create-info -u$MYSQL_USER -p$MYSQL_PASSWORD $MYSQL_DATABASE ticket > /tmp/ticket.sql");
+        assertEquals(0, backup.getExitCode());
+        try (Connection connection = MYSQL.createConnection("");
+             Statement statement = connection.createStatement()) {
+            statement.executeUpdate("DELETE FROM ticket WHERE ticket_no='" + ticketNo + "'");
+            assertEquals(0, count(statement,
+                    "SELECT COUNT(*) FROM ticket WHERE ticket_no='" + ticketNo + "'"));
+        }
+        var restore = MYSQL.execInContainer("sh", "-c",
+                "mysql -u$MYSQL_USER -p$MYSQL_PASSWORD $MYSQL_DATABASE < /tmp/ticket.sql");
+        assertEquals(0, restore.getExitCode());
+        try (Connection connection = MYSQL.createConnection("");
+             Statement statement = connection.createStatement()) {
+            assertEquals(1, count(statement,
+                    "SELECT COUNT(*) FROM ticket WHERE ticket_no='" + ticketNo + "'"));
+        }
+    }
+
     /** 执行只返回单个计数值的验证 SQL。 */
     private long count(Statement statement, String sql) throws Exception {
         try (ResultSet resultSet = statement.executeQuery(sql)) {

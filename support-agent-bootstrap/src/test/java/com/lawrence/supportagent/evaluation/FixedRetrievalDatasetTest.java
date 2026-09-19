@@ -73,7 +73,9 @@ class FixedRetrievalDatasetTest {
             String line;
             ObjectMapper mapper = new ObjectMapper();
             while ((line = reader.readLine()) != null) {
-                if (!line.isBlank()) values.add(mapper.readTree(line).path("sourceKey").asText());
+                if (!line.isBlank()) {
+                    values.add(mapper.readTree(line).path("sourceKey").stringValue());
+                }
             }
         } catch (java.io.IOException exception) {
             throw new IllegalStateException("固定检索语料无法读取", exception);

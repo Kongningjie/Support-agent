@@ -21,3 +21,6 @@ Docker 命令分别启动基础设施、查看健康状态以及停止容器但�
 `SUPPORT_AGENT_REDIS_PORT` 或 `SUPPORT_AGENT_ELASTICSEARCH_PORT` 后启动 Compose，
 并同步修改对应的应用连接地址。完整配置项及字段含义见项目根目录 `.env.example` 和
 实施方案文档。
+
+本地 MySQL 逻辑备份与恢复、Elasticsearch 索引丢失、Redis 数据丢失的处理步骤及当前
+能力边界见 [RECOVERY.md](RECOVERY.md)。

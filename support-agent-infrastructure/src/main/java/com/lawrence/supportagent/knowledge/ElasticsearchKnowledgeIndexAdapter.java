@@ -118,16 +118,17 @@ public class ElasticsearchKnowledgeIndexAdapter implements KnowledgeIndexPort, K
             JsonNode source = hit.path("_source");
             List<ExactTerm> terms = new ArrayList<>();
             for (JsonNode term : source.path("exactTerms")) {
-                terms.add(new ExactTerm(ExactTermType.valueOf(term.path("type").asText()),
-                        term.path("normalizedValue").asText(), term.path("displayValue").asText(),
+                terms.add(new ExactTerm(ExactTermType.valueOf(term.path("type").stringValue()),
+                        term.path("normalizedValue").stringValue(),
+                        term.path("displayValue").stringValue(),
                         term.path("sourceOffsetStart").asInt(), term.path("sourceOffsetEnd").asInt()));
             }
             Set<String> matches = new java.util.HashSet<>();
-            hit.path("matched_queries").forEach(value -> matches.add(value.asText()));
-            values.add(new RetrievalEvidence(source.path("chunkId").asText(),
-                    source.path("sourceType").asText(), source.path("sourceId").asLong(),
-                    source.path("sourceVersion").asLong(), source.path("title").asText(),
-                    source.path("headingPath").asText(), source.path("content").asText(),
+            hit.path("matched_queries").forEach(value -> matches.add(value.stringValue()));
+            values.add(new RetrievalEvidence(source.path("chunkId").stringValue(),
+                    source.path("sourceType").stringValue(), source.path("sourceId").asLong(),
+                    source.path("sourceVersion").asLong(), source.path("title").stringValue(),
+                    source.path("headingPath").stringValue(), source.path("content").stringValue(),
                     List.copyOf(terms), Set.copyOf(matches), null, null, 0, null));
         }
         return List.copyOf(values);
@@ -199,7 +200,7 @@ public class ElasticsearchKnowledgeIndexAdapter implements KnowledgeIndexPort, K
             return false;
         }
         List<String> actual = new ArrayList<>();
-        hits.forEach(hit -> actual.add(hit.path("_source").path("contentHash").asText()));
+        hits.forEach(hit -> actual.add(hit.path("_source").path("contentHash").stringValue()));
         return multiset(actual).equals(multiset(expectedContentHashes));
     }
 
@@ -260,11 +261,11 @@ public class ElasticsearchKnowledgeIndexAdapter implements KnowledgeIndexPort, K
         JsonNode mapping = root.path("mappings").path("properties");
         JsonNode analyzer = root.path("settings").path("index").path("analysis")
                 .path("analyzer").path(ICU_ANALYZER);
-        boolean valid = "strict".equals(root.path("mappings").path("dynamic").asText())
-                && "icu_tokenizer".equals(analyzer.path("tokenizer").asText())
-                && "support_icu".equals(mapping.path("content").path("analyzer").asText())
+        boolean valid = stringEquals(root.path("mappings").path("dynamic"), "strict")
+                && stringEquals(analyzer.path("tokenizer"), "icu_tokenizer")
+                && stringEquals(mapping.path("content").path("analyzer"), "support_icu")
                 && cjkMappingMatches(mapping)
-                && "nested".equals(mapping.path("exactTerms").path("type").asText())
+                && stringEquals(mapping.path("exactTerms").path("type"), "nested")
                 && mapping.path("embedding").path("dims").asInt() == 1024;
         if (!valid) {
             throw failure("KNOWLEDGE_INDEX_MAPPING_MISMATCH",
@@ -319,10 +320,15 @@ public class ElasticsearchKnowledgeIndexAdapter implements KnowledgeIndexPort, K
 
     /** 校验物理索引是否与当前分析配置具有相同的 CJK 辅助字段。 */
     private boolean cjkMappingMatches(JsonNode mapping) {
-        boolean hasCjk = "cjk".equals(mapping.path("content").path("fields")
-                .path("cjk").path("analyzer").asText());
+        boolean hasCjk = stringEquals(mapping.path("content").path("fields")
+                .path("cjk").path("analyzer"), "cjk");
         return retrievalParameters.analysisProfile() == RetrievalAnalysisProfile.ICU_WITH_CJK
                 ? hasCjk : !hasCjk;
+    }
+
+    /** 在字段缺失或类型错误时安全地返回不匹配，避免索引校验抛出 JSON 转换异常。 */
+    private boolean stringEquals(JsonNode node, String expected) {
+        return node.isString() && expected.equals(node.stringValue());
     }
 
     /** 把应用层分块转换为不包含空字段的索引文档。 */

@@ -19,6 +19,8 @@ import com.lawrence.supportagent.knowledge.DocumentInputType;
 import com.lawrence.supportagent.knowledge.ManagedDocument;
 import com.lawrence.supportagent.knowledge.port.ManagedDocumentRepository;
 import com.lawrence.supportagent.persistence.mapper.FoundationMapper;
+import com.lawrence.supportagent.persistence.mapper.AsyncTaskWorkflowMapper;
+import com.lawrence.supportagent.persistence.record.AsyncTaskMetricsDO;
 import com.lawrence.supportagent.persistence.repository.TicketMyBatisRepository;
 import com.lawrence.supportagent.resolvedcase.ResolvedCase;
 import com.lawrence.supportagent.resolvedcase.ResolvedCaseStatus;
@@ -83,6 +85,8 @@ class FoundationRepositoryIT {
     private ResolvedCaseRepository caseRepository;
     @Autowired
     private AsyncTaskRepository taskRepository;
+    @Autowired
+    private AsyncTaskWorkflowMapper taskWorkflowMapper;
     @Autowired
     private IdempotentExecutor idempotentExecutor;
 
@@ -342,6 +346,33 @@ class FoundationRepositoryIT {
         } finally {
             executor.shutdownNow();
         }
+    }
+
+    /** 验证 Outbox 指标 SQL 准确汇总积压、额外尝试、死亡任务和分钟吞吐。 */
+    @Test
+    void shouldAggregateOutboxOperationalMetrics() {
+        Instant now = Instant.now().truncatedTo(ChronoUnit.MICROS);
+        AsyncTaskMetricsDO before = taskWorkflowMapper.metrics(now.minusSeconds(60));
+        taskRepository.save(new AsyncTask(null, AsyncTaskType.KNOWLEDGE_INDEX,
+                AggregateType.MANAGED_DOCUMENT, 7001L, 1L, "metrics-pending:" + UUID.randomUUID(),
+                AsyncTaskStatus.PENDING, 0, 3, now, null, null, null, null,
+                null, null, "system", now.minusSeconds(30), null, null, now.minusSeconds(30)));
+        taskRepository.save(new AsyncTask(null, AsyncTaskType.KNOWLEDGE_DELETE,
+                AggregateType.MANAGED_DOCUMENT, 7002L, 1L, "metrics-dead:" + UUID.randomUUID(),
+                AsyncTaskStatus.DEAD, 3, 3, now, null, null, "TEST_DEAD", "测试死亡任务",
+                null, null, "system", now.minusSeconds(20), now.minusSeconds(19), now, now));
+        taskRepository.save(new AsyncTask(null, AsyncTaskType.KNOWLEDGE_DELETE,
+                AggregateType.MANAGED_DOCUMENT, 7003L, 1L, "metrics-success:" + UUID.randomUUID(),
+                AsyncTaskStatus.SUCCEEDED, 1, 3, now, null, null, null, null,
+                null, null, "system", now.minusSeconds(10), now.minusSeconds(9), now, now));
+
+        AsyncTaskMetricsDO after = taskWorkflowMapper.metrics(now.minusSeconds(60));
+
+        assertEquals(before.backlog + 1, after.backlog);
+        assertEquals(before.retryAttempts + 2, after.retryAttempts);
+        assertEquals(before.dead + 1, after.dead);
+        assertEquals(before.throughput + 1, after.throughput);
+        assertNotNull(after.oldestCreatedAt);
     }
 
     /** 等待并发起点后用指定 Worker 抢占一批到期任务。 */

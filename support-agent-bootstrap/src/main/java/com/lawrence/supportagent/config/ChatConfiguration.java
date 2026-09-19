@@ -38,6 +38,7 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import tools.jackson.databind.ObjectMapper;
+import java.time.Duration;
 
 /** 装配阶段四聊天、混合检索、模型适配和会话审计能力。 */
 @Configuration
@@ -68,11 +69,18 @@ public class ChatConfiguration {
                                                   OptimizationTelemetryPort telemetry) {
         var config = properties.dashscope();
         return new DashScopeRerankModelAdapter(config.apiKey(), config.rerankModel(),
-                config.baseUrl(), telemetry);
+                config.baseUrl(), telemetry, config.rerankTimeout(),
+                config.retryMaxAttempts(), config.retryInitialDelay());
     }
     /** 创建会话和建议 Redis 适配器。 */
-    @Bean public ConversationStorePort conversationStorePort(StringRedisTemplate redis, ObjectMapper mapper) {
-        return new RedisConversationStoreAdapter(redis, mapper);
+    @Bean public ConversationStorePort conversationStorePort(
+            StringRedisTemplate redis, ObjectMapper mapper,
+            @Value("${support-agent.conversation.ttl:7d}") Duration conversationTtl,
+            @Value("${support-agent.conversation.suggestion-ttl:24h}") Duration suggestionTtl,
+            @Value("${support-agent.conversation.run-lease:3m}") Duration runLease,
+            @Value("${support-agent.conversation.suggestion-lease:3m}") Duration suggestionLease) {
+        return new RedisConversationStoreAdapter(redis, mapper, conversationTtl,
+                suggestionTtl, runLease, suggestionLease);
     }
     /** 创建 MySQL Agent 安全审计适配器。 */
     @Bean public AgentAuditPort agentAuditPort(AgentAuditMapper mapper, ObjectMapper json) {
@@ -129,11 +137,13 @@ public class ChatConfiguration {
                                          AnswerValidator validator, UuidGenerator ids, TimeProvider time,
                                          SupportAgentProperties properties,
                                          RetrievalParameters parameters,
-                                         OptimizationTelemetryPort telemetry) {
+                                         OptimizationTelemetryPort telemetry,
+                                         @Value("${support-agent.conversation.suggestion-ttl:24h}")
+                                         Duration suggestionTtl) {
         var config = properties.dashscope();
         return new ChatUseCase(intents, retrieval, model, tickets, conversations, audits, validator,
                 ids, time, config.chatModel(), config.embeddingModel(), config.rerankModel(),
-                parameters.groundedThreshold(), telemetry);
+                parameters.groundedThreshold(), telemetry, suggestionTtl);
     }
 
     /** 将启动模块配置转换为模型适配层不可变生成参数。 */

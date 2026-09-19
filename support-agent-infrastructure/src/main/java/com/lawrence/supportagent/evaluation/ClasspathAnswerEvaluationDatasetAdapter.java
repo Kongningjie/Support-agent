@@ -156,10 +156,10 @@ public class ClasspathAnswerEvaluationDatasetAdapter implements AnswerEvaluation
     /** 读取必填非空字符串。 */
     private String required(JsonNode node, String name) {
         JsonNode value = node.path(name);
-        if (!value.isString() || value.asText().isBlank()) {
+        if (!value.isString() || value.stringValue().isBlank()) {
             throw new IllegalArgumentException(name + " 不能为空");
         }
-        return value.asText();
+        return value.stringValue();
     }
 
     /** 读取必填布尔值。 */
@@ -174,10 +174,10 @@ public class ClasspathAnswerEvaluationDatasetAdapter implements AnswerEvaluation
         if (!node.isArray()) throw new IllegalArgumentException("回答评测列表字段必须是数组");
         List<String> values = new ArrayList<>();
         node.forEach(value -> {
-            if (!value.isString() || value.asText().isBlank()) {
+            if (!value.isString() || value.stringValue().isBlank()) {
                 throw new IllegalArgumentException("回答评测列表元素不能为空");
             }
-            values.add(value.asText());
+            values.add(value.stringValue());
         });
         return List.copyOf(values);
     }

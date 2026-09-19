@@ -21,24 +21,30 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.TimeoutException;
 
 /** 使用 DashScope 官方 Java SDK 批量生成 1024 维文本向量。 */
 public class DashScopeEmbeddingModelAdapter implements EmbeddingModelPort, AutoCloseable {
     private static final int DIMENSIONS = 1024;
     private static final int MAX_BATCH_SIZE = 10;
-    private static final int MAX_CALL_ATTEMPTS = 3;
-    private static final Duration CALL_TIMEOUT = Duration.ofSeconds(10);
+    private static final int DEFAULT_MAX_CALL_ATTEMPTS = 3;
+    private static final Duration DEFAULT_CALL_TIMEOUT = Duration.ofSeconds(10);
+    private static final Duration DEFAULT_RETRY_INITIAL_DELAY = Duration.ofMillis(100);
     private final String apiKey;
     private final String modelName;
     private final SdkCaller sdkCaller;
     private final OptimizationTelemetryPort telemetry;
+    private final Duration callTimeout;
+    private final int maxCallAttempts;
+    private final Duration retryInitialDelay;
     private final ExecutorService calls = Executors.newVirtualThreadPerTaskExecutor();
 
     /** 保存不会写入日志的 API 密钥和冻结模型名称。 */
     public DashScopeEmbeddingModelAdapter(String apiKey, String modelName) {
         this(apiKey, modelName, param -> new TextEmbedding().call(param),
-                OptimizationTelemetryPort.noOp());
+                OptimizationTelemetryPort.noOp(), DEFAULT_CALL_TIMEOUT,
+                DEFAULT_MAX_CALL_ATTEMPTS, DEFAULT_RETRY_INITIAL_DELAY);
     }
 
     /** 使用显式 Base URL 构造 Embedding 客户端。 */
@@ -49,21 +55,45 @@ public class DashScopeEmbeddingModelAdapter implements EmbeddingModelPort, AutoC
     /** 使用显式 Base URL 和低基数遥测端口构造 Embedding 客户端。 */
     public DashScopeEmbeddingModelAdapter(String apiKey, String modelName, String baseUrl,
                                            OptimizationTelemetryPort telemetry) {
-        this(apiKey, modelName, param -> new TextEmbedding(baseUrl).call(param), telemetry);
+        this(apiKey, modelName, baseUrl, telemetry, DEFAULT_CALL_TIMEOUT,
+                DEFAULT_MAX_CALL_ATTEMPTS, DEFAULT_RETRY_INITIAL_DELAY);
+    }
+
+    /** 使用显式 Base URL、遥测端口、总超时和有限重试策略构造适配器。 */
+    public DashScopeEmbeddingModelAdapter(String apiKey, String modelName, String baseUrl,
+                                           OptimizationTelemetryPort telemetry,
+                                           Duration callTimeout, int maxCallAttempts,
+                                           Duration retryInitialDelay) {
+        this(apiKey, modelName, param -> new TextEmbedding(baseUrl).call(param), telemetry,
+                callTimeout, maxCallAttempts, retryInitialDelay);
     }
 
     /** 注入测试可替换的官方 SDK 调用边界。 */
     DashScopeEmbeddingModelAdapter(String apiKey, String modelName, SdkCaller sdkCaller) {
-        this(apiKey, modelName, sdkCaller, OptimizationTelemetryPort.noOp());
+        this(apiKey, modelName, sdkCaller, OptimizationTelemetryPort.noOp(),
+                DEFAULT_CALL_TIMEOUT, DEFAULT_MAX_CALL_ATTEMPTS,
+                DEFAULT_RETRY_INITIAL_DELAY);
     }
 
     /** 注入测试可替换的 SDK 调用边界和遥测端口。 */
     DashScopeEmbeddingModelAdapter(String apiKey, String modelName, SdkCaller sdkCaller,
                                    OptimizationTelemetryPort telemetry) {
+        this(apiKey, modelName, sdkCaller, telemetry, DEFAULT_CALL_TIMEOUT,
+                DEFAULT_MAX_CALL_ATTEMPTS, DEFAULT_RETRY_INITIAL_DELAY);
+    }
+
+    /** 注入可替换调用边界以及显式超时和重试参数。 */
+    DashScopeEmbeddingModelAdapter(String apiKey, String modelName, SdkCaller sdkCaller,
+                                   OptimizationTelemetryPort telemetry, Duration callTimeout,
+                                   int maxCallAttempts, Duration retryInitialDelay) {
+        validateOperationalSettings(callTimeout, maxCallAttempts, retryInitialDelay);
         this.apiKey = apiKey;
         this.modelName = modelName;
         this.sdkCaller = sdkCaller;
         this.telemetry = telemetry == null ? OptimizationTelemetryPort.noOp() : telemetry;
+        this.callTimeout = callTimeout;
+        this.maxCallAttempts = maxCallAttempts;
+        this.retryInitialDelay = retryInitialDelay;
     }
 
     /** {@inheritDoc} */
@@ -99,18 +129,19 @@ public class DashScopeEmbeddingModelAdapter implements EmbeddingModelPort, AutoC
         calls.close();
     }
 
-    /** 在十秒超时和最多两次重试约束下调用一个不超过十条的批次。 */
+    /** 按配置的总超时和有限抖动重试调用一个不超过十条的批次。 */
     private List<List<Double>> callBatch(List<String> inputs, TextEmbeddingParam.TextType textType) {
         requireConfigured();
         ModelInvocationException lastFailure = null;
-        for (int attempt = 1; attempt <= MAX_CALL_ATTEMPTS; attempt++) {
+        for (int attempt = 1; attempt <= maxCallAttempts; attempt++) {
             try {
                 return timedCall(inputs, textType);
             } catch (ModelInvocationException exception) {
                 lastFailure = exception;
-                if (!exception.retryable() || attempt == MAX_CALL_ATTEMPTS) {
+                if (!exception.retryable() || attempt == maxCallAttempts) {
                     throw exception;
                 }
+                awaitRetry(attempt);
             }
         }
         throw lastFailure;
@@ -122,7 +153,7 @@ public class DashScopeEmbeddingModelAdapter implements EmbeddingModelPort, AutoC
         long started = System.nanoTime();
         Future<List<List<Double>>> future = calls.submit(() -> invokeSdk(inputs, textType));
         try {
-            List<List<Double>> result = future.get(CALL_TIMEOUT.toMillis(), TimeUnit.MILLISECONDS);
+            List<List<Double>> result = future.get(callTimeout.toMillis(), TimeUnit.MILLISECONDS);
             telemetry.recordDuration(Operation.EMBEDDING, elapsed(started), true);
             return result;
         } catch (TimeoutException exception) {
@@ -134,7 +165,7 @@ public class DashScopeEmbeddingModelAdapter implements EmbeddingModelPort, AutoC
             Thread.currentThread().interrupt();
             telemetry.recordDuration(Operation.EMBEDDING, elapsed(started), false);
             throw new ModelInvocationException("EMBEDDING_INTERRUPTED",
-                    "Embedding 调用被中断", true, exception);
+                    "Embedding 调用被中断", false, exception);
         } catch (ExecutionException exception) {
             telemetry.recordDuration(Operation.EMBEDDING, elapsed(started), false);
             throw classify(exception.getCause());
@@ -217,6 +248,29 @@ public class DashScopeEmbeddingModelAdapter implements EmbeddingModelPort, AutoC
         if (apiKey == null || apiKey.isBlank()) {
             throw new ModelInvocationException("DASHSCOPE_NOT_CONFIGURED",
                     "当前环境未配置 DashScope 密钥", false, null);
+        }
+    }
+
+    /** 在指数退避基础上增加零到基础延迟的随机抖动，避免并发请求同步重试。 */
+    private void awaitRetry(int failedAttempt) {
+        long multiplier = 1L << Math.min(failedAttempt - 1, 10);
+        long baseMillis = Math.multiplyExact(retryInitialDelay.toMillis(), multiplier);
+        long jitterMillis = ThreadLocalRandom.current().nextLong(baseMillis + 1);
+        try {
+            Thread.sleep(baseMillis + jitterMillis);
+        } catch (InterruptedException exception) {
+            Thread.currentThread().interrupt();
+            throw new ModelInvocationException("EMBEDDING_INTERRUPTED",
+                    "Embedding 重试等待被中断", false, exception);
+        }
+    }
+
+    /** 校验适配器运行参数，测试直连构造也不得绕过启动配置约束。 */
+    private void validateOperationalSettings(Duration timeout, int attempts, Duration delay) {
+        if (timeout == null || timeout.isZero() || timeout.isNegative()
+                || attempts < 1 || attempts > 3 || delay == null
+                || delay.isZero() || delay.isNegative()) {
+            throw new IllegalArgumentException("Embedding 超时或重试配置不合法");
         }
     }
 

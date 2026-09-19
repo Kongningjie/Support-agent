@@ -26,6 +26,7 @@ import com.lawrence.supportagent.resolvedcase.ResolvedCaseQueryUseCase;
 import com.lawrence.supportagent.resolvedcase.port.ResolvedCaseRepository;
 import com.lawrence.supportagent.retrieval.RetrievalParameters;
 import java.net.URI;
+import org.apache.hc.core5.util.Timeout;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import tools.jackson.databind.ObjectMapper;
@@ -75,13 +76,24 @@ public class KnowledgeConfiguration {
                                                   OptimizationTelemetryPort telemetry) {
         SupportAgentProperties.DashScope config = properties.dashscope();
         return new DashScopeEmbeddingModelAdapter(config.apiKey(), config.embeddingModel(),
-                config.baseUrl(), telemetry);
+                config.baseUrl(), telemetry, config.embeddingTimeout(),
+                config.retryMaxAttempts(), config.retryInitialDelay());
     }
 
     /** 创建 Elasticsearch REST5 客户端；索引仍由首个任务惰性检查。 */
     @Bean(destroyMethod = "close")
     public Rest5Client elasticsearchRest5Client(SupportAgentProperties properties) {
-        return Rest5Client.builder(URI.create(properties.elasticsearch().url())).build();
+        SupportAgentProperties.Elasticsearch config = properties.elasticsearch();
+        return Rest5Client.builder(URI.create(config.url()))
+                .setConnectionConfigCallback(builder -> builder.setConnectTimeout(
+                        Timeout.ofMilliseconds(config.connectTimeout().toMillis())))
+                .setRequestConfigCallback(builder -> builder
+                        .setConnectionRequestTimeout(Timeout.ofMilliseconds(
+                                config.connectionRequestTimeout().toMillis()))
+                        .setResponseTimeout(Timeout.ofMilliseconds(
+                                config.responseTimeout().toMillis()))
+                        .setHardCancellationEnabled(true))
+                .build();
     }
 
     /** 创建知识索引持久化端口。 */

@@ -20,7 +20,11 @@ import com.lawrence.supportagent.ticket.SuggestedTicketUseCase;
 import com.lawrence.supportagent.chat.port.ConversationStorePort;
 import com.lawrence.supportagent.model.ChatModelPort;
 import com.lawrence.supportagent.ticket.port.TicketRepository;
+import java.time.Duration;
+import java.util.Arrays;
 import java.util.List;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.boot.convert.DurationStyle;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -68,9 +72,14 @@ public class UseCaseConfiguration {
     public AsyncTaskRunner asyncTaskRunner(AsyncTaskRepository repository,
                                             AsyncTaskCompletionPort completionPort,
                                             TimeProvider timeProvider,
-                                            ObjectProvider<AsyncTaskHandler> handlers) {
+                                            ObjectProvider<AsyncTaskHandler> handlers,
+                                            @Value("${support-agent.async-task.retry-delays:30s,2m,10m}")
+                                            String retryDelays,
+                                            @Value("${support-agent.async-task.lease-duration:5m}")
+                                            Duration leaseDuration) {
         List<AsyncTaskHandler> availableHandlers = handlers.orderedStream().toList();
-        return new AsyncTaskRunner(repository, completionPort, timeProvider, availableHandlers);
+        return new AsyncTaskRunner(repository, completionPort, timeProvider, availableHandlers,
+                parseDurations(retryDelays), leaseDuration);
     }
 
     /** 创建任务查询、取消及人工重试用例。 */
@@ -99,5 +108,18 @@ public class UseCaseConfiguration {
             TicketRepository tickets, ResolvedCaseRepository cases,
             ChatModelPort model, ExactTermExtractor terms, TimeProvider time) {
         return new ResolvedCaseGenerationTaskHandler(tickets, cases, model, terms, time);
+    }
+
+    /** 解析逗号分隔的 Spring 简写或 ISO-8601 时长并拒绝空元素。 */
+    private List<Duration> parseDurations(String values) {
+        if (values == null || values.isBlank()) {
+            throw new IllegalArgumentException("异步任务重试间隔不能为空");
+        }
+        return Arrays.stream(values.split(",", -1)).map(String::trim).map(value -> {
+            if (value.isEmpty()) {
+                throw new IllegalArgumentException("异步任务重试间隔不能包含空值");
+            }
+            return DurationStyle.detectAndParse(value);
+        }).toList();
     }
 }

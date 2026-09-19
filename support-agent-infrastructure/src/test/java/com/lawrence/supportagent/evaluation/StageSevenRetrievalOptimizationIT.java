@@ -389,11 +389,11 @@ class StageSevenRetrievalOptimizationIT {
         for (String line : new String(bytes, StandardCharsets.UTF_8).lines().toList()) {
             if (line.isBlank()) continue;
             JsonNode node = mapper.readTree(line);
-            String legacyId = node.path("sourceId").asText();
+            String legacyId = node.path("sourceId").stringValue();
             String[] parts = legacyId.split(":", 2);
             long sourceId = Long.parseLong(parts[1]);
-            String title = node.path("title").asText();
-            String content = node.path("content").asText();
+            String title = node.path("title").stringValue();
+            String content = node.path("content").stringValue();
             chunks.add(new IndexedKnowledgeChunk(parts[0] + ":" + sourceId + ":1:0",
                     parts[0], sourceId, 1, 0, title, title, content,
                     extractor.extract(content), "stage7-hash-" + sequence++,

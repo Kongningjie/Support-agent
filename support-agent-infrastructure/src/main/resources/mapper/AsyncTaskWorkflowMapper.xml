@@ -23,6 +23,21 @@
         </where>
     </sql>
 
+    <select id="metrics"
+            resultType="com.lawrence.supportagent.persistence.record.AsyncTaskMetricsDO">
+        SELECT
+            COALESCE(SUM(CASE WHEN status IN ('PENDING', 'RUNNING', 'RETRY_WAIT') THEN 1 ELSE 0 END), 0)
+                AS backlog,
+            MIN(CASE WHEN status IN ('PENDING', 'RUNNING', 'RETRY_WAIT')
+                THEN created_at ELSE NULL END) AS oldest_created_at,
+            COALESCE(SUM(CASE WHEN attempt_count &gt; 1 THEN attempt_count - 1 ELSE 0 END), 0)
+                AS retry_attempts,
+            COALESCE(SUM(CASE WHEN status = 'DEAD' THEN 1 ELSE 0 END), 0) AS dead,
+            COALESCE(SUM(CASE WHEN status = 'SUCCEEDED' AND finished_at &gt;= #{throughputSince}
+                THEN 1 ELSE 0 END), 0) AS throughput
+        FROM async_task
+    </select>
+
     <select id="findPage" resultType="com.lawrence.supportagent.persistence.record.AsyncTaskDO">
         SELECT <include refid="taskColumns"/>
         FROM async_task

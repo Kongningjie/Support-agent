@@ -11,21 +11,35 @@ import java.util.Map;
 
 /** 在事务外分派已抢占任务，并以稳定规则回写成功、重试或死亡状态。 */
 public class AsyncTaskRunner {
-    private static final List<Duration> RETRY_DELAYS = List.of(
+    private static final List<Duration> DEFAULT_RETRY_DELAYS = List.of(
             Duration.ofSeconds(30), Duration.ofMinutes(2), Duration.ofMinutes(10));
+    private static final Duration DEFAULT_LEASE_DURATION = Duration.ofMinutes(5);
     private final AsyncTaskRepository repository;
     private final AsyncTaskCompletionPort completionPort;
     private final TimeProvider timeProvider;
     private final Map<AsyncTaskType, List<AsyncTaskHandler>> handlers;
+    private final List<Duration> retryDelays;
+    private final Duration leaseDuration;
 
     /** 注入任务仓储、统一时间和可为空的生产 Handler 集合。 */
     public AsyncTaskRunner(AsyncTaskRepository repository, AsyncTaskCompletionPort completionPort,
                            TimeProvider timeProvider,
                            List<AsyncTaskHandler> handlers) {
+        this(repository, completionPort, timeProvider, handlers,
+                DEFAULT_RETRY_DELAYS, DEFAULT_LEASE_DURATION);
+    }
+
+    /** 注入任务依赖以及显式退避序列和续租时长。 */
+    public AsyncTaskRunner(AsyncTaskRepository repository, AsyncTaskCompletionPort completionPort,
+                           TimeProvider timeProvider, List<AsyncTaskHandler> handlers,
+                           List<Duration> retryDelays, Duration leaseDuration) {
+        validateOperationalSettings(retryDelays, leaseDuration);
         this.repository = repository;
         this.completionPort = completionPort;
         this.timeProvider = timeProvider;
         this.handlers = indexHandlers(handlers);
+        this.retryDelays = List.copyOf(retryDelays);
+        this.leaseDuration = leaseDuration;
     }
 
     /** 执行单个已抢占任务；缺失或路由冲突时直接记录不可重试死亡。 */
@@ -71,10 +85,10 @@ public class AsyncTaskRunner {
                 successMutation == null ? AsyncTaskBusinessMutation.NONE : successMutation);
     }
 
-    /** 为仍由指定 Worker 持有的运行中任务续租五分钟。 */
+    /** 按配置时长为仍由指定 Worker 持有的运行中任务续租。 */
     public boolean renewLease(long taskId, String workerId) {
         Instant now = timeProvider.now();
-        return repository.renewLease(taskId, workerId, now.plus(Duration.ofMinutes(5)), now);
+        return repository.renewLease(taskId, workerId, now.plus(leaseDuration), now);
     }
 
     /** 根据异常可重试性和当前尝试次数计算并保存失败状态。 */
@@ -93,10 +107,10 @@ public class AsyncTaskRunner {
                 failed.lastErrorCode(), failed.lastErrorMessage(), failed.finishedAt(), now, mutation);
     }
 
-    /** 按从 1 开始的尝试次数返回冻结退避时长。 */
+    /** 按从 1 开始的尝试次数返回配置退避时长，超出序列后沿用最后一项。 */
     private Duration retryDelay(int attemptCount) {
-        int index = Math.max(0, Math.min(attemptCount - 1, RETRY_DELAYS.size() - 1));
-        return RETRY_DELAYS.get(index);
+        int index = Math.max(0, Math.min(attemptCount - 1, retryDelays.size() - 1));
+        return retryDelays.get(index);
     }
 
     /** 建立任务类型到按聚合继续路由的 Handler 不可变索引。 */
@@ -111,5 +125,15 @@ public class AsyncTaskRunner {
         Map<AsyncTaskType, List<AsyncTaskHandler>> immutable = new EnumMap<>(AsyncTaskType.class);
         indexed.forEach((type, handlers) -> immutable.put(type, List.copyOf(handlers)));
         return Map.copyOf(immutable);
+    }
+
+    /** 校验任务退避和租约参数，防止零时长热循环或负时间。 */
+    private void validateOperationalSettings(List<Duration> delays, Duration lease) {
+        if (delays == null || delays.isEmpty() || delays.size() > 10
+                || delays.stream().anyMatch(value -> value == null || value.isZero()
+                        || value.isNegative())
+                || lease == null || lease.isZero() || lease.isNegative()) {
+            throw new IllegalArgumentException("异步任务退避或租约配置不合法");
+        }
     }
 }

@@ -158,8 +158,8 @@ class StageSevenRetrievalOnlineIT {
                     .lines().toList()) {
                 if (line.isBlank()) continue;
                 JsonNode node = mapper.readTree(line);
-                rows.add(new CorpusRow(node.path("sourceId").asText(),
-                        node.path("title").asText(), node.path("content").asText()));
+                rows.add(new CorpusRow(node.path("sourceId").stringValue(),
+                        node.path("title").stringValue(), node.path("content").stringValue()));
             }
         }
         List<List<Double>> vectors = embeddings.embedDocuments(rows.stream()

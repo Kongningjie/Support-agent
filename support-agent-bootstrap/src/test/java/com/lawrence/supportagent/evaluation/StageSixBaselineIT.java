@@ -50,6 +50,7 @@ import org.springframework.context.annotation.Primary;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
+import org.springframework.test.annotation.DirtiesContext;
 import org.testcontainers.containers.GenericContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
@@ -59,6 +60,7 @@ import tools.jackson.databind.ObjectMapper;
 
 /** 使用真实 HTTP/SSE、MySQL 和 Redis 执行阶段六确定性容量基线。 */
 @Testcontainers
+@DirtiesContext(classMode = DirtiesContext.ClassMode.AFTER_CLASS)
 @ActiveProfiles("dev")
 @Import(StageSixBaselineIT.DeterministicAdapterConfiguration.class)
 @SpringBootTest(classes = SupportAgentApplication.class,

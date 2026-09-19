@@ -198,8 +198,10 @@ public class ClasspathRetrievalEvaluationDatasetAdapter implements RetrievalEval
     /** 读取必填非空文本字段。 */
     private String required(JsonNode node, String name) {
         JsonNode value = node.path(name);
-        if (!value.isString() || value.asText().isBlank()) throw new IllegalArgumentException(name + " 不能为空");
-        return value.asText();
+        if (!value.isString() || value.stringValue().isBlank()) {
+            throw new IllegalArgumentException(name + " 不能为空");
+        }
+        return value.stringValue();
     }
 
     /** 读取只包含非空字符串的数组字段。 */
@@ -207,8 +209,10 @@ public class ClasspathRetrievalEvaluationDatasetAdapter implements RetrievalEval
         if (!node.isArray()) throw new IllegalArgumentException("评测列表字段必须是数组");
         List<String> values = new ArrayList<>();
         node.forEach(value -> {
-            if (!value.isString() || value.asText().isBlank()) throw new IllegalArgumentException("评测列表元素不能为空");
-            values.add(value.asText());
+            if (!value.isString() || value.stringValue().isBlank()) {
+                throw new IllegalArgumentException("评测列表元素不能为空");
+            }
+            values.add(value.stringValue());
         });
         return List.copyOf(values);
     }

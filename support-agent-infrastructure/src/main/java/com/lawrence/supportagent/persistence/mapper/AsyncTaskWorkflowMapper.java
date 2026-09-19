@@ -1,6 +1,7 @@
 package com.lawrence.supportagent.persistence.mapper;
 
 import com.lawrence.supportagent.persistence.record.AsyncTaskDO;
+import com.lawrence.supportagent.persistence.record.AsyncTaskMetricsDO;
 import java.time.Instant;
 import java.util.List;
 import org.apache.ibatis.annotations.Mapper;
@@ -9,6 +10,9 @@ import org.apache.ibatis.annotations.Param;
 /** 提供异步任务分页、跳锁抢占、续租和条件完成 SQL。 */
 @Mapper
 public interface AsyncTaskWorkflowMapper {
+    /** 汇总 Outbox 积压、等待、重试、死亡任务和窗口吞吐指标。 */
+    AsyncTaskMetricsDO metrics(@Param("throughputSince") Instant throughputSince);
+
     /** 按过滤条件和固定排序查询一页任务。 */
     List<AsyncTaskDO> findPage(@Param("taskType") String taskType,
                                @Param("status") String status,

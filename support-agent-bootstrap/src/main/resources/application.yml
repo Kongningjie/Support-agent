@@ -4,13 +4,26 @@ spring:
   profiles:
     default: dev
   datasource:
-    url: ${SUPPORT_AGENT_MYSQL_URL:jdbc:mysql://localhost:3306/support_agent?useUnicode=true&characterEncoding=utf8&serverTimezone=UTC}
+    # MySQL 驱动连接和读取超时，单位毫秒；避免网络半开时无限占用请求线程。
+    url: ${SUPPORT_AGENT_MYSQL_URL:jdbc:mysql://localhost:3306/support_agent?useUnicode=true&characterEncoding=utf8&serverTimezone=UTC&connectTimeout=5000&socketTimeout=30000}
     username: ${SUPPORT_AGENT_MYSQL_USERNAME:support_agent}
     password: ${SUPPORT_AGENT_MYSQL_PASSWORD:}
+    hikari:
+      # 从连接池取得连接的最大等待时间，Hikari 原生单位为毫秒。
+      connection-timeout: ${SUPPORT_AGENT_MYSQL_POOL_TIMEOUT:5000}
+      # 检查数据库连接有效性的最大等待时间，Hikari 原生单位为毫秒。
+      validation-timeout: ${SUPPORT_AGENT_MYSQL_VALIDATION_TIMEOUT:3000}
   data:
     redis:
       url: ${SUPPORT_AGENT_REDIS_URL:redis://localhost:6379}
       password: ${SUPPORT_AGENT_REDIS_PASSWORD:}
+      # 建立 Redis TCP 连接的最大等待时间。
+      connect-timeout: ${SUPPORT_AGENT_REDIS_CONNECT_TIMEOUT:2s}
+      # 单条 Redis 命令等待响应的最大时间。
+      timeout: ${SUPPORT_AGENT_REDIS_COMMAND_TIMEOUT:3s}
+      lettuce:
+        # 应用关闭时等待 Lettuce 资源结束的时间。
+        shutdown-timeout: ${SUPPORT_AGENT_REDIS_SHUTDOWN_TIMEOUT:2s}
   flyway:
     enabled: true
     locations: classpath:db/migration
@@ -41,6 +54,14 @@ support-agent:
     ticket-timeout: ${SUPPORT_AGENT_TICKET_TIMEOUT:30s}
     # 已解决案例结构化生成单次超时。
     resolved-case-timeout: ${SUPPORT_AGENT_RESOLVED_CASE_TIMEOUT:60s}
+    # 单批 Embedding 调用总超时，超时后取消等待并按安全重试策略处理。
+    embedding-timeout: ${SUPPORT_AGENT_EMBEDDING_TIMEOUT:10s}
+    # 单次 Rerank 网络读取超时。
+    rerank-timeout: ${SUPPORT_AGENT_RERANK_TIMEOUT:10s}
+    # Embedding 与 Rerank 为幂等只读调用，最多尝试三次。
+    retry-max-attempts: ${SUPPORT_AGENT_MODEL_RETRY_MAX_ATTEMPTS:3}
+    # 首次安全重试前的基础退避时间，实际等待会附加随机抖动。
+    retry-initial-delay: ${SUPPORT_AGENT_MODEL_RETRY_INITIAL_DELAY:100ms}
     # 普通问候、知识回答和工单查询的最大输出 Token。
     chat-max-output-tokens: ${SUPPORT_AGENT_CHAT_MAX_OUTPUT_TOKENS:1200}
     # 意图结构化识别的最大输出 Token。
@@ -55,6 +76,12 @@ support-agent:
     password: ${SUPPORT_AGENT_ELASTICSEARCH_PASSWORD:}
     knowledge-index: ${SUPPORT_AGENT_KNOWLEDGE_INDEX:support_knowledge_v1}
     knowledge-alias: ${SUPPORT_AGENT_KNOWLEDGE_ALIAS:support_knowledge_current}
+    # 建立 Elasticsearch TCP 连接的最大等待时间。
+    connect-timeout: ${SUPPORT_AGENT_ELASTICSEARCH_CONNECT_TIMEOUT:2s}
+    # 从 Elasticsearch HTTP 连接池取得连接的最大等待时间。
+    connection-request-timeout: ${SUPPORT_AGENT_ELASTICSEARCH_CONNECTION_REQUEST_TIMEOUT:2s}
+    # 等待 Elasticsearch 完整响应的最大时间。
+    response-timeout: ${SUPPORT_AGENT_ELASTICSEARCH_RESPONSE_TIMEOUT:10s}
   retrieval:
     # BM25 分支最多返回的候选数，允许 1～1000。
     bm25-top-k: ${SUPPORT_AGENT_BM25_TOP_K:30}
@@ -93,6 +120,20 @@ support-agent:
     batch-size: 10
     concurrency: 2
     lease-duration: 5m
+    # 可重试任务每次失败后的退避序列；超过序列长度时沿用最后一项。
+    retry-delays: ${SUPPORT_AGENT_ASYNC_TASK_RETRY_DELAYS:30s,2m,10m}
+  conversation:
+    # 会话及完成消息的空闲保留时间。
+    ttl: ${SUPPORT_AGENT_CONVERSATION_TTL:7d}
+    # 工单建议从生成到允许消费的有效时间。
+    suggestion-ttl: ${SUPPORT_AGENT_SUGGESTION_TTL:24h}
+    # 单次聊天执行权租约，必须短于会话保留时间。
+    run-lease: ${SUPPORT_AGENT_CHAT_RUN_LEASE:3m}
+    # 工单建议消费租约，必须短于建议有效时间。
+    suggestion-lease: ${SUPPORT_AGENT_SUGGESTION_LEASE:3m}
+  observability:
+    # Outbox 指标写入本地 Gauge 的采样周期；指标抓取本身不会访问数据库。
+    outbox-sample-delay: ${SUPPORT_AGENT_OUTBOX_SAMPLE_DELAY:10s}
 
 management:
   info:

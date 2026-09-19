@@ -43,10 +43,15 @@ public class DashScopeIntentRecognitionAdapter implements IntentRecognitionPort 
         String rendered = prompt.render(Map.of("HISTORY", String.join("\n", recentTurns), "MESSAGE", message));
         Msg request = Msg.builder().role(MsgRole.USER).textContent(rendered).build();
         StringBuilder output = new StringBuilder();
-        model.stream(List.of(request), List.of(), options()).doOnNext(response ->
-                response.getContent().stream().filter(TextBlock.class::isInstance)
-                        .map(TextBlock.class::cast).map(TextBlock::getText)
-                        .filter(text -> text != null && !text.isEmpty()).forEach(output::append))
+        model.stream(List.of(request), List.of(), options())
+                .doOnNext(response ->
+                        response.getContent()
+                                .stream()
+                                .filter(TextBlock.class::isInstance)
+                                .map(TextBlock.class::cast)
+                                .map(TextBlock::getText)
+                                .filter(text -> text != null && !text.isEmpty())
+                                .forEach(output::append))
                 .blockLast(settings.intentTimeout());
         Matcher matcher = OUTPUT.matcher(output.toString().trim());
         if (!matcher.matches()) throw new IllegalStateException("意图模型输出结构无效");

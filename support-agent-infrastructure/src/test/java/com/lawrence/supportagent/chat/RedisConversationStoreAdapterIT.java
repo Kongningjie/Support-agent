@@ -28,16 +28,18 @@ class RedisConversationStoreAdapterIT {
             .withExposedPorts(6379);
     private RedisConversationStoreAdapter store;
     private LettuceConnectionFactory connectionFactory;
+    private StringRedisTemplate redisTemplate;
 
     /** 为每个测试创建连接并清空独立容器数据。 */
     @BeforeEach
     void setUp() {
         connectionFactory = new LettuceConnectionFactory(REDIS.getHost(), REDIS.getMappedPort(6379));
         connectionFactory.afterPropertiesSet();
-        StringRedisTemplate template = new StringRedisTemplate(connectionFactory);
-        template.afterPropertiesSet();
-        template.getConnectionFactory().getConnection().serverCommands().flushAll();
-        store = new RedisConversationStoreAdapter(template, JsonMapper.builder().findAndAddModules().build());
+        redisTemplate = new StringRedisTemplate(connectionFactory);
+        redisTemplate.afterPropertiesSet();
+        redisTemplate.getConnectionFactory().getConnection().serverCommands().flushAll();
+        store = new RedisConversationStoreAdapter(redisTemplate,
+                JsonMapper.builder().findAndAddModules().build());
     }
 
     /** 关闭当前测试创建的 Redis 连接，避免容器停止后后台重连。 */
@@ -86,5 +88,29 @@ class RedisConversationStoreAdapterIT {
                 .isInstanceOfSatisfying(ApplicationException.class,
                         value -> assertThat(value.errorCode())
                                 .isEqualTo(ErrorCode.CHAT_CONVERSATION_BUSY));
+    }
+
+    /** 验证 Redis 数据丢失后旧版本明确过期，而新会话仍可安全开始。 */
+    @Test
+    void shouldDegradeSafelyAfterRedisDataLoss() {
+        Instant now = Instant.now();
+        UUID messageId = UUID.randomUUID();
+        UUID runId = UUID.randomUUID();
+        var begin = store.begin(null, messageId, "问题", null, runId, now);
+        CompletedTurn turn = new CompletedTurn(UUID.randomUUID(), messageId, runId, "问题", "问题",
+                ChatIntent.SUPPORT_QUERY, "答案", null, List.of(), null,
+                null, "GROUNDED", now, 1);
+        store.complete(begin.conversationId(), runId, turn, null, now);
+
+        redisTemplate.getConnectionFactory().getConnection().serverCommands().flushAll();
+
+        assertThatThrownBy(() -> store.begin(begin.conversationId(), UUID.randomUUID(),
+                "继续追问", 1L, UUID.randomUUID(), now.plusSeconds(1)))
+                .isInstanceOfSatisfying(ApplicationException.class,
+                        value -> assertThat(value.errorCode())
+                                .isEqualTo(ErrorCode.CHAT_CONVERSATION_EXPIRED));
+        assertThat(store.begin(null, UUID.randomUUID(), "重新开始", null,
+                UUID.randomUUID(), now.plusSeconds(2)).status())
+                .isEqualTo(com.lawrence.supportagent.chat.port.ConversationStorePort.BeginStatus.ACQUIRED);
     }
 }

@@ -18,21 +18,41 @@ import tools.jackson.databind.ObjectMapper;
 
 /** 使用 Redis Lua 原子维护会话运行围栏、版本、幂等结果和工单建议。 */
 public class RedisConversationStoreAdapter implements ConversationStorePort {
-    private static final Duration CONVERSATION_TTL = Duration.ofDays(7);
-    private static final Duration SUGGESTION_TTL = Duration.ofHours(24);
-    private static final Duration RUN_LEASE = Duration.ofMinutes(3);
-    private static final Duration SUGGESTION_LEASE = Duration.ofMinutes(3);
+    private static final Duration DEFAULT_CONVERSATION_TTL = Duration.ofDays(7);
+    private static final Duration DEFAULT_SUGGESTION_TTL = Duration.ofHours(24);
+    private static final Duration DEFAULT_RUN_LEASE = Duration.ofMinutes(3);
+    private static final Duration DEFAULT_SUGGESTION_LEASE = Duration.ofMinutes(3);
     private static final String PREFIX = "support-agent:chat:";
     private final StringRedisTemplate redis;
     private final ObjectMapper mapper;
+    private final Duration conversationTtl;
+    private final Duration suggestionTtl;
+    private final Duration runLease;
+    private final Duration suggestionLease;
 
     /** 注入字符串 Redis 客户端和统一 JSON 序列化器。 */
     public RedisConversationStoreAdapter(StringRedisTemplate redis, ObjectMapper mapper) {
-        this.redis = redis;
-        this.mapper = mapper;
+        this(redis, mapper, DEFAULT_CONVERSATION_TTL, DEFAULT_SUGGESTION_TTL,
+                DEFAULT_RUN_LEASE, DEFAULT_SUGGESTION_LEASE);
     }
 
-    /** {@inheritDoc} */
+    /** 注入 Redis 客户端以及会话、建议和租约的显式生命周期配置。 */
+    public RedisConversationStoreAdapter(StringRedisTemplate redis, ObjectMapper mapper,
+                                         Duration conversationTtl, Duration suggestionTtl,
+                                         Duration runLease, Duration suggestionLease) {
+        validateDurations(conversationTtl, suggestionTtl, runLease, suggestionLease);
+        this.redis = redis;
+        this.mapper = mapper;
+        this.conversationTtl = conversationTtl;
+        this.suggestionTtl = suggestionTtl;
+        this.runLease = runLease;
+        this.suggestionLease = suggestionLease;
+    }
+
+    /**
+     * {@inheritDoc}
+     * 在调用意图模型、检索和 Chat 模型前，原子取得指定会话的执行权。
+     */
     @Override
     public BeginResult begin(UUID conversationId, UUID clientMessageId, String message,
                              Long expectedVersion, UUID runId, Instant now) {
@@ -63,10 +83,19 @@ public class RedisConversationStoreAdapter implements ConversationStorePort {
                 redis.call('EXPIRE',KEYS[1],ARGV[6]); redis.call('EXPIRE',KEYS[2],ARGV[6])
                 return {'ACQUIRED',redis.call('HGET',KEYS[1],'version'),interrupted}
                 """;
+        /*
+         * ARGV[1] = 当前 runId
+         * ARGV[2] = 当前消息的 SHA-256
+         * ARGV[3] = 客户端传入的会话版本
+         * ARGV[4] = 当前时间
+         * ARGV[5] = 租约过期时间
+         * ARGV[6] = Redis TTL
+         */
         List<?> result = executeList(script, List.of(conversationKey(actualConversationId),
                         messageKey(actualConversationId, clientMessageId)), runId.toString(), hash,
                 expectedVersion == null ? "-" : expectedVersion.toString(), Long.toString(now.toEpochMilli()),
-                Long.toString(now.plus(RUN_LEASE).toEpochMilli()), Long.toString(CONVERSATION_TTL.toSeconds()));
+                Long.toString(now.plus(runLease).toEpochMilli()),
+                Long.toString(conversationTtl.toSeconds()));
         String status = string(result, 0);
         if ("MESSAGE_REUSED".equals(status)) throw error(ErrorCode.CHAT_MESSAGE_ID_REUSED, "clientMessageId 已用于其他消息");
         if ("EXPIRED".equals(status)) throw error(ErrorCode.CHAT_CONVERSATION_EXPIRED, "会话不存在或已经过期");
@@ -88,7 +117,7 @@ public class RedisConversationStoreAdapter implements ConversationStorePort {
                 + "redis.call('HSET',KEYS[1],'runLeaseUntil',ARGV[2]); return 1";
         Long result = redis.execute(new DefaultRedisScript<>(script, Long.class),
                 List.of(conversationKey(conversationId)), runId.toString(),
-                Long.toString(now.plus(RUN_LEASE).toEpochMilli()));
+                Long.toString(now.plus(runLease).toEpochMilli()));
         return Long.valueOf(1).equals(result);
     }
 
@@ -137,7 +166,7 @@ public class RedisConversationStoreAdapter implements ConversationStorePort {
                 Long.toString(turn.conversationVersion()), Long.toString(now.toEpochMilli()),
                 serializedAgentState == null ? "" : serializedAgentState,
                 turn.suggestionId() == null ? "0" : "1", turn.suggestionContext(), turn.turnId().toString(),
-                Long.toString(CONVERSATION_TTL.toSeconds()), Long.toString(SUGGESTION_TTL.toSeconds()));
+                Long.toString(conversationTtl.toSeconds()), Long.toString(suggestionTtl.toSeconds()));
         if (!Long.valueOf(1).equals(result)) throw error(ErrorCode.CHAT_CONVERSATION_BUSY, "会话运行权已经失效");
         return turn;
     }
@@ -170,7 +199,7 @@ public class RedisConversationStoreAdapter implements ConversationStorePort {
                 """;
         List<?> result = executeList(script, List.of(suggestionKey(conversationId, suggestionId)),
                 Long.toString(now.toEpochMilli()), claimId.toString(),
-                Long.toString(now.plus(SUGGESTION_LEASE).toEpochMilli()));
+                Long.toString(now.plus(suggestionLease).toEpochMilli()));
         String status = string(result, 0);
         if ("NOT_FOUND".equals(status)) throw error(ErrorCode.TICKET_SUGGESTION_NOT_FOUND, "工单建议不存在或已过期");
         if ("PROCESSING".equals(status)) throw error(ErrorCode.TICKET_SUGGESTION_IN_PROGRESS, "工单建议正在处理中");
@@ -242,6 +271,20 @@ public class RedisConversationStoreAdapter implements ConversationStorePort {
         } catch (NoSuchAlgorithmException exception) {
             throw new IllegalStateException("JDK 不支持 SHA-256", exception);
         }
+    }
+
+    /** 校验 Redis 生命周期均为正值且租约短于对应数据保留时间。 */
+    private void validateDurations(Duration conversation, Duration suggestion,
+                                   Duration run, Duration claim) {
+        if (!positive(conversation) || !positive(suggestion) || !positive(run) || !positive(claim)
+                || run.compareTo(conversation) >= 0 || claim.compareTo(suggestion) >= 0) {
+            throw new IllegalArgumentException("Redis 会话或租约时长配置不合法");
+        }
+    }
+
+    /** 判断时长存在且严格大于零。 */
+    private boolean positive(Duration value) {
+        return value != null && !value.isZero() && !value.isNegative();
     }
 
     /** 创建应用异常。 */

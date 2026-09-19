@@ -9,6 +9,7 @@ import com.alibaba.dashscope.embeddings.TextEmbeddingOutput;
 import com.alibaba.dashscope.embeddings.TextEmbeddingParam;
 import com.alibaba.dashscope.embeddings.TextEmbeddingResult;
 import com.alibaba.dashscope.embeddings.TextEmbeddingResultItem;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
@@ -66,6 +67,26 @@ class DashScopeEmbeddingModelAdapterTest {
 
             assertEquals(3, calls.get());
             assertEquals(1024, result.size());
+        }
+    }
+
+    /** 验证配置的单次超时会取消等待并返回稳定可重试错误。 */
+    @Test
+    void shouldEnforceConfiguredCallTimeout() {
+        try (DashScopeEmbeddingModelAdapter adapter = new DashScopeEmbeddingModelAdapter(
+                "test-key", "text-embedding-v4", param -> {
+                    try {
+                        Thread.sleep(200);
+                    } catch (InterruptedException exception) {
+                        Thread.currentThread().interrupt();
+                    }
+                    return successfulResult(1, true);
+                }, null, Duration.ofMillis(20), 1, Duration.ofMillis(1))) {
+            ModelInvocationException exception = assertThrows(ModelInvocationException.class,
+                    () -> adapter.embedQuery("查询"));
+
+            assertEquals("EMBEDDING_TIMEOUT", exception.errorCode());
+            assertEquals(true, exception.retryable());
         }
     }
 

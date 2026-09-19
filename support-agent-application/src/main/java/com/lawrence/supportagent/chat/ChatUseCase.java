@@ -35,7 +35,7 @@ public class ChatUseCase {
     private static final int MODEL_CONTEXT_CHARACTERS = 12_000;
     private static final int MAXIMUM_ANSWER_CHARACTERS = 8_000;
     private static final int SAFE_FRAGMENT_CHARACTERS = 300;
-    private static final Duration SUGGESTION_TTL = Duration.ofHours(24);
+    private static final Duration DEFAULT_SUGGESTION_TTL = Duration.ofHours(24);
     private static final String NO_KNOWLEDGE = "当前知识库中没有找到足够可靠的依据，因此我不能给出确定的处理步骤。你可以确认创建一个技术支持工单，由人工继续处理。";
     private static final String OUT_OF_SCOPE = "我只能协助企业内部技术支持、知识问答和工单查询。请提供相关技术问题或工单编号。";
     private static final String TICKET_REQUIRED = "请提供格式为 T 加 12 位数字的工单编号。";
@@ -53,6 +53,7 @@ public class ChatUseCase {
     private final String rerankModelName;
     private final double groundedThreshold;
     private final OptimizationTelemetryPort telemetry;
+    private final Duration suggestionTtl;
 
     /** 创建不向 Agent 下放检索路由或写权限的聊天用例。 */
     public ChatUseCase(IntentRecognitionService intents, RetrievalService retrieval,
@@ -63,7 +64,7 @@ public class ChatUseCase {
                        String rerankModelName, double groundedThreshold) {
         this(intents, retrieval, chatModel, tickets, conversations, audits, validator, ids, time,
                 chatModelName, embeddingModelName, rerankModelName, groundedThreshold,
-                OptimizationTelemetryPort.noOp());
+                OptimizationTelemetryPort.noOp(), DEFAULT_SUGGESTION_TTL);
     }
 
     /** 创建带二期低基数耗时遥测的聊天用例。 */
@@ -74,6 +75,22 @@ public class ChatUseCase {
                        String chatModelName, String embeddingModelName,
                        String rerankModelName, double groundedThreshold,
                        OptimizationTelemetryPort telemetry) {
+        this(intents, retrieval, chatModel, tickets, conversations, audits, validator, ids, time,
+                chatModelName, embeddingModelName, rerankModelName, groundedThreshold,
+                telemetry, DEFAULT_SUGGESTION_TTL);
+    }
+
+    /** 创建带显式建议有效期和二期低基数耗时遥测的聊天用例。 */
+    public ChatUseCase(IntentRecognitionService intents, RetrievalService retrieval,
+                       ChatModelPort chatModel, TicketQueryUseCase tickets,
+                       ConversationStorePort conversations, AgentAuditPort audits,
+                       AnswerValidator validator, UuidGenerator ids, TimeProvider time,
+                       String chatModelName, String embeddingModelName,
+                       String rerankModelName, double groundedThreshold,
+                       OptimizationTelemetryPort telemetry, Duration suggestionTtl) {
+        if (suggestionTtl == null || suggestionTtl.isZero() || suggestionTtl.isNegative()) {
+            throw new IllegalArgumentException("工单建议有效期必须大于 0");
+        }
         this.intents = intents;
         this.retrieval = retrieval;
         this.chatModel = chatModel;
@@ -88,6 +105,7 @@ public class ChatUseCase {
         this.rerankModelName = rerankModelName;
         this.groundedThreshold = groundedThreshold;
         this.telemetry = telemetry == null ? OptimizationTelemetryPort.noOp() : telemetry;
+        this.suggestionTtl = suggestionTtl;
     }
 
     /**
@@ -116,17 +134,21 @@ public class ChatUseCase {
      */
     public void stream(PreparedChat prepared, ChatEventSink sink) {
         long started = System.nanoTime();
+
         ChatRequest request = prepared.request();
         UUID runId = prepared.runId();
         BeginResult begin = prepared.begin();
+        // 已完成的相同消息直接执行幂等重放，不再重复调用模型。
         if (begin.status() == ConversationStorePort.BeginStatus.REPLAY) {
             replay(begin, sink);
             telemetry.recordDuration(Operation.CHAT_REQUEST, elapsed(started), true);
             return;
         }
+
         boolean committed = false;
         String completedPromptVersion = "unknown";
         try {
+            // 记录因租约过期而被当前请求接管的旧运行。
             if (begin.interruptedRunId() != null) {
                 audits.fail(begin.interruptedRunId(), "INTERRUPTED", "CHAT_RUN_LEASE_EXPIRED", 0, time.now());
             }
@@ -301,7 +323,7 @@ public class ChatUseCase {
         if (turn.suggestionId() != null) {
             emitPrepared(sink, conversationId, runId, suggestionSequence, "ticket.suggested", Map.of(
                     "suggestionId", turn.suggestionId().toString(),
-                    "expiresAt", turn.completedAt().plus(SUGGESTION_TTL).toString()));
+                    "expiresAt", turn.completedAt().plus(suggestionTtl).toString()));
         }
         Map<String, Object> data = new LinkedHashMap<>();
         data.put("answer", turn.answer());
@@ -327,13 +349,15 @@ public class ChatUseCase {
         for (String fragment : fragments(turn.answer())) {
             emitReplay(sink, conversationId, runId, "answer.delta", Map.of("text", fragment));
         }
+
         for (Citation citation : turn.citations()) {
             emitReplay(sink, conversationId, runId, "citation", citationData(citation));
         }
+
         if (turn.suggestionId() != null) {
             emitReplay(sink, conversationId, runId, "ticket.suggested", Map.of(
                     "suggestionId", turn.suggestionId().toString(),
-                    "expiresAt", turn.completedAt().plus(SUGGESTION_TTL).toString()));
+                    "expiresAt", turn.completedAt().plus(suggestionTtl).toString()));
         }
         Map<String, Object> data = new LinkedHashMap<>();
         data.put("answer", turn.answer());
