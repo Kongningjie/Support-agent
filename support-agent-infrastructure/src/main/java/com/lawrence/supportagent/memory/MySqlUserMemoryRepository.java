@@ -1,6 +1,8 @@
 package com.lawrence.supportagent.memory;
 
 import com.lawrence.supportagent.memory.port.UserMemoryRepository;
+import com.lawrence.supportagent.memory.CandidateInsertOutcome;
+import com.lawrence.supportagent.memory.CandidateInsertResult;
 import com.lawrence.supportagent.persistence.mapper.UserMemoryMapper;
 import com.lawrence.supportagent.persistence.record.UserMemoryDO;
 import com.lawrence.supportagent.persistence.record.UserMemorySettingsDO;
@@ -79,18 +81,30 @@ public class MySqlUserMemoryRepository implements UserMemoryRepository {
 
     /** {@inheritDoc} */
     @Transactional
-    @Override public Optional<UserMemory> insertCandidate(UserMemory memory) {
+    @Override public CandidateInsertResult insertCandidate(UserMemory memory,
+                                                           Instant expiredBeforeOrAt) {
         UserMemorySettingsDO settings = mapper.findSettingsForUpdate(toBytes(memory.userId()));
-        if (settings == null || !settings.enabled || mapper.countByUser(toBytes(memory.userId())) >= 100) {
-            return Optional.empty();
+        if (settings == null || !settings.enabled) {
+            return CandidateInsertResult.rejected(CandidateInsertOutcome.DISABLED);
+        }
+        mapper.deleteExpiredProposedByUser(toBytes(memory.userId()), expiredBeforeOrAt);
+        if (mapper.countByUser(toBytes(memory.userId())) >= 100) {
+            return CandidateInsertResult.rejected(CandidateInsertOutcome.LIMIT_REACHED);
         }
         UserMemoryDO record = toRecord(memory);
         try {
             mapper.insert(record);
-            return Optional.of(toDomain(record));
+            return CandidateInsertResult.inserted(toDomain(record));
         } catch (DuplicateKeyException exception) {
-            return Optional.empty();
+            return CandidateInsertResult.rejected(CandidateInsertOutcome.DUPLICATE);
         }
+    }
+
+    /** {@inheritDoc} */
+    @Transactional
+    @Override public int cleanupExpiredProposed(Instant expiredBeforeOrAt, int batchSize) {
+        List<Long> ids = mapper.findExpiredProposedIdsForUpdate(expiredBeforeOrAt, batchSize);
+        return ids.isEmpty() ? 0 : mapper.deleteByIds(ids);
     }
 
     /** {@inheritDoc} */

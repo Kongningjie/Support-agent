@@ -167,6 +167,16 @@ support-agent:
   memory:
     # 已确认长期记忆每次注入模型上下文的独立估算 Token 上限。
     input-budget-tokens: ${SUPPORT_AGENT_MEMORY_INPUT_BUDGET_TOKENS:1000}
+    # 未确认候选从创建时间起允许保留的最长时间。
+    candidate-retention: ${SUPPORT_AGENT_MEMORY_CANDIDATE_RETENTION:30d}
+    # 单实例允许同时执行的候选模型请求总数。
+    candidate-global-concurrency: ${SUPPORT_AGENT_MEMORY_CANDIDATE_GLOBAL_CONCURRENCY:4}
+    # 单个用户允许同时执行的候选模型请求数；首版固定为 1。
+    candidate-per-user-concurrency: ${SUPPORT_AGENT_MEMORY_CANDIDATE_PER_USER_CONCURRENCY:1}
+    # 后台候选清理两次触发之间的固定延迟。
+    cleanup-interval: ${SUPPORT_AGENT_MEMORY_CLEANUP_INTERVAL:1h}
+    # 单个清理事务最多领取并删除的候选数量。
+    cleanup-batch-size: ${SUPPORT_AGENT_MEMORY_CLEANUP_BATCH_SIZE:500}
   observability:
     # Outbox 指标写入本地 Gauge 的采样周期；指标抓取本身不会访问数据库。
     outbox-sample-delay: ${SUPPORT_AGENT_OUTBOX_SAMPLE_DELAY:10s}

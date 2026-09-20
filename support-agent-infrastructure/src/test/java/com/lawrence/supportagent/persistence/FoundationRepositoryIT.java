@@ -22,6 +22,7 @@ import com.lawrence.supportagent.knowledge.ManagedDocument;
 import com.lawrence.supportagent.knowledge.port.ManagedDocumentRepository;
 import com.lawrence.supportagent.memory.MemoryStatus;
 import com.lawrence.supportagent.memory.MemoryType;
+import com.lawrence.supportagent.memory.CandidateInsertOutcome;
 import com.lawrence.supportagent.memory.UserMemory;
 import com.lawrence.supportagent.memory.UserMemorySettings;
 import com.lawrence.supportagent.memory.port.UserMemoryRepository;
@@ -145,15 +146,17 @@ class FoundationRepositoryIT {
                 MemoryType.CONSTRAINT, "统一使用 PowerShell 7", "a".repeat(64),
                 UUID.fromString("40000000-0000-0000-0000-000000000099"),
                 UUID.fromString("50000000-0000-0000-0000-000000000099"), NOW);
-        UserMemory inserted = userMemoryRepository.insertCandidate(proposed).orElseThrow();
+        UserMemory inserted = userMemoryRepository.insertCandidate(
+                proposed, NOW.minus(30, ChronoUnit.DAYS)).memory().orElseThrow();
         UserMemory active = userMemoryRepository.update(
                 inserted.confirm(userId.toString(), NOW.plusSeconds(1)), 0);
 
         assertEquals(MemoryStatus.ACTIVE, active.status());
         assertTrue(userMemoryRepository.findByMemoryId(UUID.randomUUID(), active.memoryId()).isEmpty());
-        assertTrue(userMemoryRepository.insertCandidate(UserMemory.propose(UUID.randomUUID(), userId,
+        assertEquals(CandidateInsertOutcome.DUPLICATE,
+                userMemoryRepository.insertCandidate(UserMemory.propose(UUID.randomUUID(), userId,
                 MemoryType.CONSTRAINT, active.content(), active.contentHash(), UUID.randomUUID(),
-                UUID.randomUUID(), NOW.plusSeconds(2))).isEmpty());
+                UUID.randomUUID(), NOW.plusSeconds(2)), NOW.minus(30, ChronoUnit.DAYS)).outcome());
         assertEquals(1, userMemoryRepository.findActive(userId, NOW.plusSeconds(2), 100).size());
         UserMemory expired = userMemoryRepository.update(active.revise(active.content(),
                 active.contentHash(), NOW.plusSeconds(3), true, userId.toString(), NOW.plusSeconds(2)), 1);
@@ -162,9 +165,85 @@ class FoundationRepositoryIT {
         assertTrue(userMemoryRepository.findByMemoryId(userId, expired.memoryId()).isEmpty());
         userMemoryRepository.saveSettings(new UserMemorySettings(settings.id(), userId, false,
                 2, settings.createdAt(), NOW.plusSeconds(5)), 1);
-        assertTrue(userMemoryRepository.insertCandidate(UserMemory.propose(UUID.randomUUID(), userId,
+        assertEquals(CandidateInsertOutcome.DISABLED,
+                userMemoryRepository.insertCandidate(UserMemory.propose(UUID.randomUUID(), userId,
                 MemoryType.PREFERENCE, "使用简体中文", "b".repeat(64), UUID.randomUUID(),
-                UUID.randomUUID(), NOW.plusSeconds(6))).isEmpty());
+                UUID.randomUUID(), NOW.plusSeconds(6)), NOW.minus(30, ChronoUnit.DAYS)).outcome());
+    }
+
+    /** 验证 30 天边界只清理待确认候选，且两个并发清理事务不会重复删除。 */
+    @Test
+    void shouldCleanupOnlyExpiredProposedCandidatesWithoutOverlap() throws Exception {
+        Instant cutoff = NOW.minus(30, ChronoUnit.DAYS);
+        UUID userId = UUID.randomUUID();
+        userMemoryRepository.saveSettings(
+                new UserMemorySettings(null, userId, true, 1, cutoff.minusSeconds(1), NOW), 0);
+        UserMemory expiredFirst = insertMemory(userId, MemoryType.PREFERENCE,
+                "待清理候选一", "1".repeat(64), cutoff);
+        UserMemory expiredSecond = insertMemory(userId, MemoryType.CONSTRAINT,
+                "待清理候选二", "2".repeat(64), cutoff.minusSeconds(1));
+        UserMemory active = insertMemory(userId, MemoryType.ENVIRONMENT,
+                "需要保留的有效记忆", "3".repeat(64), cutoff.minusSeconds(2));
+        active = userMemoryRepository.update(active.confirm(userId.toString(), NOW), 0);
+        UserMemory revoked = insertMemory(userId, MemoryType.PREFERENCE,
+                "需要保留的撤销记忆", "4".repeat(64), cutoff.minusSeconds(3));
+        revoked = userMemoryRepository.update(revoked.revoke(userId.toString(), NOW), 0);
+        UserMemory recent = insertMemory(userId, MemoryType.CONSTRAINT,
+                "尚未达到保留期", "5".repeat(64), cutoff.plusSeconds(1));
+
+        int deleted;
+        try (ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor()) {
+            Future<Integer> first = executor.submit(
+                    () -> userMemoryRepository.cleanupExpiredProposed(cutoff, 1));
+            Future<Integer> second = executor.submit(
+                    () -> userMemoryRepository.cleanupExpiredProposed(cutoff, 1));
+            deleted = first.get(10, TimeUnit.SECONDS) + second.get(10, TimeUnit.SECONDS);
+        }
+
+        assertEquals(2, deleted);
+        assertTrue(userMemoryRepository.findByMemoryId(userId, expiredFirst.memoryId()).isEmpty());
+        assertTrue(userMemoryRepository.findByMemoryId(userId, expiredSecond.memoryId()).isEmpty());
+        assertEquals(MemoryStatus.ACTIVE, userMemoryRepository.findByMemoryId(
+                userId, active.memoryId()).orElseThrow().status());
+        assertEquals(MemoryStatus.REVOKED, userMemoryRepository.findByMemoryId(
+                userId, revoked.memoryId()).orElseThrow().status());
+        assertEquals(MemoryStatus.PROPOSED, userMemoryRepository.findByMemoryId(
+                userId, recent.memoryId()).orElseThrow().status());
+        assertEquals(0, userMemoryRepository.cleanupExpiredProposed(cutoff, 500));
+    }
+
+    /** 验证机会式清理先释放 100 条容量，再允许本轮新候选写入。 */
+    @Test
+    void shouldReleaseCandidateCapacityBeforeLimitCheck() {
+        Instant cutoff = NOW.minus(30, ChronoUnit.DAYS);
+        UUID userId = UUID.randomUUID();
+        userMemoryRepository.saveSettings(
+                new UserMemorySettings(null, userId, true, 1, cutoff, NOW), 0);
+        for (int index = 0; index < 100; index++) {
+            CandidateInsertOutcome outcome = userMemoryRepository.insertCandidate(
+                    UserMemory.propose(UUID.randomUUID(), userId, MemoryType.PREFERENCE,
+                            "过期候选-" + index, "%064d".formatted(index),
+                            UUID.randomUUID(), UUID.randomUUID(), cutoff),
+                    cutoff.minus(1, ChronoUnit.DAYS)).outcome();
+            assertEquals(CandidateInsertOutcome.INSERTED, outcome);
+        }
+
+        CandidateInsertOutcome result = userMemoryRepository.insertCandidate(
+                UserMemory.propose(UUID.randomUUID(), userId, MemoryType.CONSTRAINT,
+                        "清理后允许写入", "f".repeat(64), UUID.randomUUID(), UUID.randomUUID(), NOW),
+                cutoff).outcome();
+
+        assertEquals(CandidateInsertOutcome.INSERTED, result);
+        assertEquals(1, userMemoryRepository.countByUser(userId));
+    }
+
+    /** 创建一条使用独立正文哈希和创建时间的待确认记忆。 */
+    private UserMemory insertMemory(UUID userId, MemoryType type, String content,
+                                    String contentHash, Instant createdAt) {
+        return userMemoryRepository.insertCandidate(UserMemory.propose(
+                UUID.randomUUID(), userId, type, content, contentHash,
+                UUID.randomUUID(), UUID.randomUUID(), createdAt),
+                createdAt.minus(31, ChronoUnit.DAYS)).memory().orElseThrow();
     }
 
     /** 普通用户只能访问自己的工单，管理员可访问其他用户和历史无归属工单。 */

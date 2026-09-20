@@ -32,10 +32,13 @@ import com.lawrence.supportagent.model.EmbeddingModelPort;
 import com.lawrence.supportagent.model.IntentRecognitionPort;
 import com.lawrence.supportagent.model.RerankModelPort;
 import com.lawrence.supportagent.memory.UserMemoryCandidateService;
+import com.lawrence.supportagent.memory.UserMemoryCandidateSettings;
+import com.lawrence.supportagent.memory.UserMemoryCleanupService;
 import com.lawrence.supportagent.memory.UserMemoryContentPolicy;
 import com.lawrence.supportagent.memory.UserMemoryContextService;
 import com.lawrence.supportagent.memory.UserMemoryUseCase;
 import com.lawrence.supportagent.memory.port.UserMemoryCandidatePort;
+import com.lawrence.supportagent.memory.port.MemoryCandidateTelemetryPort;
 import com.lawrence.supportagent.memory.port.UserMemoryRepository;
 import com.lawrence.supportagent.idempotency.IdempotentExecutor;
 import com.lawrence.supportagent.observability.OptimizationTelemetryPort;
@@ -64,6 +67,10 @@ public class ChatConfiguration {
     /** 创建不携带正文和高基数标签的二期优化遥测端口。 */
     @Bean public OptimizationTelemetryPort optimizationTelemetryPort(MeterRegistry registry) {
         return new MicrometerOptimizationTelemetryAdapter(registry);
+    }
+    /** 创建不携带正文和业务标识的长期记忆候选遥测端口。 */
+    @Bean public MemoryCandidateTelemetryPort memoryCandidateTelemetryPort(MeterRegistry registry) {
+        return new MicrometerMemoryCandidateTelemetryAdapter(registry);
     }
     /** 创建独立意图模型端口。 */
     @Bean public IntentRecognitionPort intentRecognitionPort(SupportAgentProperties properties) {
@@ -147,6 +154,15 @@ public class ChatConfiguration {
     @Bean public UserMemoryContentPolicy userMemoryContentPolicy() {
         return new UserMemoryContentPolicy();
     }
+    /** 创建候选保留期、并发上限和清理批量的冻结配置。 */
+    @Bean public UserMemoryCandidateSettings userMemoryCandidateSettings(
+            @Value("${support-agent.memory.candidate-retention:30d}") Duration retention,
+            @Value("${support-agent.memory.candidate-global-concurrency:4}") int globalConcurrency,
+            @Value("${support-agent.memory.candidate-per-user-concurrency:1}") int perUserConcurrency,
+            @Value("${support-agent.memory.cleanup-batch-size:500}") int cleanupBatchSize) {
+        return new UserMemoryCandidateSettings(retention, globalConcurrency,
+                perUserConcurrency, cleanupBatchSize);
+    }
     /** 创建预算内长期记忆选择服务。 */
     @Bean public UserMemoryContextService userMemoryContextService(
             UserMemoryRepository repository, TimeProvider time,
@@ -158,9 +174,16 @@ public class ChatConfiguration {
     @Bean public UserMemoryCandidateService userMemoryCandidateService(
             UserMemoryRepository repository, UserMemoryCandidatePort model,
             UserMemoryContentPolicy contentPolicy, UuidGenerator ids, TimeProvider time,
-            ExecutorService userMemoryCandidateExecutor) {
+            ExecutorService userMemoryCandidateExecutor,
+            MemoryCandidateTelemetryPort telemetry, UserMemoryCandidateSettings settings) {
         return new UserMemoryCandidateService(repository, model, contentPolicy, ids, time,
-                userMemoryCandidateExecutor);
+                userMemoryCandidateExecutor, telemetry, settings);
+    }
+    /** 创建只处理过期待确认候选的后台清理应用服务。 */
+    @Bean public UserMemoryCleanupService userMemoryCleanupService(
+            UserMemoryRepository repository, MemoryCandidateTelemetryPort telemetry,
+            TimeProvider time, UserMemoryCandidateSettings settings) {
+        return new UserMemoryCleanupService(repository, telemetry, time, settings);
     }
     /** 创建用户本人长期记忆生命周期用例。 */
     @Bean public UserMemoryUseCase userMemoryUseCase(

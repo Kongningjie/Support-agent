@@ -30,6 +30,19 @@
     <select id="countByUser" resultType="long">
         SELECT COUNT(*) FROM user_memory WHERE user_id=#{userId}
     </select>
+    <delete id="deleteExpiredProposedByUser">
+        DELETE FROM user_memory
+        WHERE user_id=#{userId} AND status='PROPOSED' AND created_at&lt;=#{expiredBeforeOrAt}
+    </delete>
+    <select id="findExpiredProposedIdsForUpdate" resultType="long">
+        SELECT id FROM user_memory
+        WHERE status='PROPOSED' AND created_at&lt;=#{expiredBeforeOrAt}
+        ORDER BY created_at,id LIMIT #{limit} FOR UPDATE SKIP LOCKED
+    </select>
+    <delete id="deleteByIds">
+        DELETE FROM user_memory WHERE id IN
+        <foreach collection="ids" item="id" open="(" separator="," close=")">#{id}</foreach>
+    </delete>
     <select id="countPage" resultType="long">
         SELECT COUNT(*) FROM user_memory WHERE user_id=#{userId}
         <if test="status != null">AND status=#{status}</if>

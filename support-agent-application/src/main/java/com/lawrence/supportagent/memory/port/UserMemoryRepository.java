@@ -1,6 +1,7 @@
 package com.lawrence.supportagent.memory.port;
 
 import com.lawrence.supportagent.memory.MemoryStatus;
+import com.lawrence.supportagent.memory.CandidateInsertResult;
 import com.lawrence.supportagent.memory.UserMemory;
 import com.lawrence.supportagent.memory.UserMemorySettings;
 import java.time.Instant;
@@ -26,8 +27,10 @@ public interface UserMemoryRepository {
     Optional<UserMemory> findByMemoryId(UUID userId, UUID memoryId);
     /** 按内部主键和所有者读取聚合，仅用于幂等重放。 */
     Optional<UserMemory> findById(UUID userId, long id);
-    /** 新增候选；同用户、类型和正文哈希已存在时返回空。 */
-    Optional<UserMemory> insertCandidate(UserMemory memory);
+    /** 新增候选，并明确返回成功、重复、关闭或容量已满分类。 */
+    CandidateInsertResult insertCandidate(UserMemory memory, Instant expiredBeforeOrAt);
+    /** 事务内领取并删除一批达到保留期的待确认候选。 */
+    int cleanupExpiredProposed(Instant expiredBeforeOrAt, int batchSize);
     /** 按乐观锁保存更正、确认或撤销后的聚合。 */
     UserMemory update(UserMemory memory, long expectedVersion);
     /** 按所有者和版本永久删除单条记忆。 */

@@ -185,7 +185,9 @@ class ApplicationStartupIT {
                 MemoryType.ENVIRONMENT, content,
                 new UserMemoryContentPolicy().normalize(content).contentHash(),
                 UUID.randomUUID(), UUID.randomUUID(), Instant.now());
-        UserMemory inserted = userMemoryRepository.insertCandidate(candidate).orElseThrow();
+        UserMemory inserted = userMemoryRepository.insertCandidate(
+                candidate, Instant.now().minus(30, java.time.temporal.ChronoUnit.DAYS))
+                .memory().orElseThrow();
 
         HttpResponse<String> confirmed = sendWithIdempotency(client, "POST",
                 "/api/v1/memories/" + inserted.memoryId() + "/confirm", "{\"expectedVersion\":0}",

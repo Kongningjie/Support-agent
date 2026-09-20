@@ -23,6 +23,15 @@ public interface UserMemoryMapper {
                        @Param("expectedVersion") long expectedVersion);
     /** 返回用户当前记忆数量。 */
     long countByUser(byte[] userId);
+    /** 在用户设置行锁保护下删除该用户达到保留期的待确认候选。 */
+    int deleteExpiredProposedByUser(@Param("userId") byte[] userId,
+                                    @Param("expiredBeforeOrAt") Instant expiredBeforeOrAt);
+    /** 事务内跳过其他实例已锁定的行，领取一批达到保留期的候选主键。 */
+    List<Long> findExpiredProposedIdsForUpdate(
+            @Param("expiredBeforeOrAt") Instant expiredBeforeOrAt,
+            @Param("limit") int limit);
+    /** 按已经领取的内部主键批量永久删除候选。 */
+    int deleteByIds(@Param("ids") List<Long> ids);
     /** 按所有者和可选状态统计分页总数。 */
     long countPage(@Param("userId") byte[] userId, @Param("status") String status);
     /** 按最近更新时间倒序分页查询本人记忆。 */
