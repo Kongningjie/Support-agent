@@ -7,6 +7,8 @@ import com.lawrence.supportagent.agent.model.ModelGenerationSettings;
 import com.lawrence.supportagent.agent.model.UnavailableChatModelAdapter;
 import com.lawrence.supportagent.agent.model.UnavailableConversationSummaryAdapter;
 import com.lawrence.supportagent.agent.model.UnavailableIntentRecognitionAdapter;
+import com.lawrence.supportagent.agent.model.DashScopeUserMemoryCandidateAdapter;
+import com.lawrence.supportagent.agent.model.UnavailableUserMemoryCandidateAdapter;
 import com.lawrence.supportagent.chat.AnswerValidator;
 import com.lawrence.supportagent.chat.ChatUseCase;
 import com.lawrence.supportagent.chat.ConservativeTokenEstimator;
@@ -29,6 +31,13 @@ import com.lawrence.supportagent.model.DashScopeRerankModelAdapter;
 import com.lawrence.supportagent.model.EmbeddingModelPort;
 import com.lawrence.supportagent.model.IntentRecognitionPort;
 import com.lawrence.supportagent.model.RerankModelPort;
+import com.lawrence.supportagent.memory.UserMemoryCandidateService;
+import com.lawrence.supportagent.memory.UserMemoryContentPolicy;
+import com.lawrence.supportagent.memory.UserMemoryContextService;
+import com.lawrence.supportagent.memory.UserMemoryUseCase;
+import com.lawrence.supportagent.memory.port.UserMemoryCandidatePort;
+import com.lawrence.supportagent.memory.port.UserMemoryRepository;
+import com.lawrence.supportagent.idempotency.IdempotentExecutor;
 import com.lawrence.supportagent.observability.OptimizationTelemetryPort;
 import com.lawrence.supportagent.persistence.mapper.AgentAuditMapper;
 import com.lawrence.supportagent.resolvedcase.port.ResolvedCaseRepository;
@@ -85,6 +94,17 @@ public class ChatConfiguration {
                 config.baseUrl(), objectMapper, config.summaryTimeout(),
                 config.summaryMaxOutputTokens(), telemetry, ignored -> { });
     }
+    /** 创建与 Chat 和会话摘要隔离的长期记忆候选模型端口。 */
+    @Bean public UserMemoryCandidatePort userMemoryCandidatePort(
+            SupportAgentProperties properties, ObjectMapper objectMapper) {
+        var config = properties.dashscope();
+        if (config.apiKey() == null || config.apiKey().isBlank()) {
+            return new UnavailableUserMemoryCandidateAdapter();
+        }
+        return new DashScopeUserMemoryCandidateAdapter(config.apiKey(), config.memoryModel(),
+                config.baseUrl(), objectMapper, config.memoryTimeout(),
+                config.memoryMaxOutputTokens());
+    }
     /** 创建独立 Rerank 模型端口。 */
     @Bean public RerankModelPort rerankModelPort(SupportAgentProperties properties,
                                                   OptimizationTelemetryPort telemetry) {
@@ -119,14 +139,45 @@ public class ChatConfiguration {
     @Bean(destroyMethod = "close") public ExecutorService conversationSummaryExecutor() {
         return Executors.newVirtualThreadPerTaskExecutor();
     }
+    /** 创建独立于摘要任务的虚拟线程长期记忆候选执行器。 */
+    @Bean(destroyMethod = "close") public ExecutorService userMemoryCandidateExecutor() {
+        return Executors.newVirtualThreadPerTaskExecutor();
+    }
+    /** 创建长期记忆正文安全策略。 */
+    @Bean public UserMemoryContentPolicy userMemoryContentPolicy() {
+        return new UserMemoryContentPolicy();
+    }
+    /** 创建预算内长期记忆选择服务。 */
+    @Bean public UserMemoryContextService userMemoryContextService(
+            UserMemoryRepository repository, TimeProvider time,
+            @Value("${support-agent.memory.input-budget-tokens:1000}") int tokenBudget) {
+        return new UserMemoryContextService(repository, new ConservativeTokenEstimator(),
+                time, tokenBudget);
+    }
+    /** 创建聊天成功后的尽力长期记忆候选服务。 */
+    @Bean public UserMemoryCandidateService userMemoryCandidateService(
+            UserMemoryRepository repository, UserMemoryCandidatePort model,
+            UserMemoryContentPolicy contentPolicy, UuidGenerator ids, TimeProvider time,
+            ExecutorService userMemoryCandidateExecutor) {
+        return new UserMemoryCandidateService(repository, model, contentPolicy, ids, time,
+                userMemoryCandidateExecutor);
+    }
+    /** 创建用户本人长期记忆生命周期用例。 */
+    @Bean public UserMemoryUseCase userMemoryUseCase(
+            UserMemoryRepository repository, UserMemoryContentPolicy contentPolicy,
+            IdempotentExecutor idempotency, TimeProvider time) {
+        return new UserMemoryUseCase(repository, contentPolicy, idempotency, time);
+    }
     /** 创建独立于模型和 Redis 实现的单会话上下文编排服务。 */
     @Bean public ConversationContextService conversationContextService(
             ConversationStorePort store, ConversationSummaryPort summaryModel,
             ExactTermExtractor exactTerms, DocumentContentPolicy contentPolicy,
             ConversationMemorySettings settings,
-            ExecutorService conversationSummaryExecutor, TimeProvider time) {
+            ExecutorService conversationSummaryExecutor, TimeProvider time,
+            UserMemoryContextService userMemoryContextService) {
         return new ConversationContextService(store, summaryModel, exactTerms, contentPolicy,
-                new ConservativeTokenEstimator(), settings, conversationSummaryExecutor, time);
+                new ConservativeTokenEstimator(), settings, conversationSummaryExecutor, time,
+                userMemoryContextService);
     }
     /** 创建会话列表、详情、重置和删除的生命周期用例。 */
     @Bean public ConversationLifecycleUseCase conversationLifecycleUseCase(
@@ -189,13 +240,15 @@ public class ChatConfiguration {
                                          SupportAgentProperties properties,
                                          RetrievalParameters parameters,
                                          ConversationContextService contextService,
+                                         UserMemoryCandidateService memoryCandidates,
                                          OptimizationTelemetryPort telemetry,
                                          @Value("${support-agent.conversation.suggestion-ttl:24h}")
                                          Duration suggestionTtl) {
         var config = properties.dashscope();
         return new ChatUseCase(intents, retrieval, model, tickets, conversations, audits, validator,
                 ids, time, config.chatModel(), config.embeddingModel(), config.rerankModel(),
-                parameters.groundedThreshold(), telemetry, suggestionTtl, contextService);
+                parameters.groundedThreshold(), telemetry, suggestionTtl, contextService,
+                memoryCandidates);
     }
 
     /** 将启动模块配置转换为模型适配层不可变生成参数。 */

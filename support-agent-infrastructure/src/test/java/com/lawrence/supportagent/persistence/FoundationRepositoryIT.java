@@ -20,6 +20,11 @@ import com.lawrence.supportagent.idempotency.RequestFingerprint;
 import com.lawrence.supportagent.knowledge.DocumentInputType;
 import com.lawrence.supportagent.knowledge.ManagedDocument;
 import com.lawrence.supportagent.knowledge.port.ManagedDocumentRepository;
+import com.lawrence.supportagent.memory.MemoryStatus;
+import com.lawrence.supportagent.memory.MemoryType;
+import com.lawrence.supportagent.memory.UserMemory;
+import com.lawrence.supportagent.memory.UserMemorySettings;
+import com.lawrence.supportagent.memory.port.UserMemoryRepository;
 import com.lawrence.supportagent.persistence.mapper.FoundationMapper;
 import com.lawrence.supportagent.persistence.mapper.AsyncTaskWorkflowMapper;
 import com.lawrence.supportagent.persistence.mapper.UserAccountMapper;
@@ -99,6 +104,8 @@ class FoundationRepositoryIT {
     private IdempotentExecutor idempotentExecutor;
     @Autowired
     private UserAccountMapper userAccountMapper;
+    @Autowired
+    private UserMemoryRepository userMemoryRepository;
 
     /** 把 Testcontainers 连接信息注入 Spring 数据源。 */
     @DynamicPropertySource
@@ -122,6 +129,42 @@ class FoundationRepositoryIT {
         Ticket updated = ticketRepository.save(inserted.submit("reviewer", NOW.plusSeconds(1)));
         assertEquals(1, updated.version());
         assertEquals(updated, ticketRepository.findById(updated.id()).orElseThrow());
+    }
+
+    /** 验证长期记忆设置、候选、确认、有效选择、过期排除和永久删除。 */
+    @Test
+    void shouldRoundTripUserControlledMemory() {
+        UUID userId = UUID.fromString("20000000-0000-0000-0000-000000000099");
+        UserMemorySettings settings = userMemoryRepository.saveSettings(
+                new UserMemorySettings(null, userId, true, 1, NOW, NOW), 0);
+        assertTrue(settings.enabled());
+        assertEquals(1, settings.version());
+
+        UserMemory proposed = UserMemory.propose(
+                UUID.fromString("30000000-0000-0000-0000-000000000099"), userId,
+                MemoryType.CONSTRAINT, "统一使用 PowerShell 7", "a".repeat(64),
+                UUID.fromString("40000000-0000-0000-0000-000000000099"),
+                UUID.fromString("50000000-0000-0000-0000-000000000099"), NOW);
+        UserMemory inserted = userMemoryRepository.insertCandidate(proposed).orElseThrow();
+        UserMemory active = userMemoryRepository.update(
+                inserted.confirm(userId.toString(), NOW.plusSeconds(1)), 0);
+
+        assertEquals(MemoryStatus.ACTIVE, active.status());
+        assertTrue(userMemoryRepository.findByMemoryId(UUID.randomUUID(), active.memoryId()).isEmpty());
+        assertTrue(userMemoryRepository.insertCandidate(UserMemory.propose(UUID.randomUUID(), userId,
+                MemoryType.CONSTRAINT, active.content(), active.contentHash(), UUID.randomUUID(),
+                UUID.randomUUID(), NOW.plusSeconds(2))).isEmpty());
+        assertEquals(1, userMemoryRepository.findActive(userId, NOW.plusSeconds(2), 100).size());
+        UserMemory expired = userMemoryRepository.update(active.revise(active.content(),
+                active.contentHash(), NOW.plusSeconds(3), true, userId.toString(), NOW.plusSeconds(2)), 1);
+        assertEquals(0, userMemoryRepository.findActive(userId, NOW.plusSeconds(4), 100).size());
+        assertEquals(1, userMemoryRepository.delete(userId, expired.memoryId(), expired.version()));
+        assertTrue(userMemoryRepository.findByMemoryId(userId, expired.memoryId()).isEmpty());
+        userMemoryRepository.saveSettings(new UserMemorySettings(settings.id(), userId, false,
+                2, settings.createdAt(), NOW.plusSeconds(5)), 1);
+        assertTrue(userMemoryRepository.insertCandidate(UserMemory.propose(UUID.randomUUID(), userId,
+                MemoryType.PREFERENCE, "使用简体中文", "b".repeat(64), UUID.randomUUID(),
+                UUID.randomUUID(), NOW.plusSeconds(6))).isEmpty());
     }
 
     /** 普通用户只能访问自己的工单，管理员可访问其他用户和历史无归属工单。 */
@@ -439,7 +482,8 @@ class FoundationRepositoryIT {
     @MapperScan(basePackageClasses = FoundationMapper.class)
     @ComponentScan(basePackages = {
             "com.lawrence.supportagent.persistence.repository",
-            "com.lawrence.supportagent.idempotency"
+            "com.lawrence.supportagent.idempotency",
+            "com.lawrence.supportagent.memory"
     })
     static class TestApplication {
         /** 为幂等适配器提供与生产一致的 UTC 系统时间端口。 */

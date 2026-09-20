@@ -1,0 +1,42 @@
+CREATE TABLE user_memory_settings (
+    id BIGINT NOT NULL AUTO_INCREMENT COMMENT 'MySQL 内部自增主键，不通过 API 暴露',
+    user_id BINARY(16) NOT NULL COMMENT '长期记忆设置所属的公开用户 UUID',
+    enabled BOOLEAN NOT NULL DEFAULT FALSE COMMENT '是否允许生成和注入长期记忆，默认关闭',
+    version BIGINT NOT NULL DEFAULT 0 COMMENT '设置乐观锁版本',
+    created_at DATETIME(6) NOT NULL COMMENT '设置首次创建 UTC 时间',
+    updated_at DATETIME(6) NOT NULL COMMENT '设置最近修改 UTC 时间',
+    PRIMARY KEY (id),
+    UNIQUE KEY uk_user_memory_settings_user (user_id),
+    CONSTRAINT chk_user_memory_settings_version CHECK (version >= 0)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='用户长期记忆开关';
+
+CREATE TABLE user_memory (
+    id BIGINT NOT NULL AUTO_INCREMENT COMMENT 'MySQL 内部自增主键，不通过 API 暴露',
+    memory_id BINARY(16) NOT NULL COMMENT '公开长期记忆 UUID',
+    user_id BINARY(16) NOT NULL COMMENT '记忆所有者公开用户 UUID',
+    memory_type VARCHAR(20) NOT NULL COMMENT '记忆类别：PREFERENCE、CONSTRAINT 或 ENVIRONMENT',
+    content VARCHAR(500) NOT NULL COMMENT '用户可见的简短结构化记忆正文',
+    content_hash CHAR(64) NOT NULL COMMENT '规范化正文 SHA-256，用于同用户同类型去重',
+    status VARCHAR(16) NOT NULL COMMENT '生命周期状态：PROPOSED、ACTIVE 或 REVOKED',
+    pinned BOOLEAN NOT NULL DEFAULT FALSE COMMENT '用户是否显式固定并提高注入优先级',
+    source_conversation_id BINARY(16) NOT NULL COMMENT '产生候选的公开会话 UUID',
+    source_turn_id BINARY(16) NOT NULL COMMENT '产生候选的客户端消息 UUID',
+    expires_at DATETIME(6) NULL COMMENT '可选 UTC 失效时间，到期后不再注入上下文',
+    version BIGINT NOT NULL DEFAULT 0 COMMENT '确认、更正和撤销使用的乐观锁版本',
+    created_by VARCHAR(64) NOT NULL COMMENT '候选创建主体，模型候选固定为 MODEL_CANDIDATE',
+    created_at DATETIME(6) NOT NULL COMMENT '候选创建 UTC 时间',
+    confirmed_by VARCHAR(64) NULL COMMENT '确认候选的公开用户 UUID',
+    confirmed_at DATETIME(6) NULL COMMENT '候选确认 UTC 时间',
+    updated_by VARCHAR(64) NOT NULL COMMENT '最近修改主体',
+    updated_at DATETIME(6) NOT NULL COMMENT '最近修改 UTC 时间',
+    revoked_by VARCHAR(64) NULL COMMENT '撤销记忆的公开用户 UUID',
+    revoked_at DATETIME(6) NULL COMMENT '记忆撤销 UTC 时间',
+    PRIMARY KEY (id),
+    UNIQUE KEY uk_user_memory_memory_id (memory_id),
+    UNIQUE KEY uk_user_memory_user_type_hash (user_id, memory_type, content_hash),
+    KEY idx_user_memory_user_status_updated (user_id, status, pinned, updated_at, id),
+    KEY idx_user_memory_source (user_id, source_conversation_id, source_turn_id),
+    CONSTRAINT chk_user_memory_type CHECK (memory_type IN ('PREFERENCE','CONSTRAINT','ENVIRONMENT')),
+    CONSTRAINT chk_user_memory_status CHECK (status IN ('PROPOSED','ACTIVE','REVOKED')),
+    CONSTRAINT chk_user_memory_version CHECK (version >= 0)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='受用户控制的跨会话长期记忆';

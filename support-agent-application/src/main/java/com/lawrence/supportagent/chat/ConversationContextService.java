@@ -8,6 +8,7 @@ import com.lawrence.supportagent.knowledge.ExactTermExtractor;
 import com.lawrence.supportagent.knowledge.DocumentContentPolicy;
 import com.lawrence.supportagent.model.ConversationSummaryPort;
 import com.lawrence.supportagent.model.ModelInvocationException;
+import com.lawrence.supportagent.memory.UserMemoryContextService;
 import com.lawrence.supportagent.sharedkernel.error.ApplicationException;
 import com.lawrence.supportagent.sharedkernel.error.ErrorCode;
 import com.lawrence.supportagent.sharedkernel.port.TimeProvider;
@@ -30,6 +31,7 @@ public class ConversationContextService {
     private final ConversationMemorySettings settings;
     private final Executor summaryExecutor;
     private final TimeProvider time;
+    private final UserMemoryContextService longTermMemories;
 
     /** 注入会话存储、独立摘要模型、确定性校验器、预算、执行器和统一时钟。 */
     public ConversationContextService(ConversationStorePort store,
@@ -39,6 +41,19 @@ public class ConversationContextService {
                                       ConservativeTokenEstimator tokens,
                                       ConversationMemorySettings settings,
                                       Executor summaryExecutor, TimeProvider time) {
+        this(store, summaryModel, exactTerms, contentPolicy, tokens, settings,
+                summaryExecutor, time, null);
+    }
+
+    /** 注入阶段 13 长期记忆选择服务，并保持单会话摘要职责独立。 */
+    public ConversationContextService(ConversationStorePort store,
+                                      ConversationSummaryPort summaryModel,
+                                      ExactTermExtractor exactTerms,
+                                      DocumentContentPolicy contentPolicy,
+                                      ConservativeTokenEstimator tokens,
+                                      ConversationMemorySettings settings,
+                                      Executor summaryExecutor, TimeProvider time,
+                                      UserMemoryContextService longTermMemories) {
         this.store = store;
         this.summaryModel = summaryModel;
         this.exactTerms = exactTerms;
@@ -47,6 +62,7 @@ public class ConversationContextService {
         this.settings = settings;
         this.summaryExecutor = summaryExecutor;
         this.time = time;
+        this.longTermMemories = longTermMemories;
     }
 
     /**
@@ -58,16 +74,18 @@ public class ConversationContextService {
      */
     public ConversationContext prepare(UUID ownerUserId, UUID conversationId, List<String> fixedSections) {
         MemorySnapshot snapshot = store.memorySnapshot(ownerUserId, conversationId);
-        if (requiresHardSummary(snapshot, fixedSections)) {
+        List<String> userMemories = longTermMemories == null
+                ? List.of() : longTermMemories.contextFor(ownerUserId);
+        if (requiresHardSummary(snapshot, fixedSections, userMemories)) {
             long previousSummaryVersion = snapshot.summaryVersion();
             summarize(ownerUserId, snapshot, true);
             snapshot = store.memorySnapshot(ownerUserId, conversationId);
             if (snapshot.summaryVersion() <= previousSummaryVersion
-                    && requiresHardSummary(snapshot, fixedSections)) {
+                    && requiresHardSummary(snapshot, fixedSections, userMemories)) {
                 throw unavailable(null);
             }
         }
-        return assemble(snapshot, fixedSections);
+        return assemble(snapshot, fixedSections, userMemories);
     }
 
     /** 在成功轮次提交后按软阈值异步生成摘要，失败时保留全部原始轮次。 */
@@ -83,9 +101,10 @@ public class ConversationContextService {
     }
 
     /** 判断原始轮次或完整调用预算是否要求在当前模型调用前同步摘要。 */
-    private boolean requiresHardSummary(MemorySnapshot snapshot, List<String> fixedSections) {
+    private boolean requiresHardSummary(MemorySnapshot snapshot, List<String> fixedSections,
+                                        List<String> userMemories) {
         return snapshot.turns().size() >= settings.hardTriggerTurns()
-                || totalTokens(snapshot, fixedSections) > settings.availableInputTokens();
+                || totalTokens(snapshot, fixedSections, userMemories) > settings.availableInputTokens();
     }
 
     /** 判断成功轮次数量或会话记忆估算是否达到异步摘要软阈值。 */
@@ -99,7 +118,7 @@ public class ConversationContextService {
     private void summarize(UUID ownerUserId, MemorySnapshot snapshot, boolean required) {
         List<CompletedTurn> source = sourceTurns(snapshot.turns());
         if (source.isEmpty()) {
-            if (required && totalTokens(snapshot, List.of()) > settings.availableInputTokens()) {
+            if (required && totalTokens(snapshot, List.of(), List.of()) > settings.availableInputTokens()) {
                 throw unavailable(null);
             }
             return;
@@ -176,7 +195,8 @@ public class ConversationContextService {
     }
 
     /** 在冻结预算内按“摘要优先、最近轮次从新到旧”的顺序组装上下文。 */
-    private ConversationContext assemble(MemorySnapshot snapshot, List<String> fixedSections) {
+    private ConversationContext assemble(MemorySnapshot snapshot, List<String> fixedSections,
+                                         List<String> userMemories) {
         int fixedTokens = tokens.estimate(fixedSections);
         int remaining = settings.availableInputTokens() - fixedTokens;
         if (remaining < 0) {
@@ -184,6 +204,13 @@ public class ConversationContextService {
                     "当前问题和证据超过模型输入预算");
         }
         List<String> result = new ArrayList<>();
+        for (String memory : userMemories) {
+            int memoryTokens = tokens.estimate(memory);
+            if (memoryTokens <= remaining) {
+                result.add(memory);
+                remaining -= memoryTokens;
+            }
+        }
         if (snapshot.summary() != null) {
             String summary = snapshot.summary().toModelContext();
             int summaryTokens = tokens.estimate(summary);
@@ -225,8 +252,9 @@ public class ConversationContextService {
     }
 
     /** 估算会话记忆、当前问题和当前证据的合计输入 Token。 */
-    private int totalTokens(MemorySnapshot snapshot, List<String> fixedSections) {
-        return memoryTokens(snapshot) + tokens.estimate(fixedSections);
+    private int totalTokens(MemorySnapshot snapshot, List<String> fixedSections,
+                            List<String> userMemories) {
+        return memoryTokens(snapshot) + tokens.estimate(fixedSections) + tokens.estimate(userMemories);
     }
 
     /** 判断当前快照是否存在至少一个可压缩且不会侵入最近窗口的轮次。 */

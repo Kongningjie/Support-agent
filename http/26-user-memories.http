@@ -1,0 +1,48 @@
+@baseUrl = http://localhost:8080
+@accessToken = replace-with-login-access-token
+@memoryId = replace-with-memory-uuid
+
+### 查询长期记忆开关：首次返回 enabled=false、version=0
+GET {{baseUrl}}/api/v1/users/me/memory-settings
+Authorization: Bearer {{accessToken}}
+
+### 显式启用长期记忆
+PATCH {{baseUrl}}/api/v1/users/me/memory-settings
+Authorization: Bearer {{accessToken}}
+Idempotency-Key: memory-settings-enable-001
+Content-Type: application/json
+
+{"enabled":true,"expectedVersion":0}
+
+### 查询本人候选和已确认记忆
+GET {{baseUrl}}/api/v1/memories?page=1&size=20
+Authorization: Bearer {{accessToken}}
+
+### 确认模型候选
+POST {{baseUrl}}/api/v1/memories/{{memoryId}}/confirm
+Authorization: Bearer {{accessToken}}
+Idempotency-Key: memory-confirm-001
+Content-Type: application/json
+
+{"expectedVersion":0}
+
+### 更正正文、清除过期时间并固定
+PATCH {{baseUrl}}/api/v1/memories/{{memoryId}}
+Authorization: Bearer {{accessToken}}
+Idempotency-Key: memory-revise-001
+Content-Type: application/json
+
+{"content":"我的开发环境固定使用 Windows 11 和 PowerShell 7。","expiresAt":null,"clearExpiresAt":true,"pinned":true,"expectedVersion":1}
+
+### 撤销记忆
+POST {{baseUrl}}/api/v1/memories/{{memoryId}}/revoke
+Authorization: Bearer {{accessToken}}
+Idempotency-Key: memory-revoke-001
+Content-Type: application/json
+
+{"expectedVersion":2}
+
+### 永久删除记忆
+DELETE {{baseUrl}}/api/v1/memories/{{memoryId}}?expectedVersion=3
+Authorization: Bearer {{accessToken}}
+Idempotency-Key: memory-delete-001

@@ -14,6 +14,7 @@ import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.method.annotation.HandlerMethodValidationException;
 import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
 import org.springframework.web.bind.MissingServletRequestParameterException;
+import org.springframework.web.bind.MissingRequestHeaderException;
 
 /** 把可预期异常映射为安全、稳定的统一 JSON 响应。 */
 @RestControllerAdvice
@@ -32,7 +33,8 @@ public class GlobalExceptionHandler {
     /** 将请求校验错误映射为 400。 */
     @ExceptionHandler({MethodArgumentNotValidException.class, HandlerMethodValidationException.class,
             ConstraintViolationException.class, MethodArgumentTypeMismatchException.class,
-            MissingServletRequestParameterException.class, HttpMessageNotReadableException.class,
+            MissingServletRequestParameterException.class, MissingRequestHeaderException.class,
+            HttpMessageNotReadableException.class,
             IllegalArgumentException.class})
     public ResponseEntity<ApiResult<Void>> handleValidation(Exception exception, HttpServletRequest request) {
         return response(HttpStatus.BAD_REQUEST, "COMMON_VALIDATION_FAILED", "请求参数不符合要求", request);
@@ -63,12 +65,14 @@ public class GlobalExceptionHandler {
     /** 根据公开错误语义选择 HTTP 状态，避免所有应用异常被误报为冲突。 */
     private HttpStatus statusOf(ApplicationException exception) {
         return switch (exception.errorCode()) {
-            case COMMON_VALIDATION_FAILED, KNOWLEDGE_SENSITIVE_CONTENT -> HttpStatus.BAD_REQUEST;
+            case COMMON_VALIDATION_FAILED, KNOWLEDGE_SENSITIVE_CONTENT,
+                    MEMORY_SENSITIVE_CONTENT -> HttpStatus.BAD_REQUEST;
             case AUTH_INVALID_CREDENTIALS, AUTH_UNAUTHORIZED -> HttpStatus.UNAUTHORIZED;
             case AUTH_FORBIDDEN, AUTH_SELF_DISABLE_FORBIDDEN -> HttpStatus.FORBIDDEN;
             case AUTH_RATE_LIMITED -> HttpStatus.TOO_MANY_REQUESTS;
             case TICKET_NOT_FOUND, KNOWLEDGE_NOT_FOUND, ASYNC_TASK_NOT_FOUND, AUTH_USER_NOT_FOUND,
-                    TICKET_SUGGESTION_NOT_FOUND, CHAT_CONVERSATION_EXPIRED -> HttpStatus.NOT_FOUND;
+                    TICKET_SUGGESTION_NOT_FOUND, CHAT_CONVERSATION_EXPIRED,
+                    MEMORY_NOT_FOUND -> HttpStatus.NOT_FOUND;
             case COMMON_CONFLICT, COMMON_IDEMPOTENCY_IN_PROGRESS,
                     COMMON_IDEMPOTENCY_KEY_REUSED, TICKET_STATUS_CONFLICT,
                     TICKET_VERSION_CONFLICT, KNOWLEDGE_DUPLICATE_CONTENT,
@@ -76,7 +80,8 @@ public class GlobalExceptionHandler {
                     ASYNC_TASK_NOT_RETRYABLE, CHAT_VERSION_CONFLICT,
                     CHAT_CONVERSATION_BUSY, CHAT_MESSAGE_ID_REUSED,
                     TICKET_SUGGESTION_IN_PROGRESS, AUTH_USERNAME_CONFLICT,
-                    AUTH_USER_VERSION_CONFLICT -> HttpStatus.CONFLICT;
+                    AUTH_USER_VERSION_CONFLICT, MEMORY_VERSION_CONFLICT,
+                    MEMORY_STATUS_CONFLICT, MEMORY_DUPLICATE_CONTENT -> HttpStatus.CONFLICT;
             case DEPENDENCY_UNAVAILABLE, DASHSCOPE_NOT_CONFIGURED,
                     KNOWLEDGE_INDEX_FAILED, RETRIEVAL_FAILED,
                     CHAT_MODEL_UNAVAILABLE -> HttpStatus.SERVICE_UNAVAILABLE;

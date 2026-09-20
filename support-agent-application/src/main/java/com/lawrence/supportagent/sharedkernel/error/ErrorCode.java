@@ -28,6 +28,16 @@ public enum ErrorCode {
     AUTH_USER_VERSION_CONFLICT,
     /** 管理员试图禁用自己的账号。 */
     AUTH_SELF_DISABLE_FORBIDDEN,
+    /** 指定长期记忆不存在或不属于当前用户。 */
+    MEMORY_NOT_FOUND,
+    /** 长期记忆或开关的乐观锁版本已经变化。 */
+    MEMORY_VERSION_CONFLICT,
+    /** 长期记忆当前状态不允许执行请求操作。 */
+    MEMORY_STATUS_CONFLICT,
+    /** 长期记忆正文包含凭据或个人敏感信息。 */
+    MEMORY_SENSITIVE_CONTENT,
+    /** 长期记忆正文与同用户同类型的现有记录重复。 */
+    MEMORY_DUPLICATE_CONTENT,
     /** 指定工单不存在。 */
     TICKET_NOT_FOUND,
     /** 工单当前状态不允许执行请求操作。 */

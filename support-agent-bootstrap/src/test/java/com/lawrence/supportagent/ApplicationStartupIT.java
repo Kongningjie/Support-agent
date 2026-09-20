@@ -10,6 +10,11 @@ import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.util.UUID;
+import com.lawrence.supportagent.memory.MemoryType;
+import com.lawrence.supportagent.memory.UserMemory;
+import com.lawrence.supportagent.memory.UserMemoryContentPolicy;
+import com.lawrence.supportagent.memory.port.UserMemoryRepository;
+import java.time.Instant;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -54,6 +59,8 @@ class ApplicationStartupIT {
     private int serverPort;
     @Autowired
     private ObjectMapper objectMapper;
+    @Autowired
+    private UserMemoryRepository userMemoryRepository;
     private volatile String adminToken;
 
     /** 把 Testcontainers MySQL 连接信息注入完整应用。 */
@@ -130,6 +137,77 @@ class ApplicationStartupIT {
                 "/api/v1/conversations/" + conversationId + "?expectedVersion=0", "", accessToken());
         assertEquals(200, deleted.statusCode());
         assertEquals(404, get(client, "/api/v1/conversations/" + conversationId).statusCode());
+    }
+
+    /** 验证长期记忆默认关闭、开关幂等修改、本人列表和匿名访问边界。 */
+    @Test
+    void shouldManageAuthenticatedMemorySettings() throws Exception {
+        HttpClient client = HttpClient.newHttpClient();
+        JsonNode initial = objectMapper.readTree(get(client,
+                "/api/v1/users/me/memory-settings").body()).path("data");
+        boolean targetEnabled = !initial.path("enabled").asBoolean();
+        long expectedVersion = initial.path("version").asLong();
+
+        String key = "startup-it-memory-settings-" + UUID.randomUUID();
+        HttpResponse<String> enabled = sendWithIdempotency(client, "PATCH",
+                "/api/v1/users/me/memory-settings", "{\"enabled\":" + targetEnabled
+                        + ",\"expectedVersion\":" + expectedVersion + "}",
+                accessToken(), key);
+        HttpResponse<String> replayed = sendWithIdempotency(client, "PATCH",
+                "/api/v1/users/me/memory-settings", "{\"enabled\":" + targetEnabled
+                        + ",\"expectedVersion\":" + expectedVersion + "}",
+                accessToken(), key);
+        assertEquals(200, enabled.statusCode());
+        assertEquals(expectedVersion + 1,
+                objectMapper.readTree(enabled.body()).path("data").path("version").asLong());
+        assertEquals(objectMapper.readTree(enabled.body()).path("data"),
+                objectMapper.readTree(replayed.body()).path("data"));
+        assertEquals(0, objectMapper.readTree(get(client,
+                "/api/v1/memories?page=1&size=20").body()).path("data").path("totalElements").asLong());
+        assertEquals(401, send(client, "GET", "/api/v1/memories", "", null).statusCode());
+    }
+
+    /** 验证候选只能由本人确认，并可更正、撤销、永久删除且删除后不再出现。 */
+    @Test
+    void shouldCompleteUserMemoryLifecycle() throws Exception {
+        HttpClient client = HttpClient.newHttpClient();
+        JsonNode settings = objectMapper.readTree(get(client,
+                "/api/v1/users/me/memory-settings").body()).path("data");
+        if (!settings.path("enabled").asBoolean()) {
+            sendWithIdempotency(client, "PATCH", "/api/v1/users/me/memory-settings",
+                    "{\"enabled\":true,\"expectedVersion\":" + settings.path("version").asLong() + "}",
+                    accessToken(), "startup-it-enable-memory-" + UUID.randomUUID());
+        }
+        JsonNode me = objectMapper.readTree(get(client, "/api/v1/users/me").body()).path("data");
+        UUID userId = UUID.fromString(me.path("userId").stringValue());
+        String content = "阶段十三环境-" + UUID.randomUUID();
+        UserMemory candidate = UserMemory.propose(UUID.randomUUID(), userId,
+                MemoryType.ENVIRONMENT, content,
+                new UserMemoryContentPolicy().normalize(content).contentHash(),
+                UUID.randomUUID(), UUID.randomUUID(), Instant.now());
+        UserMemory inserted = userMemoryRepository.insertCandidate(candidate).orElseThrow();
+
+        HttpResponse<String> confirmed = sendWithIdempotency(client, "POST",
+                "/api/v1/memories/" + inserted.memoryId() + "/confirm", "{\"expectedVersion\":0}",
+                accessToken(), "startup-it-confirm-memory-" + UUID.randomUUID());
+        assertEquals("ACTIVE", objectMapper.readTree(confirmed.body())
+                .path("data").path("status").stringValue());
+        HttpResponse<String> revised = sendWithIdempotency(client, "PATCH",
+                "/api/v1/memories/" + inserted.memoryId(),
+                "{\"pinned\":true,\"clearExpiresAt\":false,\"expectedVersion\":1}",
+                accessToken(), "startup-it-revise-memory-" + UUID.randomUUID());
+        assertTrue(objectMapper.readTree(revised.body()).path("data").path("pinned").asBoolean());
+        HttpResponse<String> revoked = sendWithIdempotency(client, "POST",
+                "/api/v1/memories/" + inserted.memoryId() + "/revoke", "{\"expectedVersion\":2}",
+                accessToken(), "startup-it-revoke-memory-" + UUID.randomUUID());
+        assertEquals("REVOKED", objectMapper.readTree(revoked.body())
+                .path("data").path("status").stringValue());
+        HttpResponse<String> deleted = sendWithIdempotency(client, "DELETE",
+                "/api/v1/memories/" + inserted.memoryId() + "?expectedVersion=3", "",
+                accessToken(), "startup-it-delete-memory-" + UUID.randomUUID());
+        assertEquals(200, deleted.statusCode());
+        assertFalse(get(client, "/api/v1/memories?page=1&size=100").body()
+                .contains(inserted.memoryId().toString()));
     }
 
     /** 验证存活探针为 UP，依赖不可用时就绪探针为 DOWN。 */
@@ -296,6 +374,10 @@ class ApplicationStartupIT {
         assertTrue(paths.has("/api/v1/conversations"));
         assertTrue(paths.has("/api/v1/conversations/{conversationId}"));
         assertTrue(paths.has("/api/v1/conversations/{conversationId}/reset"));
+        assertTrue(paths.has("/api/v1/users/me/memory-settings"));
+        assertTrue(paths.has("/api/v1/memories"));
+        assertTrue(paths.has("/api/v1/memories/{memoryId}/confirm"));
+        assertTrue(paths.has("/api/v1/memories/{memoryId}/revoke"));
         assertTrue(paths.has("/api/v1/tickets/drafts/from-conversation"));
         assertTrue(paths.has("/api/v1/tickets/{ticketNo}/resolve"));
         assertTrue(paths.has("/api/v1/resolved-cases/{caseId}"));
@@ -322,6 +404,19 @@ class ApplicationStartupIT {
                         URI.create("http://127.0.0.1:" + serverPort + path))
                 .header("Content-Type", "application/json")
                 .header("Authorization", "Bearer " + accessToken())
+                .method(method, HttpRequest.BodyPublishers.ofString(body)).build();
+        return client.send(request, HttpResponse.BodyHandlers.ofString());
+    }
+
+    /** 发送带认证和外部幂等键的 JSON 写请求。 */
+    private HttpResponse<String> sendWithIdempotency(HttpClient client, String method, String path,
+                                                      String body, String token, String key)
+            throws IOException, InterruptedException {
+        HttpRequest request = HttpRequest.newBuilder(
+                        URI.create("http://127.0.0.1:" + serverPort + path))
+                .header("Content-Type", "application/json")
+                .header("Authorization", "Bearer " + token)
+                .header("Idempotency-Key", key)
                 .method(method, HttpRequest.BodyPublishers.ofString(body)).build();
         return client.send(request, HttpResponse.BodyHandlers.ofString());
     }

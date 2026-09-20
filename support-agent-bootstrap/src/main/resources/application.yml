@@ -53,6 +53,8 @@ support-agent:
     intent-model: ${SUPPORT_AGENT_INTENT_MODEL:qwen3.7-flash}
     # 单会话滚动摘要模型，与普通 Chat 和意图模型端口隔离。
     summary-model: ${SUPPORT_AGENT_SUMMARY_MODEL:qwen3.7-flash}
+    # 跨会话长期记忆候选模型，与普通 Chat 和会话摘要端口隔离。
+    memory-model: ${SUPPORT_AGENT_MEMORY_MODEL:qwen3.7-flash}
     embedding-model: ${SUPPORT_AGENT_EMBEDDING_MODEL:text-embedding-v4}
     rerank-model: ${SUPPORT_AGENT_RERANK_MODEL:qwen3-rerank}
     # 普通 Chat 完整生成超时；首片段与完整请求延迟仍由阶段 8 门禁独立判断。
@@ -61,6 +63,8 @@ support-agent:
     intent-timeout: ${SUPPORT_AGENT_INTENT_TIMEOUT:3s}
     # 单次结构化会话摘要完整生成超时。
     summary-timeout: ${SUPPORT_AGENT_SUMMARY_TIMEOUT:30s}
+    # 单次长期记忆候选结构化生成超时；失败不影响已经完成的聊天。
+    memory-timeout: ${SUPPORT_AGENT_MEMORY_TIMEOUT:15s}
     # 工单草稿结构化生成单次超时。
     ticket-timeout: ${SUPPORT_AGENT_TICKET_TIMEOUT:30s}
     # 已解决案例结构化生成单次超时。
@@ -79,6 +83,8 @@ support-agent:
     intent-max-output-tokens: ${SUPPORT_AGENT_INTENT_MAX_OUTPUT_TOKENS:256}
     # 单次结构化会话摘要最大输出 Token。
     summary-max-output-tokens: ${SUPPORT_AGENT_SUMMARY_MAX_OUTPUT_TOKENS:1200}
+    # 单次最多三条简短长期记忆候选的输出上限。
+    memory-max-output-tokens: ${SUPPORT_AGENT_MEMORY_MAX_OUTPUT_TOKENS:400}
     # 工单草稿和案例草稿结构化生成的最大输出 Token。
     structured-max-output-tokens: ${SUPPORT_AGENT_STRUCTURED_MAX_OUTPUT_TOKENS:800}
     # 知识回答 Prompt 版本；只有压缩版通过完整 A/B 门禁后才允许设为 COMPACT。
@@ -158,6 +164,9 @@ support-agent:
     soft-trigger-memory-tokens: ${SUPPORT_AGENT_CONVERSATION_SOFT_TRIGGER_MEMORY_TOKENS:6000}
     # 达到该原始轮次数时，在下一次模型调用前同步生成摘要。
     hard-trigger-turns: ${SUPPORT_AGENT_CONVERSATION_HARD_TRIGGER_TURNS:20}
+  memory:
+    # 已确认长期记忆每次注入模型上下文的独立估算 Token 上限。
+    input-budget-tokens: ${SUPPORT_AGENT_MEMORY_INPUT_BUDGET_TOKENS:1000}
   observability:
     # Outbox 指标写入本地 Gauge 的采样周期；指标抓取本身不会访问数据库。
     outbox-sample-delay: ${SUPPORT_AGENT_OUTBOX_SAMPLE_DELAY:10s}

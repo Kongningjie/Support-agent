@@ -8,6 +8,7 @@ import com.lawrence.supportagent.chat.port.ConversationStorePort.CompletedTurn;
 import com.lawrence.supportagent.model.ChatModelPort;
 import com.lawrence.supportagent.model.ChatModelPort.ModelAnswer;
 import com.lawrence.supportagent.model.ModelInvocationException;
+import com.lawrence.supportagent.memory.UserMemoryCandidateService;
 import com.lawrence.supportagent.observability.OptimizationTelemetryPort;
 import com.lawrence.supportagent.observability.OptimizationTelemetryPort.Operation;
 import com.lawrence.supportagent.retrieval.RetrievalEvidence;
@@ -55,6 +56,7 @@ public class ChatUseCase {
     private final OptimizationTelemetryPort telemetry;
     private final Duration suggestionTtl;
     private final ConversationContextService contextService;
+    private final UserMemoryCandidateService memoryCandidates;
 
     /** 创建不向 Agent 下放检索路由或写权限的聊天用例。 */
     public ChatUseCase(IntentRecognitionService intents, RetrievalService retrieval,
@@ -103,6 +105,21 @@ public class ChatUseCase {
                        String rerankModelName, double groundedThreshold,
                        OptimizationTelemetryPort telemetry, Duration suggestionTtl,
                        ConversationContextService contextService) {
+        this(intents, retrieval, chatModel, tickets, conversations, audits, validator, ids, time,
+                chatModelName, embeddingModelName, rerankModelName, groundedThreshold,
+                telemetry, suggestionTtl, contextService, null);
+    }
+
+    /** 创建带阶段 13 长期记忆候选生成能力的聊天用例。 */
+    public ChatUseCase(IntentRecognitionService intents, RetrievalService retrieval,
+                       ChatModelPort chatModel, TicketQueryUseCase tickets,
+                       ConversationStorePort conversations, AgentAuditPort audits,
+                       AnswerValidator validator, UuidGenerator ids, TimeProvider time,
+                       String chatModelName, String embeddingModelName,
+                       String rerankModelName, double groundedThreshold,
+                       OptimizationTelemetryPort telemetry, Duration suggestionTtl,
+                       ConversationContextService contextService,
+                       UserMemoryCandidateService memoryCandidates) {
         if (suggestionTtl == null || suggestionTtl.isZero() || suggestionTtl.isNegative()) {
             throw new IllegalArgumentException("工单建议有效期必须大于 0");
         }
@@ -122,6 +139,7 @@ public class ChatUseCase {
         this.telemetry = telemetry == null ? OptimizationTelemetryPort.noOp() : telemetry;
         this.suggestionTtl = suggestionTtl;
         this.contextService = contextService;
+        this.memoryCandidates = memoryCandidates;
     }
 
     /**
@@ -201,6 +219,10 @@ public class ChatUseCase {
             sink.complete();
             if (contextService != null) {
                 contextService.afterSuccessfulTurn(ownerUserId, begin.conversationId());
+            }
+            if (memoryCandidates != null) {
+                memoryCandidates.afterSuccessfulTurn(ownerUserId, begin.conversationId(),
+                        request.clientMessageId(), request.message());
             }
             telemetry.recordDuration(Operation.CHAT_REQUEST, elapsed(started), true);
         } catch (RuntimeException exception) {
