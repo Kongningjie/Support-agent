@@ -24,6 +24,7 @@ import tools.jackson.databind.json.JsonMapper;
 /** 使用真实 Redis 验证会话版本、幂等重放、运行围栏和建议消费原子性。 */
 @Testcontainers
 class RedisConversationStoreAdapterIT {
+    private static final UUID OWNER_ID = UUID.fromString("20000000-0000-0000-0000-000000000001");
     @Container
     private static final GenericContainer<?> REDIS = new GenericContainer<>(DockerImageName.parse("redis:7.4.7"))
             .withExposedPorts(6379);
@@ -53,26 +54,26 @@ class RedisConversationStoreAdapterIT {
     @Test
     void shouldCommitAndReplayCompletedMessage() {
         UUID messageId = UUID.randomUUID(); UUID runId = UUID.randomUUID(); Instant now = Instant.now();
-        var begin = store.begin(null, messageId, "问题", null, runId, now);
+        var begin = store.begin(OWNER_ID, null, messageId, "问题", null, runId, now);
         UUID suggestionId = UUID.randomUUID();
         CompletedTurn turn = new CompletedTurn(UUID.randomUUID(), messageId, runId, "问题", "问题",
                 ChatIntent.SUPPORT_QUERY, "无可靠知识", null, List.of(), suggestionId,
                 "冻结上下文", "NO_RELIABLE_KNOWLEDGE", now, 1);
-        assertThat(store.nextSequence(begin.conversationId(), runId)).isEqualTo(1);
-        store.complete(begin.conversationId(), runId, turn, null, now);
-        var replay = store.begin(begin.conversationId(), messageId, "问题", 1L, UUID.randomUUID(), now);
+        assertThat(store.nextSequence(OWNER_ID, begin.conversationId(), runId)).isEqualTo(1);
+        store.complete(OWNER_ID, begin.conversationId(), runId, turn, null, now);
+        var replay = store.begin(OWNER_ID, begin.conversationId(), messageId, "问题", 1L, UUID.randomUUID(), now);
         assertThat(replay.replayTurn().answer()).isEqualTo("无可靠知识");
-        assertThat(store.nextReplaySequence(begin.conversationId())).isEqualTo(2);
+        assertThat(store.nextReplaySequence(OWNER_ID, begin.conversationId())).isEqualTo(2);
     }
 
     /** 同一消息 UUID 用于不同正文时必须拒绝，不得错误重放。 */
     @Test
     void shouldRejectMessageIdReuseWithDifferentContent() {
         UUID messageId = UUID.randomUUID(); UUID runId = UUID.randomUUID();
-        var begin = store.begin(null, messageId, "问题一", null, runId, Instant.now());
-        store.fail(begin.conversationId(), runId, Instant.now());
-        store.begin(begin.conversationId(), messageId, "问题一", 0L, UUID.randomUUID(), Instant.now());
-        assertThatThrownBy(() -> store.begin(begin.conversationId(), messageId, "问题二", 0L,
+        var begin = store.begin(OWNER_ID, null, messageId, "问题一", null, runId, Instant.now());
+        store.fail(OWNER_ID, begin.conversationId(), runId, Instant.now());
+        store.begin(OWNER_ID, begin.conversationId(), messageId, "问题一", 0L, UUID.randomUUID(), Instant.now());
+        assertThatThrownBy(() -> store.begin(OWNER_ID, begin.conversationId(), messageId, "问题二", 0L,
                 UUID.randomUUID(), Instant.now())).isInstanceOfSatisfying(ApplicationException.class,
                 value -> assertThat(value.errorCode()).isEqualTo(ErrorCode.CHAT_MESSAGE_ID_REUSED));
     }
@@ -81,10 +82,10 @@ class RedisConversationStoreAdapterIT {
     @Test
     void shouldRejectConcurrentRunForSameConversation() {
         UUID firstRunId = UUID.randomUUID();
-        var begin = store.begin(null, UUID.randomUUID(), "问题一", null,
+        var begin = store.begin(OWNER_ID, null, UUID.randomUUID(), "问题一", null,
                 firstRunId, Instant.now());
 
-        assertThatThrownBy(() -> store.begin(begin.conversationId(), UUID.randomUUID(),
+        assertThatThrownBy(() -> store.begin(OWNER_ID, begin.conversationId(), UUID.randomUUID(),
                 "问题二", 0L, UUID.randomUUID(), Instant.now()))
                 .isInstanceOfSatisfying(ApplicationException.class,
                         value -> assertThat(value.errorCode())
@@ -97,20 +98,20 @@ class RedisConversationStoreAdapterIT {
         Instant now = Instant.now();
         UUID messageId = UUID.randomUUID();
         UUID runId = UUID.randomUUID();
-        var begin = store.begin(null, messageId, "问题", null, runId, now);
+        var begin = store.begin(OWNER_ID, null, messageId, "问题", null, runId, now);
         CompletedTurn turn = new CompletedTurn(UUID.randomUUID(), messageId, runId, "问题", "问题",
                 ChatIntent.SUPPORT_QUERY, "答案", null, List.of(), null,
                 null, "GROUNDED", now, 1);
-        store.complete(begin.conversationId(), runId, turn, null, now);
+        store.complete(OWNER_ID, begin.conversationId(), runId, turn, null, now);
 
         redisTemplate.getConnectionFactory().getConnection().serverCommands().flushAll();
 
-        assertThatThrownBy(() -> store.begin(begin.conversationId(), UUID.randomUUID(),
+        assertThatThrownBy(() -> store.begin(OWNER_ID, begin.conversationId(), UUID.randomUUID(),
                 "继续追问", 1L, UUID.randomUUID(), now.plusSeconds(1)))
                 .isInstanceOfSatisfying(ApplicationException.class,
                         value -> assertThat(value.errorCode())
                                 .isEqualTo(ErrorCode.CHAT_CONVERSATION_EXPIRED));
-        assertThat(store.begin(null, UUID.randomUUID(), "重新开始", null,
+        assertThat(store.begin(OWNER_ID, null, UUID.randomUUID(), "重新开始", null,
                 UUID.randomUUID(), now.plusSeconds(2)).status())
                 .isEqualTo(com.lawrence.supportagent.chat.port.ConversationStorePort.BeginStatus.ACQUIRED);
     }
@@ -123,11 +124,11 @@ class RedisConversationStoreAdapterIT {
         for (int index = 1; index <= 8; index++) {
             UUID runId = UUID.randomUUID();
             UUID messageId = UUID.randomUUID();
-            var begin = store.begin(conversationId, messageId, "问题" + index,
+            var begin = store.begin(OWNER_ID, conversationId, messageId, "问题" + index,
                     conversationId == null ? null : version, runId, Instant.now());
             conversationId = begin.conversationId();
             version++;
-            store.complete(conversationId, runId, new CompletedTurn(UUID.randomUUID(), messageId,
+            store.complete(OWNER_ID, conversationId, runId, new CompletedTurn(UUID.randomUUID(), messageId,
                     runId, "问题" + index, "问题" + index, ChatIntent.SUPPORT_QUERY,
                     "回答" + index, null, List.of(), null, null, "GROUNDED",
                     Instant.now(), version), null, Instant.now());
@@ -135,8 +136,8 @@ class RedisConversationStoreAdapterIT {
         ConversationSummary summary = new ConversationSummary(ConversationSummary.SCHEMA_VERSION,
                 1, 2, List.of("排查连接问题"), List.of(), List.of(), List.of(), List.of());
 
-        assertThat(store.commitSummary(conversationId, 0, summary, 6, Instant.now())).isTrue();
-        var snapshot = store.memorySnapshot(conversationId);
+        assertThat(store.commitSummary(OWNER_ID, conversationId, 0, summary, 6, Instant.now())).isTrue();
+        var snapshot = store.memorySnapshot(OWNER_ID, conversationId);
         assertThat(snapshot.summary()).isEqualTo(summary);
         assertThat(snapshot.turns()).extracting(CompletedTurn::conversationVersion)
                 .containsExactly(3L, 4L, 5L, 6L, 7L, 8L);
@@ -144,6 +145,23 @@ class RedisConversationStoreAdapterIT {
                 .isBetween(Duration.ofDays(6).toSeconds(), Duration.ofDays(7).toSeconds());
         assertThat(redisTemplate.getExpire("support-agent:chat:turns:{" + conversationId + "}"))
                 .isBetween(Duration.ofDays(6).toSeconds(), Duration.ofDays(7).toSeconds());
-        assertThat(store.commitSummary(conversationId, 0, summary, 6, Instant.now())).isFalse();
+        assertThat(store.commitSummary(OWNER_ID, conversationId, 0, summary, 6, Instant.now())).isFalse();
+    }
+
+    /** 其他用户和旧无归属会话均不得被当前用户接管。 */
+    @Test
+    void shouldRejectCrossUserAndOwnerlessConversationAccess() {
+        UUID conversationId = store.begin(OWNER_ID, null, UUID.randomUUID(), "问题", null,
+                UUID.randomUUID(), Instant.now()).conversationId();
+        UUID anotherUser = UUID.fromString("30000000-0000-0000-0000-000000000001");
+
+        assertThatThrownBy(() -> store.memorySnapshot(anotherUser, conversationId))
+                .isInstanceOfSatisfying(ApplicationException.class, exception ->
+                        assertThat(exception.errorCode()).isEqualTo(ErrorCode.CHAT_CONVERSATION_EXPIRED));
+        redisTemplate.opsForHash().delete(
+                "support-agent:chat:conversation:{" + conversationId + "}", "ownerUserId");
+        assertThatThrownBy(() -> store.memorySnapshot(OWNER_ID, conversationId))
+                .isInstanceOfSatisfying(ApplicationException.class, exception ->
+                        assertThat(exception.errorCode()).isEqualTo(ErrorCode.CHAT_CONVERSATION_EXPIRED));
     }
 }

@@ -85,6 +85,7 @@ class AsyncTaskUseCaseTest {
     /** 创建带主键、编号并处于 RESOLVED 状态的测试工单。 */
     private Ticket resolvedTicket() {
         Ticket draft = new Ticket(20L, "T000000000020", null, null,
+                java.util.UUID.fromString("20000000-0000-0000-0000-000000000001"),
                 "标题", "问题", null, com.lawrence.supportagent.ticket.TicketStatus.DRAFT,
                 null, null, null, 0L, "tester", NOW, "tester", NOW,
                 null, null, null, null);

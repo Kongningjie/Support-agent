@@ -10,6 +10,8 @@ import com.lawrence.supportagent.asynctask.AsyncTask;
 import com.lawrence.supportagent.asynctask.AsyncTaskCreator;
 import com.lawrence.supportagent.asynctask.AsyncTaskStatus;
 import com.lawrence.supportagent.asynctask.AsyncTaskType;
+import com.lawrence.supportagent.auth.AuthenticatedUser;
+import com.lawrence.supportagent.auth.MySqlUserRepository;
 import com.lawrence.supportagent.asynctask.port.AsyncTaskRepository;
 import com.lawrence.supportagent.idempotency.IdempotencyCommand;
 import com.lawrence.supportagent.idempotency.IdempotentExecutor;
@@ -20,6 +22,7 @@ import com.lawrence.supportagent.knowledge.ManagedDocument;
 import com.lawrence.supportagent.knowledge.port.ManagedDocumentRepository;
 import com.lawrence.supportagent.persistence.mapper.FoundationMapper;
 import com.lawrence.supportagent.persistence.mapper.AsyncTaskWorkflowMapper;
+import com.lawrence.supportagent.persistence.mapper.UserAccountMapper;
 import com.lawrence.supportagent.persistence.record.AsyncTaskMetricsDO;
 import com.lawrence.supportagent.persistence.repository.TicketMyBatisRepository;
 import com.lawrence.supportagent.resolvedcase.ResolvedCase;
@@ -30,6 +33,9 @@ import com.lawrence.supportagent.ticket.TicketCommandUseCase;
 import com.lawrence.supportagent.ticket.TicketDetails;
 import com.lawrence.supportagent.ticket.TicketQueryUseCase;
 import com.lawrence.supportagent.ticket.port.TicketRepository;
+import com.lawrence.supportagent.user.UserRole;
+import com.lawrence.supportagent.user.UserAccount;
+import com.lawrence.supportagent.user.UserStatus;
 import com.lawrence.supportagent.sharedkernel.error.ApplicationException;
 import com.lawrence.supportagent.sharedkernel.error.ErrorCode;
 import com.lawrence.supportagent.sharedkernel.port.TimeProvider;
@@ -70,6 +76,8 @@ import org.testcontainers.mysql.MySQLContainer;
 class FoundationRepositoryIT {
     private static final Instant NOW = Instant.parse("2026-09-03T08:00:00.123456Z")
             .truncatedTo(ChronoUnit.MICROS);
+    private static final AuthenticatedUser ACTOR = new AuthenticatedUser(
+            UUID.fromString("20000000-0000-0000-0000-000000000001"), "tester", UserRole.USER);
 
     @Container
     private static final MySQLContainer MYSQL = new MySQLContainer("mysql:8.4.11")
@@ -89,6 +97,8 @@ class FoundationRepositoryIT {
     private AsyncTaskWorkflowMapper taskWorkflowMapper;
     @Autowired
     private IdempotentExecutor idempotentExecutor;
+    @Autowired
+    private UserAccountMapper userAccountMapper;
 
     /** 把 Testcontainers 连接信息注入 Spring 数据源。 */
     @DynamicPropertySource
@@ -103,7 +113,7 @@ class FoundationRepositoryIT {
     void shouldRoundTripTicket() {
         UUID conversationId = UUID.fromString("d57cc8e3-f357-4bc0-a8cf-a5a472127f76");
         UUID turnId = UUID.fromString("c6fd9532-95eb-42cf-8230-4a0b9d686732");
-        Ticket inserted = ticketRepository.save(Ticket.draft(conversationId, turnId,
+        Ticket inserted = ticketRepository.save(Ticket.draft(conversationId, turnId, ACTOR.userId(),
                 "服务无法启动", "启动时报配置错误", "已检查环境变量", "tester", NOW));
 
         assertNotNull(inserted.id());
@@ -112,6 +122,50 @@ class FoundationRepositoryIT {
         Ticket updated = ticketRepository.save(inserted.submit("reviewer", NOW.plusSeconds(1)));
         assertEquals(1, updated.version());
         assertEquals(updated, ticketRepository.findById(updated.id()).orElseThrow());
+    }
+
+    /** 普通用户只能访问自己的工单，管理员可访问其他用户和历史无归属工单。 */
+    @Test
+    void shouldScopeTicketsByOwnerAndAllowAdministratorHistoricalAccess() {
+        UUID firstOwner = ACTOR.userId();
+        UUID secondOwner = UUID.fromString("30000000-0000-0000-0000-000000000001");
+        Ticket owned = ticketRepository.assignNumber(ticketRepository.save(Ticket.draft(null, null,
+                firstOwner, "归属工单", "仅所有者可见", null, firstOwner.toString(), NOW)),
+                "T800000000001");
+        Ticket historical = ticketRepository.assignNumber(ticketRepository.save(Ticket.draft(null, null,
+                null, "历史工单", "仅管理员可见", null, "legacy", NOW)),
+                "T800000000002");
+
+        assertTrue(ticketRepository.findByTicketNoForAccess(
+                owned.ticketNo(), firstOwner, false).isPresent());
+        assertTrue(ticketRepository.findByTicketNoForAccess(
+                owned.ticketNo(), secondOwner, false).isEmpty());
+        assertTrue(ticketRepository.findByTicketNoForAccess(
+                owned.ticketNo(), secondOwner, true).isPresent());
+        assertTrue(ticketRepository.findByTicketNoForAccess(
+                historical.ticketNo(), firstOwner, false).isEmpty());
+        assertTrue(ticketRepository.findByTicketNoForAccess(
+                historical.ticketNo(), firstOwner, true).isPresent());
+    }
+
+    /** 验证本地用户 UUID、BCrypt 哈希、角色、状态和乐观锁版本往返。 */
+    @Test
+    void shouldRoundTripLocalUserWithoutPlaintextPassword() {
+        MySqlUserRepository repository = new MySqlUserRepository(userAccountMapper);
+        UUID userId = UUID.randomUUID();
+        String hash = "$2a$10$abcdefghijklmnopqrstuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuu";
+        UserAccount inserted = repository.save(UserAccount.create(userId, "local-user", "本地用户",
+                hash, UserRole.USER, ACTOR.userId().toString(), NOW));
+
+        UserAccount loaded = repository.findByUsername("local-user").orElseThrow();
+        assertEquals(userId, loaded.userId());
+        assertEquals(hash, loaded.passwordHash());
+        assertTrue(!loaded.passwordHash().contains("strong-password"));
+
+        UserAccount disabled = repository.save(inserted.changeStatus(
+                UserStatus.DISABLED, ACTOR.userId().toString(), NOW.plusSeconds(1)));
+        assertEquals(1, disabled.version());
+        assertEquals(UserStatus.DISABLED, disabled.status());
     }
 
     /** 验证托管文档插入、发布状态和审计字段往返。 */
@@ -148,7 +202,7 @@ class FoundationRepositoryIT {
     /** 验证已解决案例的外键、发布状态和审计字段往返。 */
     @Test
     void shouldRoundTripResolvedCase() {
-        Ticket source = ticketRepository.save(Ticket.draft(null, null, "来源工单",
+        Ticket source = ticketRepository.save(Ticket.draft(null, null, ACTOR.userId(), "来源工单",
                 "问题描述", null, "tester", NOW));
         ResolvedCase draft = new ResolvedCase(null, source.id(), "案例标题", "问题",
                 "根因", "方案", ResolvedCaseStatus.DRAFT,
@@ -188,20 +242,20 @@ class FoundationRepositoryIT {
     void shouldReplayIdempotentTicketCreationAndRejectChangedRequest() {
         TicketQueryUseCase queryUseCase = new TicketQueryUseCase(ticketRepository);
         TicketCommandUseCase commandUseCase = new TicketCommandUseCase(ticketRepository,
-                queryUseCase, idempotentExecutor, () -> new com.lawrence.supportagent.sharedkernel.OperatorId("tester"),
-                Instant::now, new AsyncTaskCreator(taskRepository, Instant::now));
+                queryUseCase, idempotentExecutor, Instant::now,
+                new AsyncTaskCreator(taskRepository, Instant::now));
         String key = "integration-ticket-" + UUID.randomUUID();
 
-        TicketDetails first = commandUseCase.createDraft("幂等工单", "相同请求只创建一次",
+        TicketDetails first = commandUseCase.createDraft(ACTOR, "幂等工单", "相同请求只创建一次",
                 null, key);
-        TicketDetails replayed = commandUseCase.createDraft("幂等工单", "相同请求只创建一次",
+        TicketDetails replayed = commandUseCase.createDraft(ACTOR, "幂等工单", "相同请求只创建一次",
                 null, key);
         ApplicationException conflict = assertThrows(ApplicationException.class,
-                () -> commandUseCase.createDraft("变更标题", "相同请求只创建一次", null, key));
+                () -> commandUseCase.createDraft(ACTOR, "变更标题", "相同请求只创建一次", null, key));
 
         assertEquals(first.ticketNo(), replayed.ticketNo());
         assertEquals(ErrorCode.COMMON_IDEMPOTENCY_KEY_REUSED, conflict.errorCode());
-        assertEquals(1, ticketRepository.count(null, first.ticketNo()));
+        assertEquals(1, ticketRepository.count(null, first.ticketNo(), ACTOR.userId(), false));
     }
 
     /** 验证解决工单和案例生成任务在同一幂等事务中持久化。 */
@@ -209,16 +263,15 @@ class FoundationRepositoryIT {
     void shouldResolveTicketAndInsertCaseGenerationTaskAtomically() {
         TicketQueryUseCase queryUseCase = new TicketQueryUseCase(ticketRepository);
         TicketCommandUseCase commandUseCase = new TicketCommandUseCase(ticketRepository,
-                queryUseCase, idempotentExecutor,
-                () -> new com.lawrence.supportagent.sharedkernel.OperatorId("tester"),
-                Instant::now, new AsyncTaskCreator(taskRepository, Instant::now));
+                queryUseCase, idempotentExecutor, Instant::now,
+                new AsyncTaskCreator(taskRepository, Instant::now));
         String suffix = UUID.randomUUID().toString();
-        TicketDetails draft = commandUseCase.createDraft("待解决工单", "连接失败", null,
+        TicketDetails draft = commandUseCase.createDraft(ACTOR, "待解决工单", "连接失败", null,
                 "create-resolve-" + suffix);
-        TicketDetails open = commandUseCase.submit(draft.ticketNo(), draft.version(),
+        TicketDetails open = commandUseCase.submit(ACTOR, draft.ticketNo(), draft.version(),
                 "submit-resolve-" + suffix);
 
-        TicketDetails resolved = commandUseCase.resolve(open.ticketNo(), "端口错误",
+        TicketDetails resolved = commandUseCase.resolve(ACTOR, open.ticketNo(), "端口错误",
                 "修正端口", open.version(), "resolve-" + suffix);
 
         assertEquals(com.lawrence.supportagent.ticket.TicketStatus.RESOLVED, resolved.status());
@@ -240,18 +293,16 @@ class FoundationRepositoryIT {
             }
         };
         TicketCommandUseCase commandUseCase = new TicketCommandUseCase(ticketRepository,
-                queryUseCase, idempotentExecutor,
-                () -> new com.lawrence.supportagent.sharedkernel.OperatorId("tester"),
-                Instant::now, failingCreator);
+                queryUseCase, idempotentExecutor, Instant::now, failingCreator);
         String suffix = UUID.randomUUID().toString();
-        TicketDetails draft = commandUseCase.createDraft("事务回滚工单", "连接失败", null,
+        TicketDetails draft = commandUseCase.createDraft(ACTOR, "事务回滚工单", "连接失败", null,
                 "create-rollback-" + suffix);
-        TicketDetails open = commandUseCase.submit(draft.ticketNo(), draft.version(),
+        TicketDetails open = commandUseCase.submit(ACTOR, draft.ticketNo(), draft.version(),
                 "submit-rollback-" + suffix);
         long tasksBefore = taskRepository.count(AsyncTaskType.CASE_GENERATION,
                 AsyncTaskStatus.PENDING, AggregateType.TICKET, null);
 
-        assertThrows(IllegalStateException.class, () -> commandUseCase.resolve(open.ticketNo(),
+        assertThrows(IllegalStateException.class, () -> commandUseCase.resolve(ACTOR, open.ticketNo(),
                 "端口错误", "修正端口", open.version(), "resolve-rollback-" + suffix));
 
         assertEquals(com.lawrence.supportagent.ticket.TicketStatus.OPEN,

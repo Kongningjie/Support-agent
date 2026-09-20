@@ -27,8 +27,10 @@ public class MySqlAgentAuditAdapter implements AgentAuditPort {
     }
 
     /** {@inheritDoc} */
-    @Override public void start(UUID runId, UUID conversationId, UUID clientMessageId, Instant now) {
-        mapper.insertRun(toBytes(runId), toBytes(conversationId), toBytes(clientMessageId), now);
+    @Override public void start(UUID runId, UUID userId, UUID conversationId,
+                                UUID clientMessageId, Instant now) {
+        mapper.insertRun(toBytes(runId), toBytes(userId), toBytes(conversationId),
+                toBytes(clientMessageId), now);
     }
     /** {@inheritDoc} */
     @Override public void recordIntent(UUID runId, IntentDecision decision) {

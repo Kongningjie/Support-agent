@@ -2,8 +2,8 @@
 <!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
 <mapper namespace="com.lawrence.supportagent.persistence.mapper.AgentAuditMapper">
     <insert id="insertRun">
-        INSERT INTO agent_run (run_id,conversation_id,client_message_id,status,created_at)
-        VALUES (#{runId},#{conversationId},#{clientMessageId},'RUNNING',#{createdAt})
+        INSERT INTO agent_run (run_id,user_id,conversation_id,client_message_id,status,created_at)
+        VALUES (#{runId},#{userId},#{conversationId},#{clientMessageId},'RUNNING',#{createdAt})
     </insert>
     <update id="updateIntent">
         UPDATE agent_run SET intent=#{intent},intent_confidence=#{confidence},

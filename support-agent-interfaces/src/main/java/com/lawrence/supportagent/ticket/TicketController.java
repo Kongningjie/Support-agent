@@ -1,5 +1,6 @@
 package com.lawrence.supportagent.ticket;
 
+import com.lawrence.supportagent.auth.AuthenticatedUser;
 import com.lawrence.supportagent.sharedkernel.api.ApiResponseFactory;
 import com.lawrence.supportagent.sharedkernel.api.ApiResult;
 import com.lawrence.supportagent.sharedkernel.api.PageResult;
@@ -16,6 +17,7 @@ import java.time.Instant;
 import java.util.List;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -50,8 +52,9 @@ public class TicketController {
     @Operation(summary = "从会话建议创建工单草稿")
     @PostMapping("/drafts/from-conversation")
     public ResponseEntity<ApiResult<TicketResponse>> createFromConversation(
+            @AuthenticationPrincipal AuthenticatedUser actor,
             @Valid @RequestBody ConversationDraftRequest body, HttpServletRequest request) {
-        TicketDetails ticket = suggestedTicketUseCase.create(body.conversationId(),
+        TicketDetails ticket = suggestedTicketUseCase.create(actor, body.conversationId(),
                 body.suggestionId(), body.idempotencyKey());
         return ResponseEntity.status(HttpStatus.CREATED)
                 .body(responses.success(TicketResponse.from(ticket), request));
@@ -61,8 +64,9 @@ public class TicketController {
     @Operation(summary = "手工创建工单草稿")
     @PostMapping("/drafts")
     public ResponseEntity<ApiResult<TicketResponse>> createDraft(
+            @AuthenticationPrincipal AuthenticatedUser actor,
             @Valid @RequestBody CreateDraftRequest body, HttpServletRequest request) {
-        TicketResponse result = TicketResponse.from(commandUseCase.createDraft(body.title(),
+        TicketResponse result = TicketResponse.from(commandUseCase.createDraft(actor, body.title(),
                 body.problemDescription(), body.attemptedActions(), body.idempotencyKey()));
         return ResponseEntity.status(HttpStatus.CREATED).body(responses.success(result, request));
     }
@@ -71,23 +75,25 @@ public class TicketController {
     @Operation(summary = "查询工单详情")
     @GetMapping("/{ticketNo}")
     public ApiResult<TicketResponse> get(
+                                         @AuthenticationPrincipal AuthenticatedUser actor,
                                          @Parameter(description = "T 加 12 位数字的工单编号",
                                                  example = "T000000000001")
                                          @PathVariable String ticketNo,
                                          HttpServletRequest request) {
-        return responses.success(TicketResponse.from(queryUseCase.get(ticketNo)), request);
+        return responses.success(TicketResponse.from(queryUseCase.get(actor, ticketNo)), request);
     }
 
     /** 修改版本匹配的工单草稿。 */
     @Operation(summary = "修改工单草稿")
     @PutMapping("/{ticketNo}/draft")
     public ApiResult<TicketResponse> reviseDraft(
+                                                  @AuthenticationPrincipal AuthenticatedUser actor,
                                                   @Parameter(description = "待修改的工单编号",
                                                           example = "T000000000001")
                                                   @PathVariable String ticketNo,
                                                   @Valid @RequestBody ReviseDraftRequest body,
                                                   HttpServletRequest request) {
-        TicketDetails result = commandUseCase.reviseDraft(ticketNo, body.title(),
+        TicketDetails result = commandUseCase.reviseDraft(actor, ticketNo, body.title(),
                 body.problemDescription(), body.attemptedActions(), body.version());
         return responses.success(TicketResponse.from(result), request);
     }
@@ -96,12 +102,13 @@ public class TicketController {
     @Operation(summary = "提交工单草稿")
     @PostMapping("/{ticketNo}/submit")
     public ApiResult<TicketResponse> submit(
+                                             @AuthenticationPrincipal AuthenticatedUser actor,
                                              @Parameter(description = "待提交的工单编号",
                                                      example = "T000000000001")
                                              @PathVariable String ticketNo,
                                              @Valid @RequestBody VersionedActionRequest body,
                                              HttpServletRequest request) {
-        TicketDetails result = commandUseCase.submit(ticketNo, body.version(), body.idempotencyKey());
+        TicketDetails result = commandUseCase.submit(actor, ticketNo, body.version(), body.idempotencyKey());
         return responses.success(TicketResponse.from(result), request);
     }
 
@@ -109,12 +116,13 @@ public class TicketController {
     @Operation(summary = "关闭工单")
     @PostMapping("/{ticketNo}/close")
     public ApiResult<TicketResponse> close(
+                                            @AuthenticationPrincipal AuthenticatedUser actor,
                                             @Parameter(description = "待关闭的工单编号",
                                                     example = "T000000000001")
                                             @PathVariable String ticketNo,
                                             @Valid @RequestBody CloseTicketRequest body,
                                             HttpServletRequest request) {
-        TicketDetails result = commandUseCase.close(ticketNo, body.closeReason(),
+        TicketDetails result = commandUseCase.close(actor, ticketNo, body.closeReason(),
                 body.version(), body.idempotencyKey());
         return responses.success(TicketResponse.from(result), request);
     }
@@ -123,11 +131,12 @@ public class TicketController {
     @Operation(summary = "解决工单并异步生成案例草稿")
     @PostMapping("/{ticketNo}/resolve")
     public ApiResult<TicketResponse> resolve(
+            @AuthenticationPrincipal AuthenticatedUser actor,
             @Parameter(description = "待解决的开放工单编号", example = "T000000000001")
             @PathVariable String ticketNo,
             @Valid @RequestBody ResolveTicketRequest body,
             HttpServletRequest request) {
-        TicketDetails result = commandUseCase.resolve(ticketNo, body.rootCause(), body.solution(),
+        TicketDetails result = commandUseCase.resolve(actor, ticketNo, body.rootCause(), body.solution(),
                 body.version(), body.idempotencyKey());
         return responses.success(TicketResponse.from(result), request);
     }
@@ -136,6 +145,7 @@ public class TicketController {
     @Operation(summary = "分页查询工单")
     @GetMapping
     public ApiResult<PageResult<TicketSummaryResponse>> page(
+            @AuthenticationPrincipal AuthenticatedUser actor,
             @Parameter(description = "可空工单状态过滤条件", example = "OPEN")
             @RequestParam(required = false) TicketStatus status,
             @Parameter(description = "可空标题或问题描述关键词，最大 160 字符")
@@ -145,7 +155,7 @@ public class TicketController {
             @Parameter(description = "每页数量，范围 1～100", example = "20")
             @RequestParam(defaultValue = "20") int size,
             HttpServletRequest request) {
-        TicketPage result = queryUseCase.page(status, keyword, page, size);
+        TicketPage result = queryUseCase.page(actor, status, keyword, page, size);
         List<TicketSummaryResponse> items = result.items().stream()
                 .map(TicketSummaryResponse::from).toList();
         return responses.success(new PageResult<>(items, result.page(), result.size(),

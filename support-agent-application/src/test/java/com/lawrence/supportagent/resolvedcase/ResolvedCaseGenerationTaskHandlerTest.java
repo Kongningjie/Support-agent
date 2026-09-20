@@ -79,7 +79,9 @@ class ResolvedCaseGenerationTaskHandlerTest {
 
     /** 创建具备固定内部 ID 和已解决版本的工单。 */
     private Ticket resolvedTicket() {
-        Ticket draft = Ticket.draft(null, null, "MySQL 连接失败", "应用无法连接 MySQL",
+        Ticket draft = Ticket.draft(null, null,
+                java.util.UUID.fromString("20000000-0000-0000-0000-000000000001"),
+                "MySQL 连接失败", "应用无法连接 MySQL",
                 null, "dev-operator", NOW).assignNumber(1, "T000000000001");
         return draft.submit("dev-operator", NOW).resolve(
                 "人工确认根因", "人工验证方案", "dev-operator", NOW);

@@ -1,6 +1,6 @@
 package com.lawrence.supportagent.config;
 
-import com.lawrence.supportagent.sharedkernel.OperatorId;
+import com.lawrence.supportagent.auth.SecurityContextOperatorProvider;
 import com.lawrence.supportagent.sharedkernel.port.OperatorProvider;
 import com.lawrence.supportagent.sharedkernel.port.TimeProvider;
 import com.lawrence.supportagent.sharedkernel.port.UuidGenerator;
@@ -29,11 +29,10 @@ public class FoundationConfiguration {
         return UUID::randomUUID;
     }
 
-    /** 返回服务端配置的固定操作者。 */
+    /** 返回优先使用认证用户、无请求上下文时使用系统身份的操作者。 */
     @Bean
     public OperatorProvider operatorProvider(SupportAgentProperties properties) {
-        OperatorId operatorId = new OperatorId(properties.operatorId());
-        return () -> operatorId;
+        return new SecurityContextOperatorProvider(properties.operatorId());
     }
 
     /** 在生产 Profile 缺少 DashScope 密钥时阻止应用启动。 */

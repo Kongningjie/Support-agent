@@ -12,6 +12,22 @@ public enum ErrorCode {
     COMMON_IDEMPOTENCY_KEY_REUSED,
     /** 未预期的服务端内部错误。 */
     COMMON_INTERNAL_ERROR,
+    /** 用户名或密码错误且不区分具体原因。 */
+    AUTH_INVALID_CREDENTIALS,
+    /** Bearer Token 缺失、无效或已过期。 */
+    AUTH_UNAUTHORIZED,
+    /** 已认证用户没有执行当前操作的权限。 */
+    AUTH_FORBIDDEN,
+    /** 同一用户名或来源的登录失败次数达到限流阈值。 */
+    AUTH_RATE_LIMITED,
+    /** 管理员创建的用户名已经存在。 */
+    AUTH_USERNAME_CONFLICT,
+    /** 指定用户不存在。 */
+    AUTH_USER_NOT_FOUND,
+    /** 用户乐观锁版本已经变化。 */
+    AUTH_USER_VERSION_CONFLICT,
+    /** 管理员试图禁用自己的账号。 */
+    AUTH_SELF_DISABLE_FORBIDDEN,
     /** 指定工单不存在。 */
     TICKET_NOT_FOUND,
     /** 工单当前状态不允许执行请求操作。 */

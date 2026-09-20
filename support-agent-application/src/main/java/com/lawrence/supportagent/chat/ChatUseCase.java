@@ -131,8 +131,11 @@ public class ChatUseCase {
      * @return 已取得运行权或已命中重放的准备结果
      */
     public PreparedChat prepare(ChatRequest request) {
+        if (request.actor() == null) {
+            throw new ApplicationException(ErrorCode.AUTH_UNAUTHORIZED, "认证信息无效或已经过期");
+        }
         UUID runId = ids.generate();
-        BeginResult begin = conversations.begin(request.conversationId(), request.clientMessageId(),
+        BeginResult begin = conversations.begin(request.actor().userId(), request.conversationId(), request.clientMessageId(),
                 request.message(), request.expectedConversationVersion(), runId, time.now());
         return new PreparedChat(request, runId, begin);
     }
@@ -154,9 +157,10 @@ public class ChatUseCase {
         ChatRequest request = prepared.request();
         UUID runId = prepared.runId();
         BeginResult begin = prepared.begin();
+        UUID ownerUserId = request.actor().userId();
         // 已完成的相同消息直接执行幂等重放，不再重复调用模型。
         if (begin.status() == ConversationStorePort.BeginStatus.REPLAY) {
-            replay(begin, sink);
+            replay(ownerUserId, begin, sink);
             telemetry.recordDuration(Operation.CHAT_REQUEST, elapsed(started), true);
             return;
         }
@@ -168,35 +172,35 @@ public class ChatUseCase {
             if (begin.interruptedRunId() != null) {
                 audits.fail(begin.interruptedRunId(), "INTERRUPTED", "CHAT_RUN_LEASE_EXPIRED", 0, time.now());
             }
-            audits.start(runId, begin.conversationId(), request.clientMessageId(), time.now());
-            emit(sink, begin.conversationId(), runId, "conversation.started",
+            audits.start(runId, ownerUserId, begin.conversationId(), request.clientMessageId(), time.now());
+            emit(ownerUserId, sink, begin.conversationId(), runId, "conversation.started",
                     Map.of("conversationVersion", begin.version(), "replayed", false));
-            List<String> context = modelContext(begin.conversationId(), List.of(request.message()));
+            List<String> context = modelContext(ownerUserId, begin.conversationId(), List.of(request.message()));
             IntentDecision decision = intents.recognize(request.message(), context);
             audits.recordIntent(runId, decision);
-            Outcome outcome = route(begin.conversationId(), runId, request.message(), context,
+            Outcome outcome = route(request.actor(), begin.conversationId(), runId, request.message(), context,
                     decision, sink);
             CompletedTurn pending = new CompletedTurn(ids.generate(), request.clientMessageId(), runId,
                     request.message().trim(), decision.standaloneQuery(), decision.intent(), outcome.answer,
                     outcome.retrievalStatus, outcome.citations, outcome.suggestionId,
                     suggestionContext(request.message(), context), outcome.resultStatus,
                     time.now(), begin.version() + 1);
-            emitAnswerBody(sink, begin.conversationId(), runId, pending, started);
+            emitAnswerBody(ownerUserId, sink, begin.conversationId(), runId, pending, started);
             Long suggestionSequence = pending.suggestionId() == null ? null
-                    : conversations.nextSequence(begin.conversationId(), runId);
-            long completedSequence = conversations.nextSequence(begin.conversationId(), runId);
-            CompletedTurn completed = conversations.complete(begin.conversationId(), runId, pending,
+                    : conversations.nextSequence(ownerUserId, begin.conversationId(), runId);
+            long completedSequence = conversations.nextSequence(ownerUserId, begin.conversationId(), runId);
+            CompletedTurn completed = conversations.complete(ownerUserId, begin.conversationId(), runId, pending,
                     outcome.agentState, time.now());
             committed = true;
             completedPromptVersion = outcome.promptVersion;
-            emitAnswerCompleted(sink, begin.conversationId(), runId, completed,
+            emitAnswerCompleted(ownerUserId, sink, begin.conversationId(), runId, completed,
                     suggestionSequence, completedSequence);
             telemetry.recordDuration(Operation.ANSWER_COMPLETE, elapsed(started), true);
             audits.succeed(runId, outcome.promptVersion, chatModelName, embeddingModelName,
                     rerankModelName, elapsed(started), time.now());
             sink.complete();
             if (contextService != null) {
-                contextService.afterSuccessfulTurn(begin.conversationId());
+                contextService.afterSuccessfulTurn(ownerUserId, begin.conversationId());
             }
             telemetry.recordDuration(Operation.CHAT_REQUEST, elapsed(started), true);
         } catch (RuntimeException exception) {
@@ -210,48 +214,51 @@ public class ChatUseCase {
                     ? application.errorCode().name() : exception instanceof ModelInvocationException model
                     ? model.errorCode() : "COMMON_INTERNAL_ERROR";
             try {
-                emit(sink, begin.conversationId(), runId, "error", Map.of(
+                emit(ownerUserId, sink, begin.conversationId(), runId, "error", Map.of(
                         "code", code, "message", safeMessage(exception),
                         "retryable", retryable(code, exception)));
                 sink.complete();
             } catch (RuntimeException ignored) {
                 // 客户端已经断开时只执行失败清理。
             }
-            conversations.fail(begin.conversationId(), runId, time.now());
+            conversations.fail(ownerUserId, begin.conversationId(), runId, time.now());
             audits.fail(runId, "FAILED", code, elapsed(started), time.now());
             telemetry.recordDuration(Operation.CHAT_REQUEST, elapsed(started), false);
         }
     }
 
     /** 按应用层确定的意图执行唯一允许的分支。 */
-    private Outcome route(UUID conversationId, UUID runId, String message, List<String> context,
+    private Outcome route(com.lawrence.supportagent.auth.AuthenticatedUser actor,
+                          UUID conversationId, UUID runId, String message, List<String> context,
                           IntentDecision decision, ChatEventSink sink) {
         return switch (decision.intent()) {
             case OUT_OF_SCOPE -> fixed(OUT_OF_SCOPE, "OUT_OF_SCOPE");
-            case GREETING -> greeting(conversationId, runId, message, context);
-            case TICKET_QUERY -> ticket(conversationId, runId, message, context, decision);
-            case SUPPORT_QUERY -> support(conversationId, runId, message, context, decision, sink);
+            case GREETING -> greeting(actor.userId(), conversationId, runId, message, context);
+            case TICKET_QUERY -> ticket(actor, conversationId, runId, message, context, decision);
+            case SUPPORT_QUERY -> support(actor.userId(), conversationId, runId, message, context, decision, sink);
         };
     }
 
     /** 调用问候模型并记录真实首 Token 回调耗时。 */
-    private Outcome greeting(UUID conversationId, UUID runId, String message, List<String> context) {
+    private Outcome greeting(UUID ownerUserId, UUID conversationId, UUID runId,
+                             String message, List<String> context) {
         long modelStarted = System.nanoTime();
         ModelAnswer answer = chatModel.greeting(message, context,
-                firstTokenCallback(conversationId, runId, modelStarted));
+                firstTokenCallback(ownerUserId, conversationId, runId, modelStarted));
         return fromModel(answer, "GREETING", null, List.of(), null, null);
     }
 
     /** 执行仅允许一次指定工单读取的 AgentScope 分支。 */
-    private Outcome ticket(UUID conversationId, UUID runId, String message, List<String> context,
+    private Outcome ticket(com.lawrence.supportagent.auth.AuthenticatedUser actor,
+                           UUID conversationId, UUID runId, String message, List<String> context,
                            IntentDecision decision) {
         if (decision.ticketNo() == null) return fixed(TICKET_REQUIRED, "TICKET_NUMBER_REQUIRED");
         try {
-            TicketDetails ticket = tickets.get(decision.ticketNo());
-            List<String> answerContext = modelContext(conversationId,
+            TicketDetails ticket = tickets.get(actor, decision.ticketNo());
+            List<String> answerContext = modelContext(actor.userId(), conversationId,
                     ticketFixedSections(message, ticket));
             ModelAnswer answer = chatModel.ticketAnswer(message, decision.ticketNo(), ticket, answerContext,
-                    () -> renew(conversationId, runId));
+                    () -> renew(actor.userId(), conversationId, runId));
             return fromModel(answer, "TICKET_FOUND", null, List.of(), null,
                     answer.serializedAgentState());
         } catch (ApplicationException exception) {
@@ -264,9 +271,10 @@ public class ChatUseCase {
     }
 
     /** 执行完整 RAG，并严格区分无知识与检索技术故障。 */
-    private Outcome support(UUID conversationId, UUID runId, String message, List<String> context,
+    private Outcome support(UUID ownerUserId, UUID conversationId, UUID runId,
+                            String message, List<String> context,
                             IntentDecision decision, ChatEventSink sink) {
-        emit(sink, conversationId, runId, "retrieval.started", Map.of("mode", "HYBRID"));
+        emit(ownerUserId, sink, conversationId, runId, "retrieval.started", Map.of("mode", "HYBRID"));
         RetrievalResult result = retrieval.retrieve(decision.standaloneQuery());
         audits.recordRetrieval(runId, decision.standaloneQuery(), result, groundedThreshold, time.now());
         Map<String, Object> completed = new LinkedHashMap<>();
@@ -276,7 +284,7 @@ public class ChatUseCase {
         completed.put("rerankStatus", result.rerankStatus().name());
         completed.put("selectedCount", result.evidence().size());
         completed.put("durationMs", result.durationMs());
-        emit(sink, conversationId, runId, "retrieval.completed", completed);
+        emit(ownerUserId, sink, conversationId, runId, "retrieval.completed", completed);
         if (result.status() == RetrievalStatus.RETRIEVAL_FAILED) {
             throw new ApplicationException(ErrorCode.RETRIEVAL_FAILED, "知识检索暂时不可用");
         }
@@ -285,16 +293,16 @@ public class ChatUseCase {
                     RetrievalStatus.NO_RELIABLE_KNOWLEDGE, List.of(), ids.generate(), null);
         }
         List<Citation> citations = citations(result.evidence());
-        List<String> answerContext = modelContext(conversationId, fixedSections(message, result.evidence()));
+        List<String> answerContext = modelContext(ownerUserId, conversationId, fixedSections(message, result.evidence()));
         long modelStarted = System.nanoTime();
         ModelAnswer answer = chatModel.groundedAnswer(message, answerContext, result.evidence(), null,
-                firstTokenCallback(conversationId, runId, modelStarted));
+                firstTokenCallback(ownerUserId, conversationId, runId, modelStarted));
         answer = withDisclosure(answer, result.evidence());
         List<String> failures = validator.validate(answer.text(), result.evidence());
         if (!failures.isEmpty()) {
             modelStarted = System.nanoTime();
             answer = chatModel.groundedAnswer(message, answerContext, result.evidence(),
-                    String.join(",", failures), firstTokenCallback(conversationId, runId, modelStarted));
+                    String.join(",", failures), firstTokenCallback(ownerUserId, conversationId, runId, modelStarted));
             answer = withDisclosure(answer, result.evidence());
             if (!validator.validate(answer.text(), result.evidence()).isEmpty()) {
                 throw new ApplicationException(ErrorCode.CHAT_ANSWER_VALIDATION_FAILED,
@@ -321,12 +329,12 @@ public class ChatUseCase {
     }
 
     /** 使用阶段 10 服务组装模型上下文；旧构造器仅供既有隔离测试保留原行为。 */
-    private List<String> modelContext(UUID conversationId, List<String> fixedSections) {
+    private List<String> modelContext(UUID ownerUserId, UUID conversationId, List<String> fixedSections) {
         if (contextService == null) {
-            return conversations.recentContext(conversationId,
+            return conversations.recentContext(ownerUserId, conversationId,
                     MODEL_CONTEXT_TURNS, MODEL_CONTEXT_CHARACTERS);
         }
-        return contextService.prepare(conversationId, fixedSections).modelContext();
+        return contextService.prepare(ownerUserId, conversationId, fixedSections).modelContext();
     }
 
     /** 汇总当前问题及完整证据内容，用于在回答模型调用前核算输入预算。 */
@@ -346,24 +354,24 @@ public class ChatUseCase {
     }
 
     /** 在落库前发送安全正文；客户端发送失败时不提交会话轮次。 */
-    private void emitAnswerBody(ChatEventSink sink, UUID conversationId, UUID runId,
+    private void emitAnswerBody(UUID ownerUserId, ChatEventSink sink, UUID conversationId, UUID runId,
                                 CompletedTurn turn, long requestStarted) {
-        emit(sink, conversationId, runId, "answer.started", Map.of("contentType", "text/markdown"));
+        emit(ownerUserId, sink, conversationId, runId, "answer.started", Map.of("contentType", "text/markdown"));
         boolean firstFragment = true;
         for (String fragment : fragments(turn.answer())) {
-            emit(sink, conversationId, runId, "answer.delta", Map.of("text", fragment));
+            emit(ownerUserId, sink, conversationId, runId, "answer.delta", Map.of("text", fragment));
             if (firstFragment) {
                 telemetry.recordDuration(Operation.SAFE_FIRST_DELTA, elapsed(requestStarted), true);
                 firstFragment = false;
             }
         }
         for (Citation citation : turn.citations()) {
-            emit(sink, conversationId, runId, "citation", citationData(citation));
+            emit(ownerUserId, sink, conversationId, runId, "citation", citationData(citation));
         }
     }
 
     /** 在原子提交成功后发送带有新版本的完成事件。 */
-    private void emitAnswerCompleted(ChatEventSink sink, UUID conversationId, UUID runId,
+    private void emitAnswerCompleted(UUID ownerUserId, ChatEventSink sink, UUID conversationId, UUID runId,
                                      CompletedTurn turn, Long suggestionSequence,
                                      long completedSequence) {
         if (turn.suggestionId() != null) {
@@ -380,28 +388,28 @@ public class ChatUseCase {
     }
 
     /** 重发成功消息而不执行模型、检索或增加会话版本。 */
-    private void replay(BeginResult begin, ChatEventSink sink) {
+    private void replay(UUID ownerUserId, BeginResult begin, ChatEventSink sink) {
         CompletedTurn turn = begin.replayTurn();
-        emitReplay(sink, begin.conversationId(), turn.runId(), "conversation.started",
+        emitReplay(ownerUserId, sink, begin.conversationId(), turn.runId(), "conversation.started",
                 Map.of("conversationVersion", begin.version(), "replayed", true));
-        emitReplayAnswer(sink, begin.conversationId(), turn.runId(), turn);
+        emitReplayAnswer(ownerUserId, sink, begin.conversationId(), turn.runId(), turn);
         sink.complete();
     }
 
     /** 使用新事件编号和新序号重放既有安全内容。 */
-    private void emitReplayAnswer(ChatEventSink sink, UUID conversationId, UUID runId,
+    private void emitReplayAnswer(UUID ownerUserId, ChatEventSink sink, UUID conversationId, UUID runId,
                                   CompletedTurn turn) {
-        emitReplay(sink, conversationId, runId, "answer.started", Map.of("contentType", "text/markdown"));
+        emitReplay(ownerUserId, sink, conversationId, runId, "answer.started", Map.of("contentType", "text/markdown"));
         for (String fragment : fragments(turn.answer())) {
-            emitReplay(sink, conversationId, runId, "answer.delta", Map.of("text", fragment));
+            emitReplay(ownerUserId, sink, conversationId, runId, "answer.delta", Map.of("text", fragment));
         }
 
         for (Citation citation : turn.citations()) {
-            emitReplay(sink, conversationId, runId, "citation", citationData(citation));
+            emitReplay(ownerUserId, sink, conversationId, runId, "citation", citationData(citation));
         }
 
         if (turn.suggestionId() != null) {
-            emitReplay(sink, conversationId, runId, "ticket.suggested", Map.of(
+            emitReplay(ownerUserId, sink, conversationId, runId, "ticket.suggested", Map.of(
                     "suggestionId", turn.suggestionId().toString(),
                     "expiresAt", turn.completedAt().plus(suggestionTtl).toString()));
         }
@@ -410,7 +418,7 @@ public class ChatUseCase {
         data.put("citations", turn.citations().stream().map(this::citationData).toList());
         data.put("conversationVersion", turn.conversationVersion());
         data.put("resultStatus", turn.resultStatus());
-        emitReplay(sink, conversationId, runId, "answer.completed", data);
+        emitReplay(ownerUserId, sink, conversationId, runId, "answer.completed", data);
     }
 
     /** 为最终证据按顺序分配 S1 开始的临时引用。 */
@@ -443,17 +451,17 @@ public class ChatUseCase {
     }
 
     /** 原子分配序号并发送业务事件。 */
-    private void emit(ChatEventSink sink, UUID conversationId, UUID runId,
+    private void emit(UUID ownerUserId, ChatEventSink sink, UUID conversationId, UUID runId,
                       String eventType, Map<String, Object> data) {
-        long sequence = conversations.nextSequence(conversationId, runId);
+        long sequence = conversations.nextSequence(ownerUserId, conversationId, runId);
         sink.send(new ChatEvent(ids.generate(), eventType, runId, conversationId,
                 sequence, time.now(), Map.copyOf(data)));
     }
 
     /** 发送不要求存在活动运行租约的重放事件。 */
-    private void emitReplay(ChatEventSink sink, UUID conversationId, UUID runId,
+    private void emitReplay(UUID ownerUserId, ChatEventSink sink, UUID conversationId, UUID runId,
                             String eventType, Map<String, Object> data) {
-        long sequence = conversations.nextReplaySequence(conversationId);
+        long sequence = conversations.nextReplaySequence(ownerUserId, conversationId);
         sink.send(new ChatEvent(ids.generate(), eventType, runId, conversationId,
                 sequence, time.now(), Map.copyOf(data)));
     }
@@ -486,20 +494,21 @@ public class ChatUseCase {
     }
 
     /** 在模型首次产生内容时续租，丢失围栏则中止运行。 */
-    private void renew(UUID conversationId, UUID runId) {
-        if (!conversations.renew(conversationId, runId, time.now())) {
+    private void renew(UUID ownerUserId, UUID conversationId, UUID runId) {
+        if (!conversations.renew(ownerUserId, conversationId, runId, time.now())) {
             throw new ApplicationException(ErrorCode.CHAT_CONVERSATION_BUSY, "会话运行权已经失效");
         }
     }
 
     /** 创建每次模型调用只记录一次首 Token 的租约续期回调。 */
-    private Runnable firstTokenCallback(UUID conversationId, UUID runId, long modelStarted) {
+    private Runnable firstTokenCallback(UUID ownerUserId, UUID conversationId,
+                                        UUID runId, long modelStarted) {
         AtomicBoolean first = new AtomicBoolean();
         return () -> {
             if (first.compareAndSet(false, true)) {
                 telemetry.recordDuration(Operation.MODEL_FIRST_TOKEN, elapsed(modelStarted), true);
             }
-            renew(conversationId, runId);
+            renew(ownerUserId, conversationId, runId);
         };
     }
 

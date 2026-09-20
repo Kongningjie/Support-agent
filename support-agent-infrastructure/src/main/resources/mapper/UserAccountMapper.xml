@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.lawrence.supportagent.persistence.mapper.UserAccountMapper">
+    <sql id="columns">
+        id,user_id,username,display_name,password_hash,role,status,version,
+        password_changed_at,created_by,created_at,updated_by,updated_at
+    </sql>
+    <select id="count" resultType="long">SELECT COUNT(*) FROM app_user</select>
+    <select id="findByUsername" resultType="com.lawrence.supportagent.persistence.record.UserAccountDO">
+        SELECT <include refid="columns"/> FROM app_user WHERE username=#{username}
+    </select>
+    <select id="findById" resultType="com.lawrence.supportagent.persistence.record.UserAccountDO">
+        SELECT <include refid="columns"/> FROM app_user WHERE id=#{id}
+    </select>
+    <select id="findByUserId" resultType="com.lawrence.supportagent.persistence.record.UserAccountDO">
+        SELECT <include refid="columns"/> FROM app_user WHERE user_id=#{userId}
+    </select>
+    <insert id="insert" useGeneratedKeys="true" keyProperty="id">
+        INSERT INTO app_user (user_id,username,display_name,password_hash,role,status,version,
+            password_changed_at,created_by,created_at,updated_by,updated_at)
+        VALUES (#{userId},#{username},#{displayName},#{passwordHash},#{role},#{status},#{version},
+            #{passwordChangedAt},#{createdBy},#{createdAt},#{updatedBy},#{updatedAt})
+    </insert>
+    <update id="update">
+        UPDATE app_user SET display_name=#{user.displayName},password_hash=#{user.passwordHash},role=#{user.role},
+            status=#{user.status},version=#{user.version},password_changed_at=#{user.passwordChangedAt},
+            updated_by=#{user.updatedBy},updated_at=#{user.updatedAt}
+        WHERE id=#{user.id} AND version=#{expectedVersion}
+    </update>
+</mapper>

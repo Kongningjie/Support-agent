@@ -43,11 +43,10 @@ public class UseCaseConfiguration {
     public TicketCommandUseCase ticketCommandUseCase(TicketRepository repository,
                                                       TicketQueryUseCase queryUseCase,
                                                       IdempotentExecutor executor,
-                                                      OperatorProvider operatorProvider,
                                                       TimeProvider timeProvider,
                                                       AsyncTaskCreator taskCreator) {
         return new TicketCommandUseCase(repository, queryUseCase, executor,
-                operatorProvider, timeProvider, taskCreator);
+                timeProvider, taskCreator);
     }
 
     /** 创建显式消费会话建议的工单草稿用例。 */

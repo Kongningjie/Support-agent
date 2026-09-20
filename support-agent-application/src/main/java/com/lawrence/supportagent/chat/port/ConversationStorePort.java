@@ -10,40 +10,42 @@ import java.util.UUID;
 /** 隔离 Redis 会话、运行租约、消息幂等和工单建议的原子操作。 */
 public interface ConversationStorePort {
     /** 原子创建或取得会话执行权，并识别可安全重放的已完成消息。 */
-    BeginResult begin(UUID conversationId, UUID clientMessageId, String message,
+    BeginResult begin(UUID ownerUserId, UUID conversationId, UUID clientMessageId, String message,
                       Long expectedVersion, UUID runId, Instant now);
 
     /** 在运行围栏仍有效时续租。 */
-    boolean renew(UUID conversationId, UUID runId, Instant now);
+    boolean renew(UUID ownerUserId, UUID conversationId, UUID runId, Instant now);
 
     /** 为当前会话原子分配下一个业务事件序号。 */
-    long nextSequence(UUID conversationId, UUID runId);
+    long nextSequence(UUID ownerUserId, UUID conversationId, UUID runId);
 
     /** 为已完成消息的重放原子分配新序号。 */
-    long nextReplaySequence(UUID conversationId);
+    long nextReplaySequence(UUID ownerUserId, UUID conversationId);
 
     /** 在运行围栏有效时原子提交完整成功轮次并递增会话版本。 */
-    CompletedTurn complete(UUID conversationId, UUID runId, CompletedTurn turn,
+    CompletedTurn complete(UUID ownerUserId, UUID conversationId, UUID runId, CompletedTurn turn,
                            String serializedAgentState, Instant now);
 
     /** 释放仍属于指定运行的租约，不保存半轮或递增版本。 */
-    void fail(UUID conversationId, UUID runId, Instant now);
+    void fail(UUID ownerUserId, UUID conversationId, UUID runId, Instant now);
 
     /** 原子取得建议消费租约或返回已创建工单编号。 */
-    SuggestionClaim claimSuggestion(UUID conversationId, UUID suggestionId, Instant now);
+    SuggestionClaim claimSuggestion(UUID ownerUserId, UUID conversationId,
+                                    UUID suggestionId, Instant now);
 
     /** 把建议标记为已消费并保存首次工单编号。 */
-    void consumeSuggestion(UUID conversationId, UUID suggestionId, UUID claimId,
+    void consumeSuggestion(UUID ownerUserId, UUID conversationId, UUID suggestionId, UUID claimId,
                            String ticketNo, Instant now);
 
     /** 返回最多六轮且总字符数受限的模型上下文。 */
-    List<String> recentContext(UUID conversationId, int maximumTurns, int maximumCharacters);
+    List<String> recentContext(UUID ownerUserId, UUID conversationId,
+                               int maximumTurns, int maximumCharacters);
 
     /** 原子读取当前摘要版本、会话版本以及尚未裁剪的完整成功轮次。 */
-    MemorySnapshot memorySnapshot(UUID conversationId);
+    MemorySnapshot memorySnapshot(UUID ownerUserId, UUID conversationId);
 
     /** 按摘要版本执行 CAS，并仅在成功后裁剪已经被摘要覆盖的旧轮次。 */
-    boolean commitSummary(UUID conversationId, long expectedSummaryVersion,
+    boolean commitSummary(UUID ownerUserId, UUID conversationId, long expectedSummaryVersion,
                           ConversationSummary summary, int recentFullTurns, Instant now);
 
     /** 表示会话开始结果类型。 */

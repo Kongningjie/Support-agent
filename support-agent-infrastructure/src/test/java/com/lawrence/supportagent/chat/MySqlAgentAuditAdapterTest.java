@@ -23,11 +23,13 @@ class MySqlAgentAuditAdapterTest {
         UUID runId = UUID.fromString("12345678-1234-5678-90ab-cdef12345678");
         UUID conversationId = UUID.fromString("22345678-1234-5678-90ab-cdef12345678");
         UUID messageId = UUID.fromString("32345678-1234-5678-90ab-cdef12345678");
+        UUID userId = UUID.fromString("42345678-1234-5678-90ab-cdef12345678");
         ArgumentCaptor<byte[]> runBytes = ArgumentCaptor.forClass(byte[].class);
 
-        adapter.start(runId, conversationId, messageId, Instant.EPOCH);
+        adapter.start(runId, conversationId, messageId, userId, Instant.EPOCH);
 
-        verify(mapper).insertRun(runBytes.capture(), any(byte[].class), any(byte[].class), any());
+        verify(mapper).insertRun(runBytes.capture(), any(byte[].class), any(byte[].class),
+                any(byte[].class), any());
         ByteBuffer buffer = ByteBuffer.wrap(runBytes.getValue());
         assertThat(new UUID(buffer.getLong(), buffer.getLong())).isEqualTo(runId);
         assertThat(runBytes.getValue()).hasSize(16);

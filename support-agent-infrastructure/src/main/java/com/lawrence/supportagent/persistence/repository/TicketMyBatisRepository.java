@@ -11,6 +11,8 @@ import com.lawrence.supportagent.ticket.TicketStatus;
 import com.lawrence.supportagent.ticket.port.TicketRepository;
 import java.util.List;
 import java.util.Optional;
+import java.nio.ByteBuffer;
+import java.util.UUID;
 import org.springframework.stereotype.Repository;
 
 /** 使用 MyBatis XML 持久化工单聚合。 */
@@ -40,6 +42,14 @@ public class TicketMyBatisRepository implements TicketRepository {
 
     /** {@inheritDoc} */
     @Override
+    public Optional<Ticket> findByTicketNoForAccess(String ticketNo, UUID ownerUserId,
+                                                     boolean allTickets) {
+        return Optional.ofNullable(workflowMapper.findByTicketNoForAccess(ticketNo,
+                toBytes(ownerUserId), allTickets)).map(AggregateRecordMapper::toDomain);
+    }
+
+    /** {@inheritDoc} */
+    @Override
     public Ticket save(Ticket value) {
         TicketDO record = AggregateRecordMapper.toRecord(value);
         int changed = record.id == null ? mapper.insertTicket(record) : mapper.updateTicket(record);
@@ -63,14 +73,23 @@ public class TicketMyBatisRepository implements TicketRepository {
 
     /** {@inheritDoc} */
     @Override
-    public List<Ticket> findPage(TicketStatus status, String keyword, int offset, int size) {
-        return workflowMapper.findPage(status == null ? null : status.name(), keyword, offset, size)
+    public List<Ticket> findPage(TicketStatus status, String keyword, UUID ownerUserId,
+                                 boolean allTickets, int offset, int size) {
+        return workflowMapper.findPage(status == null ? null : status.name(), keyword,
+                        toBytes(ownerUserId), allTickets, offset, size)
                 .stream().map(AggregateRecordMapper::toDomain).toList();
     }
 
     /** {@inheritDoc} */
     @Override
-    public long count(TicketStatus status, String keyword) {
-        return workflowMapper.count(status == null ? null : status.name(), keyword);
+    public long count(TicketStatus status, String keyword, UUID ownerUserId, boolean allTickets) {
+        return workflowMapper.count(status == null ? null : status.name(), keyword,
+                toBytes(ownerUserId), allTickets);
+    }
+
+    /** 把可空 UUID 编码为 MySQL BINARY(16)。 */
+    private byte[] toBytes(UUID value) {
+        return value == null ? null : ByteBuffer.allocate(16).putLong(value.getMostSignificantBits())
+                .putLong(value.getLeastSignificantBits()).array();
     }
 }

@@ -56,12 +56,12 @@ public class ConversationContextService {
      * @param fixedSections 当前问题、证据或工单边界等不可由历史挤占的内容
      * @return 可直接传递给模型端口的上下文窗口
      */
-    public ConversationContext prepare(UUID conversationId, List<String> fixedSections) {
-        MemorySnapshot snapshot = store.memorySnapshot(conversationId);
+    public ConversationContext prepare(UUID ownerUserId, UUID conversationId, List<String> fixedSections) {
+        MemorySnapshot snapshot = store.memorySnapshot(ownerUserId, conversationId);
         if (requiresHardSummary(snapshot, fixedSections)) {
             long previousSummaryVersion = snapshot.summaryVersion();
-            summarize(snapshot, true);
-            snapshot = store.memorySnapshot(conversationId);
+            summarize(ownerUserId, snapshot, true);
+            snapshot = store.memorySnapshot(ownerUserId, conversationId);
             if (snapshot.summaryVersion() <= previousSummaryVersion
                     && requiresHardSummary(snapshot, fixedSections)) {
                 throw unavailable(null);
@@ -71,11 +71,11 @@ public class ConversationContextService {
     }
 
     /** 在成功轮次提交后按软阈值异步生成摘要，失败时保留全部原始轮次。 */
-    public void afterSuccessfulTurn(UUID conversationId) {
+    public void afterSuccessfulTurn(UUID ownerUserId, UUID conversationId) {
         try {
-            MemorySnapshot snapshot = store.memorySnapshot(conversationId);
+            MemorySnapshot snapshot = store.memorySnapshot(ownerUserId, conversationId);
             if (requiresSoftSummary(snapshot)) {
-                summaryExecutor.execute(() -> summarize(snapshot, false));
+                summaryExecutor.execute(() -> summarize(ownerUserId, snapshot, false));
             }
         } catch (RuntimeException ignored) {
             // 软触发只做尽力调度；原始轮次保留并由下一次请求重新判断。
@@ -96,7 +96,7 @@ public class ConversationContextService {
     }
 
     /** 执行一次结构化摘要、确定性实体校验和 Redis CAS 提交。 */
-    private void summarize(MemorySnapshot snapshot, boolean required) {
+    private void summarize(UUID ownerUserId, MemorySnapshot snapshot, boolean required) {
         List<CompletedTurn> source = sourceTurns(snapshot.turns());
         if (source.isEmpty()) {
             if (required && totalTokens(snapshot, List.of()) > settings.availableInputTokens()) {
@@ -108,7 +108,7 @@ public class ConversationContextService {
         try {
             ConversationSummary candidate = generateSummary(snapshot, source, covered);
             validateCandidate(snapshot, source, candidate, covered);
-            store.commitSummary(snapshot.conversationId(), snapshot.summaryVersion(),
+            store.commitSummary(ownerUserId, snapshot.conversationId(), snapshot.summaryVersion(),
                     candidate, settings.recentFullTurns(), time.now());
         } catch (RuntimeException exception) {
             if (required) {

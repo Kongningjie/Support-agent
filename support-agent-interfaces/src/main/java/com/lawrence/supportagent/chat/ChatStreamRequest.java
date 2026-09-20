@@ -1,5 +1,6 @@
 package com.lawrence.supportagent.chat;
 
+import com.lawrence.supportagent.auth.AuthenticatedUser;
 import io.swagger.v3.oas.annotations.media.Schema;
 import jakarta.validation.constraints.AssertTrue;
 import jakarta.validation.constraints.NotBlank;
@@ -32,7 +33,7 @@ public record ChatStreamRequest(
     }
 
     /** 转换为不依赖接口框架的应用请求。 */
-    public ChatRequest toCommand() {
-        return new ChatRequest(conversationId, clientMessageId, message, expectedConversationVersion);
+    public ChatRequest toCommand(AuthenticatedUser actor) {
+        return new ChatRequest(actor, conversationId, clientMessageId, message, expectedConversationVersion);
     }
 }

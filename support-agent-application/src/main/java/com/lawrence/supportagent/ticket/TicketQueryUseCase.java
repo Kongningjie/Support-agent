@@ -1,5 +1,6 @@
 package com.lawrence.supportagent.ticket;
 
+import com.lawrence.supportagent.auth.AuthenticatedUser;
 import com.lawrence.supportagent.sharedkernel.error.ApplicationException;
 import com.lawrence.supportagent.sharedkernel.error.ErrorCode;
 import com.lawrence.supportagent.ticket.port.TicketRepository;
@@ -16,20 +17,22 @@ public class TicketQueryUseCase {
         this.repository = repository;
     }
 
-    /** 按公开编号查询不包含内部主键的工单详情。 */
-    public TicketDetails get(String ticketNo) {
-        return TicketDetails.from(requireTicket(ticketNo));
+    /** 按当前用户或管理员范围查询工单详情。 */
+    public TicketDetails get(AuthenticatedUser actor, String ticketNo) {
+        return TicketDetails.from(requireTicket(actor, ticketNo));
     }
 
     /** 按稳定排序、状态和关键词返回一页工单摘要。 */
-    public TicketPage page(TicketStatus status, String keyword, int page, int size) {
+    public TicketPage page(AuthenticatedUser actor, TicketStatus status, String keyword,
+                           int page, int size) {
         if (page < 1 || size < 1 || size > 100 || page - 1 > Integer.MAX_VALUE / size) {
             throw new IllegalArgumentException("页码必须从 1 开始且每页数量为 1 至 100");
         }
         String normalizedKeyword = normalizeOptional(keyword);
         int offset = (page - 1) * size;
-        long total = repository.count(status, normalizedKeyword);
-        List<TicketSummary> items = repository.findPage(status, normalizedKeyword, offset, size)
+        long total = repository.count(status, normalizedKeyword, actor.userId(), actor.administrator());
+        List<TicketSummary> items = repository.findPage(status, normalizedKeyword, actor.userId(),
+                        actor.administrator(), offset, size)
                 .stream().map(TicketSummary::from).toList();
         long pages = total == 0 ? 0 : (total - 1) / size + 1;
         return new TicketPage(items, page, size, total,
@@ -41,12 +44,16 @@ public class TicketQueryUseCase {
         return TicketDetails.from(repository.findById(id).orElseThrow(this::notFound));
     }
 
-    /** 校验公开编号格式并读取工单聚合。 */
-    Ticket requireTicket(String ticketNo) {
+    /** 校验公开编号后按当前用户或管理员范围读取工单聚合。 */
+    Ticket requireTicket(AuthenticatedUser actor, String ticketNo) {
+        if (actor == null) {
+            throw new ApplicationException(ErrorCode.AUTH_UNAUTHORIZED, "认证信息无效或已经过期");
+        }
         if (ticketNo == null || !TICKET_NUMBER.matcher(ticketNo).matches()) {
             throw new IllegalArgumentException("工单编号格式必须为 T 加 12 位数字");
         }
-        return repository.findByTicketNo(ticketNo).orElseThrow(this::notFound);
+        return repository.findByTicketNoForAccess(ticketNo, actor.userId(), actor.administrator())
+                .orElseThrow(this::notFound);
     }
 
     /** 把可空关键词规整为空或去除首尾空白后的值。 */

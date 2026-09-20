@@ -32,6 +32,7 @@ public final class AggregateRecordMapper {
         record.ticketNo = value.ticketNo();
         record.conversationId = toBytes(value.conversationId());
         record.sourceTurnId = toBytes(value.sourceTurnId());
+        record.ownerUserId = toBytes(value.ownerUserId());
         record.title = value.title();
         record.problemDescription = value.problemDescription();
         record.attemptedActions = value.attemptedActions();
@@ -59,7 +60,7 @@ public final class AggregateRecordMapper {
      */
     public static Ticket toDomain(TicketDO record) {
         return new Ticket(record.id, record.ticketNo, toUuid(record.conversationId),
-                toUuid(record.sourceTurnId), record.title, record.problemDescription,
+                toUuid(record.sourceTurnId), toUuid(record.ownerUserId), record.title, record.problemDescription,
                 record.attemptedActions, TicketStatus.valueOf(record.status), record.rootCause,
                 record.solution, record.closeReason, record.version, record.createdBy,
                 record.createdAt, record.updatedBy, record.updatedAt, record.resolvedBy,

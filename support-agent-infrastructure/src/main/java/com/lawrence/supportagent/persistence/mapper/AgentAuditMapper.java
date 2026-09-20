@@ -8,7 +8,8 @@ import org.apache.ibatis.annotations.Param;
 @Mapper
 public interface AgentAuditMapper {
     /** 创建 RUNNING 运行摘要。 */
-    int insertRun(@Param("runId") byte[] runId, @Param("conversationId") byte[] conversationId,
+    int insertRun(@Param("runId") byte[] runId, @Param("userId") byte[] userId,
+                  @Param("conversationId") byte[] conversationId,
                   @Param("clientMessageId") byte[] clientMessageId, @Param("createdAt") Instant createdAt);
     /** 更新最终意图摘要。 */
     int updateIntent(@Param("runId") byte[] runId, @Param("intent") String intent,

@@ -5,7 +5,7 @@ import java.time.Instant;
 import java.util.UUID;
 
 /** 工单聚合，集中维护内容、审计字段和状态迁移规则。 */
-public record Ticket(Long id, String ticketNo, UUID conversationId, UUID sourceTurnId,
+public record Ticket(Long id, String ticketNo, UUID conversationId, UUID sourceTurnId, UUID ownerUserId,
                      String title, String problemDescription, String attemptedActions,
                      TicketStatus status, String rootCause, String solution, String closeReason,
                      long version, String createdBy, Instant createdAt, String updatedBy,
@@ -24,10 +24,10 @@ public record Ticket(Long id, String ticketNo, UUID conversationId, UUID sourceT
     }
 
     /** 创建尚未分配数据库主键和工单号的草稿。 */
-    public static Ticket draft(UUID conversationId, UUID sourceTurnId, String title,
+    public static Ticket draft(UUID conversationId, UUID sourceTurnId, UUID ownerUserId, String title,
                                String problemDescription, String attemptedActions,
                                String operator, Instant now) {
-        return new Ticket(null, null, conversationId, sourceTurnId, title, problemDescription,
+        return new Ticket(null, null, conversationId, sourceTurnId, ownerUserId, title, problemDescription,
                 attemptedActions, TicketStatus.DRAFT, null, null, null, 0,
                 operator, now, operator, now, null, null, null, null);
     }
@@ -40,7 +40,7 @@ public record Ticket(Long id, String ticketNo, UUID conversationId, UUID sourceT
             throw new IllegalArgumentException("工单内部主键必须为正数");
         }
         assignedTicketNo = DomainAssertions.requiredText(assignedTicketNo, "工单编号");
-        return new Ticket(persistedId, assignedTicketNo, conversationId, sourceTurnId,
+        return new Ticket(persistedId, assignedTicketNo, conversationId, sourceTurnId, ownerUserId,
                 title, problemDescription, attemptedActions, status, rootCause, solution,
                 closeReason, version, createdBy, createdAt, updatedBy, updatedAt,
                 resolvedBy, resolvedAt, closedBy, closedAt);
@@ -50,7 +50,7 @@ public record Ticket(Long id, String ticketNo, UUID conversationId, UUID sourceT
     public Ticket reviseDraft(String newTitle, String newProblemDescription,
                               String newAttemptedActions, String operator, Instant now) {
         requireStatus(TicketStatus.DRAFT, "只有草稿工单可以修改");
-        return new Ticket(id, ticketNo, conversationId, sourceTurnId, newTitle,
+        return new Ticket(id, ticketNo, conversationId, sourceTurnId, ownerUserId, newTitle,
                 newProblemDescription, newAttemptedActions, status, null, null, null,
                 version + 1, createdBy, createdAt, operator, now, null, null, null, null);
     }
@@ -90,7 +90,7 @@ public record Ticket(Long id, String ticketNo, UUID conversationId, UUID sourceT
                         String newCloseReason, String operator, Instant now,
                         String newResolvedBy, Instant newResolvedAt,
                         String newClosedBy, Instant newClosedAt) {
-        return new Ticket(id, ticketNo, conversationId, sourceTurnId, title, problemDescription,
+        return new Ticket(id, ticketNo, conversationId, sourceTurnId, ownerUserId, title, problemDescription,
                 attemptedActions, newStatus, newRootCause, newSolution, newCloseReason,
                 version + 1, createdBy, createdAt, operator, now, newResolvedBy,
                 newResolvedAt, newClosedBy, newClosedAt);

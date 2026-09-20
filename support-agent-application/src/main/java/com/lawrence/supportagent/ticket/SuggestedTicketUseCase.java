@@ -1,5 +1,6 @@
 package com.lawrence.supportagent.ticket;
 
+import com.lawrence.supportagent.auth.AuthenticatedUser;
 import com.lawrence.supportagent.chat.port.ConversationStorePort;
 import com.lawrence.supportagent.chat.port.ConversationStorePort.SuggestionClaim;
 import com.lawrence.supportagent.model.ChatModelPort;
@@ -26,13 +27,19 @@ public class SuggestedTicketUseCase {
     }
 
     /** 原子取得建议、至多重试一次模型生成并返回首次创建的工单。 */
-    public TicketDetails create(UUID conversationId, UUID suggestionId, String idempotencyKey) {
-        SuggestionClaim claim = conversations.claimSuggestion(conversationId, suggestionId, time.now());
-        if ("CONSUMED".equals(claim.status())) return queries.get(claim.ticketNo());
+    public TicketDetails create(AuthenticatedUser actor, UUID conversationId, UUID suggestionId,
+                                String idempotencyKey) {
+        if (actor == null) {
+            throw new ApplicationException(ErrorCode.AUTH_UNAUTHORIZED, "认证信息无效或已经过期");
+        }
+        SuggestionClaim claim = conversations.claimSuggestion(actor.userId(), conversationId,
+                suggestionId, time.now());
+        if ("CONSUMED".equals(claim.status())) return queries.get(actor, claim.ticketNo());
         TicketDraft draft = draft(claim.frozenContext());
-        TicketDetails ticket = commands.createSuggestedDraft(conversationId, claim.sourceTurnId(),
+        TicketDetails ticket = commands.createSuggestedDraft(actor, conversationId, claim.sourceTurnId(),
                 draft.title(), draft.problemDescription(), draft.attemptedActions(), idempotencyKey);
-        conversations.consumeSuggestion(conversationId, suggestionId, claim.claimId(), ticket.ticketNo(), time.now());
+        conversations.consumeSuggestion(actor.userId(), conversationId, suggestionId,
+                claim.claimId(), ticket.ticketNo(), time.now());
         return ticket;
     }
 

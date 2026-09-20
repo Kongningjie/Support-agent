@@ -12,6 +12,8 @@ public class TicketDO {
     public byte[] conversationId;
     /** 来源对话轮次 UUID 的 16 字节表示。 */
     public byte[] sourceTurnId;
+    /** 工单所有者公开 UUID 的 16 字节表示；历史数据可以为空。 */
+    public byte[] ownerUserId;
     /** 工单标题。 */
     public String title;
     /** 问题现象与背景。 */

@@ -38,6 +38,13 @@ mybatis:
     map-underscore-to-camel-case: true
 
 support-agent:
+  auth:
+    token-ttl: ${SUPPORT_AGENT_AUTH_TOKEN_TTL:2h}
+    bootstrap-admin:
+      enabled: ${SUPPORT_AGENT_BOOTSTRAP_ADMIN_ENABLED:false}
+      username: ${SUPPORT_AGENT_BOOTSTRAP_ADMIN_USERNAME:}
+      display-name: ${SUPPORT_AGENT_BOOTSTRAP_ADMIN_DISPLAY_NAME:}
+      password: ${SUPPORT_AGENT_BOOTSTRAP_ADMIN_PASSWORD:}
   operator-id: dev-operator
   dashscope:
     api-key: ${DASHSCOPE_API_KEY:}

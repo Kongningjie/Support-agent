@@ -1,5 +1,6 @@
 package com.lawrence.supportagent.chat;
 
+import com.lawrence.supportagent.auth.AuthenticatedUser;
 import jakarta.annotation.PreDestroy;
 import jakarta.validation.Valid;
 import java.io.IOException;
@@ -13,6 +14,7 @@ import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import org.springframework.http.MediaType;
+import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -37,8 +39,9 @@ public class ChatController {
 
     /** 接收一个用户消息并返回独立 SSE 事件协议。 */
     @PostMapping(path = "/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
-    public SseEmitter stream(@Valid @RequestBody ChatStreamRequest request) {
-        ChatUseCase.PreparedChat prepared = useCase.prepare(request.toCommand());
+    public SseEmitter stream(@AuthenticationPrincipal AuthenticatedUser actor,
+                             @Valid @RequestBody ChatStreamRequest request) {
+        ChatUseCase.PreparedChat prepared = useCase.prepare(request.toCommand(actor));
         SseEmitter emitter = new SseEmitter(RESPONSE_TIMEOUT.toMillis());
         BoundedSseSink sink = new BoundedSseSink(emitter);
         streams.execute(() -> sink.drain());

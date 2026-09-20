@@ -8,7 +8,7 @@ import java.util.UUID;
 /** 隔离 Agent 运行和检索轨迹的 MySQL 安全摘要持久化。 */
 public interface AgentAuditPort {
     /** 在取得会话运行权后创建 RUNNING 摘要。 */
-    void start(UUID runId, UUID conversationId, UUID clientMessageId, Instant now);
+    void start(UUID runId, UUID userId, UUID conversationId, UUID clientMessageId, Instant now);
 
     /** 更新已确定的意图摘要。 */
     void recordIntent(UUID runId, IntentDecision decision);

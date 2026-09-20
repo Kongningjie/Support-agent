@@ -12,10 +12,12 @@ import com.lawrence.supportagent.chat.port.AgentAuditPort;
 import com.lawrence.supportagent.chat.port.ConversationStorePort;
 import com.lawrence.supportagent.chat.port.ConversationStorePort.BeginResult;
 import com.lawrence.supportagent.chat.port.ConversationStorePort.BeginStatus;
+import com.lawrence.supportagent.auth.AuthenticatedUser;
 import com.lawrence.supportagent.model.ChatModelPort;
 import com.lawrence.supportagent.model.IntentRecognitionPort;
 import com.lawrence.supportagent.retrieval.RetrievalService;
 import com.lawrence.supportagent.ticket.TicketQueryUseCase;
+import com.lawrence.supportagent.user.UserRole;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
@@ -25,16 +27,18 @@ import org.junit.jupiter.api.Test;
 
 /** 验证各路由共享的 SSE 顺序和成功提交边界。 */
 class ChatUseCaseTest {
+    private static final AuthenticatedUser ACTOR = new AuthenticatedUser(
+            UUID.fromString("20000000-0000-0000-0000-000000000001"), "tester", UserRole.USER);
     /** 会话版本等开始条件必须在接口创建 SSE 响应前同步失败。 */
     @Test
     void shouldRejectInvalidBeginDuringPreparation() {
         ConversationStorePort store = mock(ConversationStorePort.class);
-        when(store.begin(any(), any(), any(), any(), any(), any()))
+        when(store.begin(any(), any(), any(), any(), any(), any(), any()))
                 .thenThrow(new IllegalStateException("版本冲突"));
         ChatUseCase useCase = useCase(store);
 
         org.assertj.core.api.Assertions.assertThatThrownBy(() -> useCase.prepare(
-                new ChatRequest(UUID.randomUUID(), UUID.randomUUID(), "问题", 2L)))
+                new ChatRequest(ACTOR, UUID.randomUUID(), UUID.randomUUID(), "问题", 2L)))
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessage("版本冲突");
     }
@@ -44,15 +48,16 @@ class ChatUseCaseTest {
     void shouldEmitFixedBranchInStableOrder() {
         ConversationStorePort store = mock(ConversationStorePort.class);
         UUID conversationId = UUID.randomUUID();
-        when(store.begin(any(), any(), any(), any(), any(), any())).thenReturn(
+        when(store.begin(any(), any(), any(), any(), any(), any(), any())).thenReturn(
                 new BeginResult(BeginStatus.ACQUIRED, conversationId, 0, null, null));
-        when(store.recentContext(any(), anyInt(), anyInt())).thenReturn(List.of());
+        when(store.recentContext(any(), any(), anyInt(), anyInt())).thenReturn(List.of());
         AtomicLong sequence = new AtomicLong();
-        when(store.nextSequence(any(), any())).thenAnswer(ignored -> sequence.incrementAndGet());
-        when(store.complete(any(), any(), any(), any(), any())).thenAnswer(invocation -> invocation.getArgument(2));
+        when(store.nextSequence(any(), any(), any())).thenAnswer(ignored -> sequence.incrementAndGet());
+        when(store.complete(any(), any(), any(), any(), any(), any()))
+                .thenAnswer(invocation -> invocation.getArgument(3));
         ChatUseCase useCase = useCase(store);
         RecordingSink sink = new RecordingSink();
-        useCase.stream(new ChatRequest(null, UUID.randomUUID(), "告诉我股票行情", null), sink);
+        useCase.stream(new ChatRequest(ACTOR, null, UUID.randomUUID(), "告诉我股票行情", null), sink);
         assertThat(sink.events).extracting(ChatEvent::eventType).containsExactly(
                 "conversation.started", "answer.started", "answer.delta", "answer.completed");
         assertThat(sink.events).extracting(ChatEvent::sequence).containsExactly(1L, 2L, 3L, 4L);
@@ -64,18 +69,18 @@ class ChatUseCaseTest {
     void shouldFailRunWithoutCommitWhenSseClientStopsAcceptingEvents() {
         ConversationStorePort store = mock(ConversationStorePort.class);
         UUID conversationId = UUID.randomUUID();
-        when(store.begin(any(), any(), any(), any(), any(), any())).thenReturn(
+        when(store.begin(any(), any(), any(), any(), any(), any(), any())).thenReturn(
                 new BeginResult(BeginStatus.ACQUIRED, conversationId, 0, null, null));
-        when(store.recentContext(any(), anyInt(), anyInt())).thenReturn(List.of());
+        when(store.recentContext(any(), any(), anyInt(), anyInt())).thenReturn(List.of());
         AtomicLong sequence = new AtomicLong();
-        when(store.nextSequence(any(), any())).thenAnswer(ignored -> sequence.incrementAndGet());
+        when(store.nextSequence(any(), any(), any())).thenAnswer(ignored -> sequence.incrementAndGet());
         ChatUseCase useCase = useCase(store);
 
-        useCase.stream(new ChatRequest(null, UUID.randomUUID(), "告诉我股票行情", null),
+        useCase.stream(new ChatRequest(ACTOR, null, UUID.randomUUID(), "告诉我股票行情", null),
                 new FailingSink());
 
-        verify(store).fail(any(), any(), any());
-        verify(store, never()).complete(any(), any(), any(), any(), any());
+        verify(store).fail(any(), any(), any(), any());
+        verify(store, never()).complete(any(), any(), any(), any(), any(), any());
     }
 
     /** 创建不允许实际模型调用的聊天用例。 */

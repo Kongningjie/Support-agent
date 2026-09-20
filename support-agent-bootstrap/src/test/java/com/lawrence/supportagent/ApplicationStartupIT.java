@@ -39,6 +39,8 @@ import tools.jackson.databind.ObjectMapper;
                 "spring.data.redis.url=redis://127.0.0.1:1"
         })
 class ApplicationStartupIT {
+    private static final String ADMIN_USERNAME = "stage-admin";
+    private static final String ADMIN_PASSWORD = "stage-admin-password";
     @Container
     private static final MySQLContainer MYSQL = new MySQLContainer("mysql:8.4.11")
             .withDatabaseName("support_agent")
@@ -52,6 +54,7 @@ class ApplicationStartupIT {
     private int serverPort;
     @Autowired
     private ObjectMapper objectMapper;
+    private volatile String adminToken;
 
     /** 把 Testcontainers MySQL 连接信息注入完整应用。 */
     @DynamicPropertySource
@@ -63,6 +66,10 @@ class ApplicationStartupIT {
         registry.add("spring.data.redis.port", () -> REDIS.getMappedPort(6379));
         registry.add("spring.data.redis.url", () -> "redis://" + REDIS.getHost()
                 + ":" + REDIS.getMappedPort(6379));
+        registry.add("support-agent.auth.bootstrap-admin.enabled", () -> "true");
+        registry.add("support-agent.auth.bootstrap-admin.username", () -> ADMIN_USERNAME);
+        registry.add("support-agent.auth.bootstrap-admin.display-name", () -> "Stage Admin");
+        registry.add("support-agent.auth.bootstrap-admin.password", () -> ADMIN_PASSWORD);
     }
 
     /** 验证无需模型的越界分支可按稳定顺序完成真实 SSE 响应并写入审计。 */
@@ -72,6 +79,7 @@ class ApplicationStartupIT {
                         URI.create("http://127.0.0.1:" + serverPort + "/api/v1/chat/stream"))
                 .header("Accept", "text/event-stream")
                 .header("Content-Type", "application/json")
+                .header("Authorization", "Bearer " + accessToken())
                 .POST(HttpRequest.BodyPublishers.ofString("""
                         {"clientMessageId":"%s","message":"告诉我今天的股票行情"}
                         """.formatted(UUID.randomUUID())))
@@ -196,6 +204,49 @@ class ApplicationStartupIT {
         assertEquals(404, get(client, "/api/v1/knowledge/documents/" + documentId).statusCode());
     }
 
+    /** 验证匿名 401、管理员创建、普通用户 403、禁用撤销和注销完整认证链路。 */
+    @Test
+    void shouldEnforceAuthenticationAndTwoLevelRoles() throws Exception {
+        HttpClient client = HttpClient.newHttpClient();
+        HttpResponse<String> anonymous = send(client, "GET", "/api/v1/users/me", "", null);
+        assertEquals(401, anonymous.statusCode());
+        assertTrue(anonymous.body().contains("AUTH_UNAUTHORIZED"));
+
+        String username = "stage-user-" + UUID.randomUUID().toString().substring(0, 8);
+        String createBody = """
+                {"username":"%s","displayName":"阶段用户","password":"stage-user-password","role":"USER",
+                 "idempotencyKey":"create-%s"}
+                """.formatted(username, username);
+        HttpResponse<String> created = send(client, "POST", "/api/v1/admin/users",
+                createBody, accessToken());
+        assertEquals(201, created.statusCode());
+        JsonNode createdUser = objectMapper.readTree(created.body()).path("data");
+        assertFalse(createdUser.has("password"));
+        HttpResponse<String> replayed = send(client, "POST", "/api/v1/admin/users",
+                createBody, accessToken());
+        assertEquals(createdUser.path("userId"),
+                objectMapper.readTree(replayed.body()).path("data").path("userId"));
+
+        String userToken = login(username, "stage-user-password");
+        assertEquals(200, send(client, "GET", "/api/v1/users/me", "", userToken).statusCode());
+        assertEquals(403, send(client, "POST", "/api/v1/admin/users", """
+                {"username":"forbidden-user","displayName":"越权","password":"forbidden-password","role":"USER",
+                 "idempotencyKey":"forbidden-create"}
+                """, userToken).statusCode());
+
+        String userId = createdUser.path("userId").stringValue();
+        long version = createdUser.path("version").asLong();
+        HttpResponse<String> disabled = send(client, "PATCH",
+                "/api/v1/admin/users/" + userId + "/status",
+                "{\"status\":\"DISABLED\",\"version\":" + version + "}", accessToken());
+        assertEquals(200, disabled.statusCode());
+        assertEquals(401, send(client, "GET", "/api/v1/users/me", "", userToken).statusCode());
+
+        String logoutToken = login(ADMIN_USERNAME, ADMIN_PASSWORD);
+        assertEquals(200, send(client, "POST", "/api/v1/auth/logout", "{}", logoutToken).statusCode());
+        assertEquals(401, send(client, "GET", "/api/v1/users/me", "", logoutToken).statusCode());
+    }
+
     /** 验证 OpenAPI 已注册阶段五允许的工单、案例和评测接口。 */
     @Test
     void shouldExposeOnlyCurrentStageTicketOperations() throws Exception {
@@ -217,8 +268,12 @@ class ApplicationStartupIT {
     /** 向本地随机端口发送健康检查请求。 */
     private HttpResponse<String> get(HttpClient client, String path)
             throws IOException, InterruptedException {
-        HttpRequest request = HttpRequest.newBuilder(
-                URI.create("http://127.0.0.1:" + serverPort + path)).GET().build();
+        HttpRequest.Builder builder = HttpRequest.newBuilder(
+                URI.create("http://127.0.0.1:" + serverPort + path));
+        if (!path.startsWith("/actuator/") && !path.startsWith("/v3/api-docs")) {
+            builder.header("Authorization", "Bearer " + accessToken());
+        }
+        HttpRequest request = builder.GET().build();
         return client.send(request, HttpResponse.BodyHandlers.ofString());
     }
 
@@ -228,7 +283,37 @@ class ApplicationStartupIT {
         HttpRequest request = HttpRequest.newBuilder(
                         URI.create("http://127.0.0.1:" + serverPort + path))
                 .header("Content-Type", "application/json")
+                .header("Authorization", "Bearer " + accessToken())
                 .method(method, HttpRequest.BodyPublishers.ofString(body)).build();
+        return client.send(request, HttpResponse.BodyHandlers.ofString());
+    }
+
+    /** 返回缓存的管理员 Token，首次使用时通过公开登录接口获取。 */
+    private String accessToken() throws IOException, InterruptedException {
+        if (adminToken == null) {
+            adminToken = login(ADMIN_USERNAME, ADMIN_PASSWORD);
+        }
+        return adminToken;
+    }
+
+    /** 使用用户名密码登录并返回一次性原始 Bearer Token。 */
+    private String login(String username, String password) throws IOException, InterruptedException {
+        HttpResponse<String> response = send(HttpClient.newHttpClient(), "POST", "/api/v1/auth/login",
+                "{\"username\":\"" + username + "\",\"password\":\"" + password + "\"}", null);
+        assertEquals(200, response.statusCode());
+        return objectMapper.readTree(response.body()).path("data").path("accessToken").stringValue();
+    }
+
+    /** 使用可选 Bearer Token 发送原始 HTTP 请求，用于认证边界测试。 */
+    private HttpResponse<String> send(HttpClient client, String method, String path, String body,
+                                      String token) throws IOException, InterruptedException {
+        HttpRequest.Builder builder = HttpRequest.newBuilder(
+                        URI.create("http://127.0.0.1:" + serverPort + path))
+                .header("Content-Type", "application/json");
+        if (token != null) {
+            builder.header("Authorization", "Bearer " + token);
+        }
+        HttpRequest request = builder.method(method, HttpRequest.BodyPublishers.ofString(body)).build();
         return client.send(request, HttpResponse.BodyHandlers.ofString());
     }
 
