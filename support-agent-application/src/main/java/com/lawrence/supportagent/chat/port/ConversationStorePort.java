@@ -1,6 +1,7 @@
 package com.lawrence.supportagent.chat.port;
 
 import com.lawrence.supportagent.chat.ChatIntent;
+import com.lawrence.supportagent.chat.ConversationSummary;
 import com.lawrence.supportagent.retrieval.RetrievalStatus;
 import java.time.Instant;
 import java.util.List;
@@ -37,6 +38,13 @@ public interface ConversationStorePort {
 
     /** 返回最多六轮且总字符数受限的模型上下文。 */
     List<String> recentContext(UUID conversationId, int maximumTurns, int maximumCharacters);
+
+    /** 原子读取当前摘要版本、会话版本以及尚未裁剪的完整成功轮次。 */
+    MemorySnapshot memorySnapshot(UUID conversationId);
+
+    /** 按摘要版本执行 CAS，并仅在成功后裁剪已经被摘要覆盖的旧轮次。 */
+    boolean commitSummary(UUID conversationId, long expectedSummaryVersion,
+                          ConversationSummary summary, int recentFullTurns, Instant now);
 
     /** 表示会话开始结果类型。 */
     enum BeginStatus { ACQUIRED, REPLAY }
@@ -86,4 +94,22 @@ public interface ConversationStorePort {
     /** @param status 消费状态 @param claimId 消费租约 UUID @param frozenContext 冻结上下文 @param sourceTurnId 来源轮次 @param ticketNo 已创建工单号 */
     record SuggestionClaim(String status, UUID claimId, String frozenContext,
                            UUID sourceTurnId, String ticketNo) { }
+
+    /**
+     * @param conversationId 当前会话 ID
+     * @param conversationVersion 当前成功会话版本
+     * @param summaryVersion 当前摘要 CAS 版本，尚无摘要时为零
+     * @param summary 当前结构化摘要，尚无摘要时为空
+     * @param turns Redis 中仍保留的完整成功轮次
+     */
+    record MemorySnapshot(UUID conversationId, long conversationVersion, long summaryVersion,
+                          ConversationSummary summary, List<CompletedTurn> turns) {
+        /** 复制轮次并校验快照版本非负。 */
+        public MemorySnapshot {
+            if (conversationId == null || conversationVersion < 0 || summaryVersion < 0) {
+                throw new IllegalArgumentException("会话记忆快照版本不能为负数");
+            }
+            turns = turns == null ? List.of() : List.copyOf(turns);
+        }
+    }
 }

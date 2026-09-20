@@ -122,15 +122,19 @@ public class DashScopeChatModelAdapter implements ChatModelPort {
                 .generateOptions(options(settings.chatMaxOutputTokens()))
                 .sysPrompt(ticketPrompt.render(Map.of("TICKET_NO", allowedTicketNo)))
                 .build();
+        String history = recentTurns.isEmpty() ? "" : "历史上下文：\n"
+                + String.join("\n", recentTurns) + "\n";
         try (agent) {
-            Msg response = agent.call("用户问题：" + message + "\n请查询：" + allowedTicketNo)
+            Msg response = agent.call(history + "用户问题：" + message
+                            + "\n只允许查询当前识别出的工单：" + allowedTicketNo)
                     .block(settings.chatTimeout());
             if (response == null || response.getTextContent() == null || response.getTextContent().isBlank()
                     || tool.calls() != 1) {
                 throw unavailable(null);
             }
             firstTokenCallback.run();
-            recordChatUsage(response.getUsage(), message.length(), response.getTextContent().length());
+            recordChatUsage(response.getUsage(), history.length() + message.length(),
+                    response.getTextContent().length());
             return new ModelAnswer(response.getTextContent(), ticketPrompt.version(), agent.getAgentState().toJson());
         } catch (RuntimeException exception) {
             throw unavailable(exception);

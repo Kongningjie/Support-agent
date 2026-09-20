@@ -37,11 +37,12 @@ class SupportAgentPropertiesTest {
     private SupportAgentProperties properties(String baseUrl, Duration embeddingTimeout,
                                                int retryAttempts) {
         SupportAgentProperties.DashScope dashScope = new SupportAgentProperties.DashScope(
-                "", baseUrl, "qwen3.8-flash", "qwen3.7-flash", "text-embedding-v4",
+                "", baseUrl, "qwen3.8-flash", "qwen3.7-flash", "qwen3.7-flash", "text-embedding-v4",
                 "qwen3-rerank", Duration.ofSeconds(120), Duration.ofSeconds(3),
+                Duration.ofSeconds(30),
                 Duration.ofSeconds(30), Duration.ofSeconds(60), embeddingTimeout,
                 Duration.ofSeconds(10), retryAttempts, Duration.ofMillis(100),
-                1200, 256, 800, GroundedPromptVariant.ORIGINAL);
+                1200, 256, 1200, 800, GroundedPromptVariant.ORIGINAL);
         SupportAgentProperties.Elasticsearch elasticsearch =
                 new SupportAgentProperties.Elasticsearch("http://localhost:9200", "", "",
                         "support_knowledge_v1", "support_knowledge_current",

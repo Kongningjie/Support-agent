@@ -6,6 +6,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import com.lawrence.supportagent.chat.port.ConversationStorePort.CompletedTurn;
 import com.lawrence.supportagent.sharedkernel.error.ApplicationException;
 import com.lawrence.supportagent.sharedkernel.error.ErrorCode;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
 import java.util.UUID;
@@ -112,5 +113,37 @@ class RedisConversationStoreAdapterIT {
         assertThat(store.begin(null, UUID.randomUUID(), "重新开始", null,
                 UUID.randomUUID(), now.plusSeconds(2)).status())
                 .isEqualTo(com.lawrence.supportagent.chat.port.ConversationStorePort.BeginStatus.ACQUIRED);
+    }
+
+    /** 摘要 CAS 成功后只裁剪已覆盖旧轮次，竞争失败不得覆盖较新摘要。 */
+    @Test
+    void shouldCommitSummaryWithCasAndPreserveRecentTurns() {
+        UUID conversationId = null;
+        long version = 0;
+        for (int index = 1; index <= 8; index++) {
+            UUID runId = UUID.randomUUID();
+            UUID messageId = UUID.randomUUID();
+            var begin = store.begin(conversationId, messageId, "问题" + index,
+                    conversationId == null ? null : version, runId, Instant.now());
+            conversationId = begin.conversationId();
+            version++;
+            store.complete(conversationId, runId, new CompletedTurn(UUID.randomUUID(), messageId,
+                    runId, "问题" + index, "问题" + index, ChatIntent.SUPPORT_QUERY,
+                    "回答" + index, null, List.of(), null, null, "GROUNDED",
+                    Instant.now(), version), null, Instant.now());
+        }
+        ConversationSummary summary = new ConversationSummary(ConversationSummary.SCHEMA_VERSION,
+                1, 2, List.of("排查连接问题"), List.of(), List.of(), List.of(), List.of());
+
+        assertThat(store.commitSummary(conversationId, 0, summary, 6, Instant.now())).isTrue();
+        var snapshot = store.memorySnapshot(conversationId);
+        assertThat(snapshot.summary()).isEqualTo(summary);
+        assertThat(snapshot.turns()).extracting(CompletedTurn::conversationVersion)
+                .containsExactly(3L, 4L, 5L, 6L, 7L, 8L);
+        assertThat(redisTemplate.getExpire("support-agent:chat:conversation:{" + conversationId + "}"))
+                .isBetween(Duration.ofDays(6).toSeconds(), Duration.ofDays(7).toSeconds());
+        assertThat(redisTemplate.getExpire("support-agent:chat:turns:{" + conversationId + "}"))
+                .isBetween(Duration.ofDays(6).toSeconds(), Duration.ofDays(7).toSeconds());
+        assertThat(store.commitSummary(conversationId, 0, summary, 6, Instant.now())).isFalse();
     }
 }

@@ -44,12 +44,16 @@ support-agent:
     base-url: ${DASHSCOPE_HTTP_BASE_URL:https://dashscope.aliyuncs.com/api/v1}
     chat-model: ${SUPPORT_AGENT_CHAT_MODEL:qwen3.8-flash}
     intent-model: ${SUPPORT_AGENT_INTENT_MODEL:qwen3.7-flash}
+    # 单会话滚动摘要模型，与普通 Chat 和意图模型端口隔离。
+    summary-model: ${SUPPORT_AGENT_SUMMARY_MODEL:qwen3.7-flash}
     embedding-model: ${SUPPORT_AGENT_EMBEDDING_MODEL:text-embedding-v4}
     rerank-model: ${SUPPORT_AGENT_RERANK_MODEL:qwen3-rerank}
     # 普通 Chat 完整生成超时；首片段与完整请求延迟仍由阶段 8 门禁独立判断。
     chat-timeout: ${SUPPORT_AGENT_CHAT_TIMEOUT:120s}
     # 意图识别总超时，失败时由应用层降级为 SUPPORT_QUERY。
     intent-timeout: ${SUPPORT_AGENT_INTENT_TIMEOUT:3s}
+    # 单次结构化会话摘要完整生成超时。
+    summary-timeout: ${SUPPORT_AGENT_SUMMARY_TIMEOUT:30s}
     # 工单草稿结构化生成单次超时。
     ticket-timeout: ${SUPPORT_AGENT_TICKET_TIMEOUT:30s}
     # 已解决案例结构化生成单次超时。
@@ -66,6 +70,8 @@ support-agent:
     chat-max-output-tokens: ${SUPPORT_AGENT_CHAT_MAX_OUTPUT_TOKENS:1200}
     # 意图结构化识别的最大输出 Token。
     intent-max-output-tokens: ${SUPPORT_AGENT_INTENT_MAX_OUTPUT_TOKENS:256}
+    # 单次结构化会话摘要最大输出 Token。
+    summary-max-output-tokens: ${SUPPORT_AGENT_SUMMARY_MAX_OUTPUT_TOKENS:1200}
     # 工单草稿和案例草稿结构化生成的最大输出 Token。
     structured-max-output-tokens: ${SUPPORT_AGENT_STRUCTURED_MAX_OUTPUT_TOKENS:800}
     # 知识回答 Prompt 版本；只有压缩版通过完整 A/B 门禁后才允许设为 COMPACT。
@@ -131,6 +137,20 @@ support-agent:
     run-lease: ${SUPPORT_AGENT_CHAT_RUN_LEASE:3m}
     # 工单建议消费租约，必须短于建议有效时间。
     suggestion-lease: ${SUPPORT_AGENT_SUGGESTION_LEASE:3m}
+    # 单次 Chat 输入的内部工程 Token 预算，不代表供应商最大上下文窗口。
+    input-budget-tokens: ${SUPPORT_AGENT_CONVERSATION_INPUT_BUDGET_TOKENS:24000}
+    # 为正式回答保留的最大输出 Token。
+    output-reserve-tokens: ${SUPPORT_AGENT_CONVERSATION_OUTPUT_RESERVE_TOKENS:1200}
+    # 应对确定性估算误差和协议开销的固定 Token 余量。
+    safety-margin-tokens: ${SUPPORT_AGENT_CONVERSATION_SAFETY_MARGIN_TOKENS:1024}
+    # 摘要之外始终保留在 Redis 的最近完整成功轮次。
+    recent-full-turns: ${SUPPORT_AGENT_CONVERSATION_RECENT_FULL_TURNS:6}
+    # 达到该成功轮次数后，在回答完成后异步生成滚动摘要。
+    soft-trigger-turns: ${SUPPORT_AGENT_CONVERSATION_SOFT_TRIGGER_TURNS:12}
+    # 会话记忆达到该估算 Token 后异步生成滚动摘要。
+    soft-trigger-memory-tokens: ${SUPPORT_AGENT_CONVERSATION_SOFT_TRIGGER_MEMORY_TOKENS:6000}
+    # 达到该原始轮次数时，在下一次模型调用前同步生成摘要。
+    hard-trigger-turns: ${SUPPORT_AGENT_CONVERSATION_HARD_TRIGGER_TURNS:20}
   observability:
     # Outbox 指标写入本地 Gauge 的采样周期；指标抓取本身不会访问数据库。
     outbox-sample-delay: ${SUPPORT_AGENT_OUTBOX_SAMPLE_DELAY:10s}

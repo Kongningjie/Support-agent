@@ -1,6 +1,7 @@
 package com.lawrence.supportagent.chat;
 
 import com.lawrence.supportagent.chat.port.ConversationStorePort;
+import com.lawrence.supportagent.chat.ConversationSummary;
 import com.lawrence.supportagent.sharedkernel.error.ApplicationException;
 import com.lawrence.supportagent.sharedkernel.error.ErrorCode;
 import java.nio.charset.StandardCharsets;
@@ -148,7 +149,7 @@ public class RedisConversationStoreAdapter implements ConversationStorePort {
                 : suggestionKey(conversationId, turn.suggestionId());
         String script = """
                 if redis.call('HGET',KEYS[1],'activeRunId')~=ARGV[1] then return 0 end
-                redis.call('RPUSH',KEYS[3],ARGV[2]); redis.call('LTRIM',KEYS[3],-20,-1)
+                redis.call('RPUSH',KEYS[3],ARGV[2])
                 redis.call('HSET',KEYS[1],'version',ARGV[3],'status','IDLE','lastAccessAt',ARGV[4])
                 redis.call('HDEL',KEYS[1],'activeRunId','runLeaseUntil','activeMessageKey')
                 if ARGV[5]~='' then redis.call('HSET',KEYS[1],'agentState',ARGV[5]) end
@@ -236,6 +237,76 @@ public class RedisConversationStoreAdapter implements ConversationStorePort {
         }
         java.util.Collections.reverse(reversed);
         return List.copyOf(reversed);
+    }
+
+    /** {@inheritDoc} */
+    @Override
+    public MemorySnapshot memorySnapshot(UUID conversationId) {
+        String script = """
+                if redis.call('EXISTS',KEYS[1])==0 then return {'EXPIRED'} end
+                local result={redis.call('HGET',KEYS[1],'version') or '0',
+                  redis.call('HGET',KEYS[1],'summaryVersion') or '0',
+                  redis.call('HGET',KEYS[1],'summary') or ''}
+                local turns=redis.call('LRANGE',KEYS[2],0,-1)
+                for _,turn in ipairs(turns) do table.insert(result,turn) end
+                return result
+                """;
+        List<?> values = executeList(script,
+                List.of(conversationKey(conversationId), turnsKey(conversationId)));
+        if ("EXPIRED".equals(string(values, 0))) {
+            throw error(ErrorCode.CHAT_CONVERSATION_EXPIRED, "会话不存在或已经过期");
+        }
+        List<CompletedTurn> turns = new ArrayList<>();
+        for (int index = 3; index < values.size(); index++) {
+            turns.add(read(string(values, index), CompletedTurn.class));
+        }
+        String summaryJson = string(values, 2);
+        ConversationSummary summary = summaryJson.isBlank()
+                ? null : read(summaryJson, ConversationSummary.class);
+        return new MemorySnapshot(conversationId, Long.parseLong(string(values, 0)),
+                Long.parseLong(string(values, 1)), summary, turns);
+    }
+
+    /** {@inheritDoc} */
+    @Override
+    public boolean commitSummary(UUID conversationId, long expectedSummaryVersion,
+                                 ConversationSummary summary, int recentFullTurns, Instant now) {
+        String script = """
+                local current=tonumber(redis.call('HGET',KEYS[1],'summaryVersion') or '0')
+                if current~=tonumber(ARGV[1]) then return 0 end
+                local conversationVersion=tonumber(redis.call('HGET',KEYS[1],'version') or '-1')
+                if conversationVersion<tonumber(ARGV[2]) then return 0 end
+                local oldCovered=tonumber(redis.call('HGET',KEYS[1],'summaryCoveredThroughVersion') or '0')
+                if oldCovered>=tonumber(ARGV[2]) then return 0 end
+                local turns=redis.call('LRANGE',KEYS[2],0,-1)
+                local keep={}
+                local recent=tonumber(ARGV[4])
+                for index,turn in ipairs(turns) do
+                  local ok,value=pcall(cjson.decode,turn)
+                  if not ok or not value.conversationVersion then return -2 end
+                  if value.conversationVersion>tonumber(ARGV[2]) or index>#turns-recent then
+                    table.insert(keep,turn)
+                  end
+                end
+                redis.call('HSET',KEYS[1],'summary',ARGV[3],
+                  'summaryVersion',tostring(current+1),
+                  'summaryCoveredThroughVersion',ARGV[2],
+                  'lastAccessAt',ARGV[5])
+                redis.call('DEL',KEYS[2])
+                if #keep>0 then redis.call('RPUSH',KEYS[2],unpack(keep)) end
+                redis.call('EXPIRE',KEYS[1],ARGV[6]); redis.call('EXPIRE',KEYS[2],ARGV[6])
+                return 1
+                """;
+        Long result = redis.execute(new DefaultRedisScript<>(script, Long.class),
+                List.of(conversationKey(conversationId), turnsKey(conversationId)),
+                Long.toString(expectedSummaryVersion),
+                Long.toString(summary.coveredThroughVersion()), write(summary),
+                Integer.toString(recentFullTurns), Long.toString(now.toEpochMilli()),
+                Long.toString(conversationTtl.toSeconds()));
+        if (Long.valueOf(-2).equals(result)) {
+            throw error(ErrorCode.COMMON_INTERNAL_ERROR, "会话轮次数据无法用于摘要提交");
+        }
+        return Long.valueOf(1).equals(result);
     }
 
     /** 执行返回多值数组的 Lua 脚本。 */

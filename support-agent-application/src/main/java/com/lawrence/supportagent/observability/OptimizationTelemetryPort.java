@@ -34,13 +34,15 @@ public interface OptimizationTelemetryPort {
         /** Chat 模型首 Token。 */ MODEL_FIRST_TOKEN,
         /** 请求开始到安全首片段。 */ SAFE_FIRST_DELTA,
         /** 请求开始到答案完成事件。 */ ANSWER_COMPLETE,
-        /** 完整聊天请求。 */ CHAT_REQUEST
+        /** 完整聊天请求。 */ CHAT_REQUEST,
+        /** 单会话结构化滚动摘要。 */ CONVERSATION_SUMMARY
     }
 
     /** 固定模型用量分类。 */
     enum ModelOperation {
         /** Chat 生成。 */ CHAT,
         /** 文档或查询向量化。 */ EMBEDDING,
-        /** 候选重排序。 */ RERANK
+        /** 候选重排序。 */ RERANK,
+        /** 单会话结构化滚动摘要。 */ SUMMARY
     }
 }

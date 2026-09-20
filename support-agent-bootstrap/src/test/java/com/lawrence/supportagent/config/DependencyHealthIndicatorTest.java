@@ -87,11 +87,12 @@ class DependencyHealthIndicatorTest {
     private SupportAgentProperties.DashScope dashScope(String apiKey) {
         return new SupportAgentProperties.DashScope(apiKey,
                 "https://dashscope.aliyuncs.com/api/v1", "qwen3.8-flash",
-                "qwen3.7-flash", "text-embedding-v4", "qwen3-rerank",
+                "qwen3.7-flash", "qwen3.7-flash", "text-embedding-v4", "qwen3-rerank",
                 java.time.Duration.ofSeconds(120), java.time.Duration.ofSeconds(3),
+                java.time.Duration.ofSeconds(30),
                 java.time.Duration.ofSeconds(30), java.time.Duration.ofSeconds(60),
                 java.time.Duration.ofSeconds(10), java.time.Duration.ofSeconds(10), 3,
-                java.time.Duration.ofMillis(100), 1200, 256, 800,
+                java.time.Duration.ofMillis(100), 1200, 256, 1200, 800,
                 com.lawrence.supportagent.agent.model.GroundedPromptVariant.ORIGINAL);
     }
 }

@@ -54,6 +54,7 @@ public class ChatUseCase {
     private final double groundedThreshold;
     private final OptimizationTelemetryPort telemetry;
     private final Duration suggestionTtl;
+    private final ConversationContextService contextService;
 
     /** 创建不向 Agent 下放检索路由或写权限的聊天用例。 */
     public ChatUseCase(IntentRecognitionService intents, RetrievalService retrieval,
@@ -64,7 +65,7 @@ public class ChatUseCase {
                        String rerankModelName, double groundedThreshold) {
         this(intents, retrieval, chatModel, tickets, conversations, audits, validator, ids, time,
                 chatModelName, embeddingModelName, rerankModelName, groundedThreshold,
-                OptimizationTelemetryPort.noOp(), DEFAULT_SUGGESTION_TTL);
+                OptimizationTelemetryPort.noOp(), DEFAULT_SUGGESTION_TTL, null);
     }
 
     /** 创建带二期低基数耗时遥测的聊天用例。 */
@@ -77,7 +78,7 @@ public class ChatUseCase {
                        OptimizationTelemetryPort telemetry) {
         this(intents, retrieval, chatModel, tickets, conversations, audits, validator, ids, time,
                 chatModelName, embeddingModelName, rerankModelName, groundedThreshold,
-                telemetry, DEFAULT_SUGGESTION_TTL);
+                telemetry, DEFAULT_SUGGESTION_TTL, null);
     }
 
     /** 创建带显式建议有效期和二期低基数耗时遥测的聊天用例。 */
@@ -88,6 +89,20 @@ public class ChatUseCase {
                        String chatModelName, String embeddingModelName,
                        String rerankModelName, double groundedThreshold,
                        OptimizationTelemetryPort telemetry, Duration suggestionTtl) {
+        this(intents, retrieval, chatModel, tickets, conversations, audits, validator, ids, time,
+                chatModelName, embeddingModelName, rerankModelName, groundedThreshold,
+                telemetry, suggestionTtl, null);
+    }
+
+    /** 创建带阶段 10 统一上下文组装、显式建议有效期和遥测的聊天用例。 */
+    public ChatUseCase(IntentRecognitionService intents, RetrievalService retrieval,
+                       ChatModelPort chatModel, TicketQueryUseCase tickets,
+                       ConversationStorePort conversations, AgentAuditPort audits,
+                       AnswerValidator validator, UuidGenerator ids, TimeProvider time,
+                       String chatModelName, String embeddingModelName,
+                       String rerankModelName, double groundedThreshold,
+                       OptimizationTelemetryPort telemetry, Duration suggestionTtl,
+                       ConversationContextService contextService) {
         if (suggestionTtl == null || suggestionTtl.isZero() || suggestionTtl.isNegative()) {
             throw new IllegalArgumentException("工单建议有效期必须大于 0");
         }
@@ -106,6 +121,7 @@ public class ChatUseCase {
         this.groundedThreshold = groundedThreshold;
         this.telemetry = telemetry == null ? OptimizationTelemetryPort.noOp() : telemetry;
         this.suggestionTtl = suggestionTtl;
+        this.contextService = contextService;
     }
 
     /**
@@ -155,8 +171,7 @@ public class ChatUseCase {
             audits.start(runId, begin.conversationId(), request.clientMessageId(), time.now());
             emit(sink, begin.conversationId(), runId, "conversation.started",
                     Map.of("conversationVersion", begin.version(), "replayed", false));
-            List<String> context = conversations.recentContext(begin.conversationId(),
-                    MODEL_CONTEXT_TURNS, MODEL_CONTEXT_CHARACTERS);
+            List<String> context = modelContext(begin.conversationId(), List.of(request.message()));
             IntentDecision decision = intents.recognize(request.message(), context);
             audits.recordIntent(runId, decision);
             Outcome outcome = route(begin.conversationId(), runId, request.message(), context,
@@ -180,6 +195,9 @@ public class ChatUseCase {
             audits.succeed(runId, outcome.promptVersion, chatModelName, embeddingModelName,
                     rerankModelName, elapsed(started), time.now());
             sink.complete();
+            if (contextService != null) {
+                contextService.afterSuccessfulTurn(begin.conversationId());
+            }
             telemetry.recordDuration(Operation.CHAT_REQUEST, elapsed(started), true);
         } catch (RuntimeException exception) {
             if (committed) {
@@ -230,7 +248,9 @@ public class ChatUseCase {
         if (decision.ticketNo() == null) return fixed(TICKET_REQUIRED, "TICKET_NUMBER_REQUIRED");
         try {
             TicketDetails ticket = tickets.get(decision.ticketNo());
-            ModelAnswer answer = chatModel.ticketAnswer(message, decision.ticketNo(), ticket, context,
+            List<String> answerContext = modelContext(conversationId,
+                    ticketFixedSections(message, ticket));
+            ModelAnswer answer = chatModel.ticketAnswer(message, decision.ticketNo(), ticket, answerContext,
                     () -> renew(conversationId, runId));
             return fromModel(answer, "TICKET_FOUND", null, List.of(), null,
                     answer.serializedAgentState());
@@ -265,14 +285,15 @@ public class ChatUseCase {
                     RetrievalStatus.NO_RELIABLE_KNOWLEDGE, List.of(), ids.generate(), null);
         }
         List<Citation> citations = citations(result.evidence());
+        List<String> answerContext = modelContext(conversationId, fixedSections(message, result.evidence()));
         long modelStarted = System.nanoTime();
-        ModelAnswer answer = chatModel.groundedAnswer(message, context, result.evidence(), null,
+        ModelAnswer answer = chatModel.groundedAnswer(message, answerContext, result.evidence(), null,
                 firstTokenCallback(conversationId, runId, modelStarted));
         answer = withDisclosure(answer, result.evidence());
         List<String> failures = validator.validate(answer.text(), result.evidence());
         if (!failures.isEmpty()) {
             modelStarted = System.nanoTime();
-            answer = chatModel.groundedAnswer(message, context, result.evidence(),
+            answer = chatModel.groundedAnswer(message, answerContext, result.evidence(),
                     String.join(",", failures), firstTokenCallback(conversationId, runId, modelStarted));
             answer = withDisclosure(answer, result.evidence());
             if (!validator.validate(answer.text(), result.evidence()).isEmpty()) {
@@ -297,6 +318,31 @@ public class ChatUseCase {
                 ? "\n\n> 注意：知识文档与历史案例中的精确技术值存在差异，请先核对当前环境和版本，再执行相关命令。"
                 : "\n\n> 注意：本回答同时参考了知识文档与历史已解决案例；案例描述的是特定环境，请以当前环境核验结果为准。";
         return new ModelAnswer(answer.text() + notice, answer.promptVersion(), answer.serializedAgentState());
+    }
+
+    /** 使用阶段 10 服务组装模型上下文；旧构造器仅供既有隔离测试保留原行为。 */
+    private List<String> modelContext(UUID conversationId, List<String> fixedSections) {
+        if (contextService == null) {
+            return conversations.recentContext(conversationId,
+                    MODEL_CONTEXT_TURNS, MODEL_CONTEXT_CHARACTERS);
+        }
+        return contextService.prepare(conversationId, fixedSections).modelContext();
+    }
+
+    /** 汇总当前问题及完整证据内容，用于在回答模型调用前核算输入预算。 */
+    private List<String> fixedSections(String message, List<RetrievalEvidence> evidence) {
+        List<String> values = new ArrayList<>();
+        values.add(message);
+        evidence.stream().map(RetrievalEvidence::content).forEach(values::add);
+        return List.copyOf(values);
+    }
+
+    /** 按工单工具真实公开字段核算固定输入，避免长字段绕过 Token 预算。 */
+    private List<String> ticketFixedSections(String message, TicketDetails ticket) {
+        return List.of(message, ticket.ticketNo(), ticket.title(), ticket.problemDescription(),
+                String.valueOf(ticket.attemptedActions()), ticket.status().name(),
+                String.valueOf(ticket.rootCause()), String.valueOf(ticket.solution()),
+                String.valueOf(ticket.closeReason()));
     }
 
     /** 在落库前发送安全正文；客户端发送失败时不提交会话轮次。 */

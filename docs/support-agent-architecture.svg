@@ -1,0 +1,80 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="2200" height="1600" viewBox="0 0 2200 1600">
+  <defs>
+    <style>
+      .title { font: 700 54px "Microsoft YaHei", "Noto Sans CJK SC", sans-serif; fill: #172033; }
+      .subtitle { font: 400 25px "Microsoft YaHei", "Noto Sans CJK SC", sans-serif; fill: #667085; }
+      .group-title { font: 700 29px "Microsoft YaHei", "Noto Sans CJK SC", sans-serif; fill: #344054; }
+      .node-title { font: 700 28px "Microsoft YaHei", "Noto Sans CJK SC", sans-serif; fill: #172033; }
+      .node-text { font: 400 21px "Microsoft YaHei", "Noto Sans CJK SC", sans-serif; fill: #475467; }
+      .small { font: 500 18px "Microsoft YaHei", "Noto Sans CJK SC", sans-serif; fill: #667085; }
+      .edge-text { font: 500 19px "Microsoft YaHei", "Noto Sans CJK SC", sans-serif; fill: #475467; }
+      .mono { font: 500 20px "Consolas", "Microsoft YaHei", sans-serif; fill: #344054; }
+    </style>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="9" markerHeight="9" orient="auto">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#667085"/>
+    </marker>
+    <filter id="shadow" x="-10%" y="-10%" width="120%" height="130%">
+      <feDropShadow dx="0" dy="7" stdDeviation="9" flood-color="#101828" flood-opacity="0.10"/>
+    </filter>
+  </defs>
+
+  <rect width="2200" height="1600" fill="#ffffff"/>
+  <text x="1100" y="72" text-anchor="middle" class="title">Support Agent 模块依赖架构</text>
+  <text x="1100" y="116" text-anchor="middle" class="subtitle">DDD 分层 · 六边形架构 · Maven 多模块单体</text>
+
+  <rect x="160" y="155" width="1880" height="1235" rx="34" fill="#f8fafc" stroke="#98a2b3" stroke-width="3" stroke-dasharray="14 10"/>
+  <text x="215" y="205" class="group-title">Spring Boot 单体应用</text>
+  <text x="1985" y="205" text-anchor="end" class="small">箭头表示编译期依赖，统一自上而下</text>
+
+  <rect x="720" y="235" width="760" height="145" rx="22" fill="#f2f4f7" stroke="#667085" stroke-width="3" filter="url(#shadow)"/>
+  <text x="1100" y="292" text-anchor="middle" class="node-title">Bootstrap 启动装配层</text>
+  <text x="1100" y="335" text-anchor="middle" class="node-text">Spring Boot 启动 · 配置绑定 · Bean 装配 · Actuator</text>
+  <text x="1100" y="366" text-anchor="middle" class="small">唯一可执行模块，最终打包为一个 JAR</text>
+
+  <rect x="235" y="535" width="500" height="230" rx="22" fill="#e0f2fe" stroke="#38bdf8" stroke-width="3" filter="url(#shadow)"/>
+  <text x="485" y="592" text-anchor="middle" class="node-title">Interfaces 接口适配层</text>
+  <text x="485" y="638" text-anchor="middle" class="node-text">REST Controller · SSE · DTO</text>
+  <text x="485" y="675" text-anchor="middle" class="node-text">参数校验 · 异常映射 · OpenAPI</text>
+  <text x="485" y="724" text-anchor="middle" class="small">调用入口：前端 / API 调用方</text>
+
+  <rect x="850" y="535" width="500" height="230" rx="22" fill="#fff7ed" stroke="#fb923c" stroke-width="3" filter="url(#shadow)"/>
+  <text x="1100" y="592" text-anchor="middle" class="node-title">Agent AI 适配层</text>
+  <text x="1100" y="638" text-anchor="middle" class="node-text">AgentScope ReActAgent · Prompt</text>
+  <text x="1100" y="675" text-anchor="middle" class="node-text">Chat · Intent · Embedding · Rerank</text>
+  <text x="1100" y="724" text-anchor="middle" class="small">外部能力：DashScope 模型服务</text>
+
+  <rect x="1465" y="535" width="500" height="230" rx="22" fill="#fef2f2" stroke="#f87171" stroke-width="3" filter="url(#shadow)"/>
+  <text x="1715" y="592" text-anchor="middle" class="node-title">Infrastructure 基础设施层</text>
+  <text x="1715" y="638" text-anchor="middle" class="node-text">MyBatis · Flyway · Outbox Worker</text>
+  <text x="1715" y="675" text-anchor="middle" class="node-text">Repository · 搜索与会话适配器</text>
+  <text x="1715" y="724" text-anchor="middle" class="small">外部资源：MySQL · Redis · Elasticsearch</text>
+
+  <rect x="665" y="925" width="870" height="200" rx="24" fill="#ede9fe" stroke="#8b5cf6" stroke-width="3" filter="url(#shadow)"/>
+  <text x="1100" y="984" text-anchor="middle" class="node-title">Application 应用层</text>
+  <text x="1100" y="1031" text-anchor="middle" class="node-text">聊天、工单、知识发布、案例回流、混合检索与评测用例</text>
+  <text x="1100" y="1070" text-anchor="middle" class="node-text">负责用例编排、事务边界，并定义模型、仓储、搜索与会话端口</text>
+  <text x="1100" y="1104" text-anchor="middle" class="small">不依赖具体 SDK 或中间件实现</text>
+
+  <rect x="665" y="1230" width="870" height="125" rx="24" fill="#dcfce7" stroke="#22c55e" stroke-width="3" filter="url(#shadow)"/>
+  <text x="1100" y="1282" text-anchor="middle" class="node-title">Domain 领域层</text>
+  <text x="1100" y="1325" text-anchor="middle" class="node-text">工单 · 知识文档 · 解决案例 · 异步任务 · 聚合状态机与业务不变量</text>
+
+  <path d="M 1100 380 L 1100 450" fill="none" stroke="#667085" stroke-width="4"/>
+  <path d="M 485 450 L 1715 450" fill="none" stroke="#667085" stroke-width="4"/>
+  <path d="M 485 450 L 485 525" fill="none" stroke="#667085" stroke-width="4" marker-end="url(#arrow)"/>
+  <path d="M 1100 450 L 1100 525" fill="none" stroke="#667085" stroke-width="4" marker-end="url(#arrow)"/>
+  <path d="M 1715 450 L 1715 525" fill="none" stroke="#667085" stroke-width="4" marker-end="url(#arrow)"/>
+  <text x="1130" y="430" class="edge-text">装配并依赖</text>
+
+  <path d="M 485 765 L 485 835 L 850 835 L 850 915" fill="none" stroke="#667085" stroke-width="4" marker-end="url(#arrow)"/>
+  <path d="M 1100 765 L 1100 915" fill="none" stroke="#667085" stroke-width="4" marker-end="url(#arrow)"/>
+  <path d="M 1715 765 L 1715 835 L 1350 835 L 1350 915" fill="none" stroke="#667085" stroke-width="4" marker-end="url(#arrow)"/>
+  <text x="1100" y="816" text-anchor="middle" class="edge-text">三个适配模块均依赖 Application 定义的用例与端口</text>
+
+  <path d="M 1100 1125 L 1100 1220" fill="none" stroke="#667085" stroke-width="4" marker-end="url(#arrow)"/>
+  <text x="1130" y="1183" class="edge-text">依赖领域模型</text>
+
+  <rect x="320" y="1440" width="1560" height="100" rx="20" fill="#f8fafc" stroke="#d0d5dd" stroke-width="2"/>
+  <text x="1100" y="1482" text-anchor="middle" class="mono">bootstrap → interfaces / agent / infrastructure → application → domain</text>
+  <text x="1100" y="1520" text-anchor="middle" class="small">依赖始终指向业务核心；Domain 不依赖 Spring、数据库、搜索引擎或模型 SDK</text>
+</svg>

@@ -30,10 +30,12 @@ public record SupportAgentProperties(String operatorId, DashScope dashscope,
      * @param baseUrl DashScope 原生 API 根地址
      * @param chatModel 对话与结构化生成模型名称
      * @param intentModel 独立意图识别模型名称
+     * @param summaryModel 独立单会话滚动摘要模型名称
      * @param embeddingModel 文档与查询向量模型名称
      * @param rerankModel 候选重排模型名称
      * @param chatTimeout 普通 Chat 完整生成超时
      * @param intentTimeout 意图识别总超时
+     * @param summaryTimeout 单次会话摘要完整生成超时
      * @param ticketTimeout 工单结构化生成超时
      * @param resolvedCaseTimeout 案例结构化生成超时
      * @param embeddingTimeout 单批 Embedding 调用总超时
@@ -42,26 +44,31 @@ public record SupportAgentProperties(String operatorId, DashScope dashscope,
      * @param retryInitialDelay 模型安全重试的初始退避时间
      * @param chatMaxOutputTokens 普通 Chat 最大输出 Token
      * @param intentMaxOutputTokens 意图识别最大输出 Token
+     * @param summaryMaxOutputTokens 单次结构化会话摘要最大输出 Token
      * @param structuredMaxOutputTokens 工单和案例结构化生成最大输出 Token
      * @param groundedPromptVariant 知识回答 Prompt A/B 版本
      */
     public record DashScope(String apiKey, String baseUrl, String chatModel, String intentModel,
+                            String summaryModel,
                             String embeddingModel, String rerankModel, Duration chatTimeout,
-                            Duration intentTimeout, Duration ticketTimeout,
+                            Duration intentTimeout, Duration summaryTimeout, Duration ticketTimeout,
                             Duration resolvedCaseTimeout, Duration embeddingTimeout,
                             Duration rerankTimeout, int retryMaxAttempts,
                             Duration retryInitialDelay, int chatMaxOutputTokens,
-                            int intentMaxOutputTokens, int structuredMaxOutputTokens,
+                            int intentMaxOutputTokens, int summaryMaxOutputTokens,
+                            int structuredMaxOutputTokens,
                             GroundedPromptVariant groundedPromptVariant) {
         /** 校验 DashScope 地址、模型、超时、重试和输出上限。 */
         public DashScope {
             requireHttpUrl(baseUrl, "support-agent.dashscope.base-url");
             requireText(chatModel, "support-agent.dashscope.chat-model");
             requireText(intentModel, "support-agent.dashscope.intent-model");
+            requireText(summaryModel, "support-agent.dashscope.summary-model");
             requireText(embeddingModel, "support-agent.dashscope.embedding-model");
             requireText(rerankModel, "support-agent.dashscope.rerank-model");
             requirePositive(chatTimeout, "support-agent.dashscope.chat-timeout");
             requirePositive(intentTimeout, "support-agent.dashscope.intent-timeout");
+            requirePositive(summaryTimeout, "support-agent.dashscope.summary-timeout");
             requirePositive(ticketTimeout, "support-agent.dashscope.ticket-timeout");
             requirePositive(resolvedCaseTimeout, "support-agent.dashscope.resolved-case-timeout");
             requirePositive(embeddingTimeout, "support-agent.dashscope.embedding-timeout");
@@ -75,6 +82,8 @@ public record SupportAgentProperties(String operatorId, DashScope dashscope,
                     "support-agent.dashscope.chat-max-output-tokens");
             requireRange(intentMaxOutputTokens, 1, 1024,
                     "support-agent.dashscope.intent-max-output-tokens");
+            requireRange(summaryMaxOutputTokens, 1, 4096,
+                    "support-agent.dashscope.summary-max-output-tokens");
             requireRange(structuredMaxOutputTokens, 1, 4096,
                     "support-agent.dashscope.structured-max-output-tokens");
             Objects.requireNonNull(groundedPromptVariant,
