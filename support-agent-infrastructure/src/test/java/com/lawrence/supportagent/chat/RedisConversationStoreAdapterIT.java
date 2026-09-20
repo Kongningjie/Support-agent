@@ -4,12 +4,17 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.lawrence.supportagent.chat.port.ConversationStorePort.CompletedTurn;
+import com.lawrence.supportagent.retrieval.RetrievalStatus;
 import com.lawrence.supportagent.sharedkernel.error.ApplicationException;
 import com.lawrence.supportagent.sharedkernel.error.ErrorCode;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
+import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
@@ -136,7 +141,7 @@ class RedisConversationStoreAdapterIT {
         ConversationSummary summary = new ConversationSummary(ConversationSummary.SCHEMA_VERSION,
                 1, 2, List.of("排查连接问题"), List.of(), List.of(), List.of(), List.of());
 
-        assertThat(store.commitSummary(OWNER_ID, conversationId, 0, summary, 6, Instant.now())).isTrue();
+        assertThat(store.commitSummary(OWNER_ID, conversationId, 0, 0, summary, 6, Instant.now())).isTrue();
         var snapshot = store.memorySnapshot(OWNER_ID, conversationId);
         assertThat(snapshot.summary()).isEqualTo(summary);
         assertThat(snapshot.turns()).extracting(CompletedTurn::conversationVersion)
@@ -145,7 +150,7 @@ class RedisConversationStoreAdapterIT {
                 .isBetween(Duration.ofDays(6).toSeconds(), Duration.ofDays(7).toSeconds());
         assertThat(redisTemplate.getExpire("support-agent:chat:turns:{" + conversationId + "}"))
                 .isBetween(Duration.ofDays(6).toSeconds(), Duration.ofDays(7).toSeconds());
-        assertThat(store.commitSummary(OWNER_ID, conversationId, 0, summary, 6, Instant.now())).isFalse();
+        assertThat(store.commitSummary(OWNER_ID, conversationId, 0, 0, summary, 6, Instant.now())).isFalse();
     }
 
     /** 其他用户和旧无归属会话均不得被当前用户接管。 */
@@ -163,5 +168,131 @@ class RedisConversationStoreAdapterIT {
         assertThatThrownBy(() -> store.memorySnapshot(OWNER_ID, conversationId))
                 .isInstanceOfSatisfying(ApplicationException.class, exception ->
                         assertThat(exception.errorCode()).isEqualTo(ErrorCode.CHAT_CONVERSATION_EXPIRED));
+    }
+
+    /** 用户索引应按最近访问倒序分页，并在查询时清理已经过期的会话成员。 */
+    @Test
+    void shouldListByRecentAccessAndCleanExpiredIndexEntries() {
+        Instant now = Instant.parse("2026-09-20T08:00:00Z");
+        UUID first = completeConversation(OWNER_ID, now, null).conversationId();
+        UUID second = completeConversation(OWNER_ID, now.plusSeconds(1), null).conversationId();
+        redisTemplate.delete("support-agent:chat:conversation:{" + first + "}");
+
+        var page = store.listLifecycle(OWNER_ID, 0, 20, now.plusSeconds(2));
+
+        assertThat(page.totalElements()).isEqualTo(1);
+        assertThat(page.items()).extracting(value -> value.conversationId()).containsExactly(second);
+    }
+
+    /** 普通用户不得跨用户读取详情，管理员按明确 ID 可以查看但不会获得内部状态。 */
+    @Test
+    void shouldEnforceDetailOwnershipAndAllowAdministratorRead() {
+        Instant now = Instant.parse("2026-09-20T08:00:00Z");
+        UUID conversationId = completeConversation(OWNER_ID, now, null).conversationId();
+        UUID anotherUser = UUID.fromString("30000000-0000-0000-0000-000000000001");
+
+        assertThatThrownBy(() -> store.lifecycleDetails(anotherUser, false, conversationId, 20, now))
+                .isInstanceOfSatisfying(ApplicationException.class, exception ->
+                        assertThat(exception.errorCode()).isEqualTo(ErrorCode.CHAT_CONVERSATION_EXPIRED));
+        var details = store.lifecycleDetails(anotherUser, true, conversationId, 20, now);
+        assertThat(details.ownerUserId()).isEqualTo(OWNER_ID);
+        assertThat(details.turns()).hasSize(1);
+    }
+
+    /** 重置必须递增代次、清空旧摘要和动态键，并阻止重置前摘要任务回写。 */
+    @Test
+    void shouldResetGenerationAndIsolateOldMessagesAndSummaryTasks() {
+        Instant now = Instant.parse("2026-09-20T08:00:00Z");
+        UUID messageId = UUID.randomUUID();
+        var completed = completeConversation(OWNER_ID, now, messageId);
+        UUID conversationId = completed.conversationId();
+        ConversationSummary summary = new ConversationSummary(ConversationSummary.SCHEMA_VERSION,
+                1, 1, List.of("排查问题"), List.of(), List.of(), List.of(), List.of());
+        assertThat(store.commitSummary(OWNER_ID, conversationId, 0, 0, summary, 0, now)).isTrue();
+        Set<String> oldMembers = redisTemplate.opsForSet()
+                .members("support-agent:chat:members:{" + conversationId + "}");
+
+        var reset = store.reset(OWNER_ID, conversationId, 1, now.plusSeconds(1));
+
+        assertThat(reset.generation()).isEqualTo(1);
+        assertThat(reset.version()).isZero();
+        assertThat(reset.summaryVersion()).isZero();
+        assertThat(oldMembers).isNotNull().allMatch(key -> Boolean.FALSE.equals(redisTemplate.hasKey(key)));
+        assertThat(store.commitSummary(OWNER_ID, conversationId, 1, 0, summary, 0,
+                now.plusSeconds(2))).isFalse();
+        assertThat(store.begin(OWNER_ID, conversationId, messageId, "重置后的新问题", 0L,
+                UUID.randomUUID(), now.plusSeconds(2)).status()).isEqualTo(
+                com.lawrence.supportagent.chat.port.ConversationStorePort.BeginStatus.ACQUIRED);
+    }
+
+    /** 活动运行期间必须拒绝重置和删除，防止清理正在生成的回答。 */
+    @Test
+    void shouldRejectResetAndDeleteDuringActiveRun() {
+        Instant now = Instant.parse("2026-09-20T08:00:00Z");
+        UUID conversationId = store.begin(OWNER_ID, null, UUID.randomUUID(), "问题", null,
+                UUID.randomUUID(), now).conversationId();
+
+        assertThatThrownBy(() -> store.reset(OWNER_ID, conversationId, 0, now.plusSeconds(1)))
+                .isInstanceOfSatisfying(ApplicationException.class, exception ->
+                        assertThat(exception.errorCode()).isEqualTo(ErrorCode.CHAT_CONVERSATION_BUSY));
+        assertThatThrownBy(() -> store.delete(OWNER_ID, conversationId, 0, now.plusSeconds(1)))
+                .isInstanceOfSatisfying(ApplicationException.class, exception ->
+                        assertThat(exception.errorCode()).isEqualTo(ErrorCode.CHAT_CONVERSATION_BUSY));
+    }
+
+    /** 删除必须清理会话、轮次、消息、建议和用户索引，重复并发删除只有一次成功。 */
+    @Test
+    void shouldDeleteAllConversationDataExactlyOnceUnderConcurrency() throws Exception {
+        Instant now = Instant.parse("2026-09-20T08:00:00Z");
+        UUID suggestionId = UUID.randomUUID();
+        UUID conversationId = completeConversation(OWNER_ID, now, null, suggestionId).conversationId();
+        String membersKey = "support-agent:chat:members:{" + conversationId + "}";
+        Set<String> members = redisTemplate.opsForSet().members(membersKey);
+        CountDownLatch start = new CountDownLatch(1);
+        try (var executor = Executors.newVirtualThreadPerTaskExecutor()) {
+            Future<Throwable> first = executor.submit(() -> deleteAfter(start, conversationId, now));
+            Future<Throwable> second = executor.submit(() -> deleteAfter(start, conversationId, now));
+            start.countDown();
+            List<Throwable> outcomes = java.util.Arrays.asList(first.get(), second.get());
+            assertThat(outcomes.stream().filter(value -> value == null).count())
+                    .isEqualTo(1);
+            assertThat(outcomes.stream().filter(ApplicationException.class::isInstance).count())
+                    .isEqualTo(1);
+        }
+        assertThat(members).isNotNull().allMatch(key -> Boolean.FALSE.equals(redisTemplate.hasKey(key)));
+        assertThat(redisTemplate.hasKey("support-agent:chat:conversation:{" + conversationId + "}")).isFalse();
+        assertThat(redisTemplate.hasKey("support-agent:chat:turns:{" + conversationId + "}")).isFalse();
+        assertThat(redisTemplate.hasKey(membersKey)).isFalse();
+        assertThat(store.listLifecycle(OWNER_ID, 0, 20, now).totalElements()).isZero();
+    }
+
+    /** 等待并发起点后执行删除，把可预期竞争异常作为结果返回。 */
+    private Throwable deleteAfter(CountDownLatch start, UUID conversationId, Instant now) {
+        try {
+            start.await();
+            store.delete(OWNER_ID, conversationId, 1, now.plusSeconds(1));
+            return null;
+        } catch (Throwable throwable) {
+            return throwable;
+        }
+    }
+
+    /** 创建并完成一个无建议的单轮会话。 */
+    private com.lawrence.supportagent.chat.port.ConversationStorePort.BeginResult completeConversation(
+            UUID ownerUserId, Instant now, UUID messageId) {
+        return completeConversation(ownerUserId, now, messageId, null);
+    }
+
+    /** 创建并完成一个可选带工单建议的单轮会话。 */
+    private com.lawrence.supportagent.chat.port.ConversationStorePort.BeginResult completeConversation(
+            UUID ownerUserId, Instant now, UUID messageId, UUID suggestionId) {
+        UUID actualMessageId = messageId == null ? UUID.randomUUID() : messageId;
+        UUID runId = UUID.randomUUID();
+        var begin = store.begin(ownerUserId, null, actualMessageId, "问题", null, runId, now);
+        CompletedTurn turn = new CompletedTurn(UUID.randomUUID(), actualMessageId, runId, "问题", "问题",
+                ChatIntent.SUPPORT_QUERY, "答案", RetrievalStatus.GROUNDED, List.of(), suggestionId,
+                suggestionId == null ? null : "冻结上下文", "GROUNDED", now, 1);
+        store.complete(ownerUserId, begin.conversationId(), runId, turn, null, now);
+        return begin;
     }
 }

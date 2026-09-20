@@ -64,7 +64,7 @@ class ConversationContextServiceTest {
         when(store.memorySnapshot(OWNER_ID, CONVERSATION_ID)).thenReturn(snapshot(null, twenty),
                 snapshot(summary, twenty.subList(14, 20)));
         when(model.summarize(eq(null), any(), eq(1L), eq(14L))).thenReturn(summary);
-        when(store.commitSummary(eq(OWNER_ID), eq(CONVERSATION_ID), eq(0L), eq(summary), eq(6), any()))
+        when(store.commitSummary(eq(OWNER_ID), eq(CONVERSATION_ID), eq(0L), eq(0L), eq(summary), eq(6), any()))
                 .thenReturn(true);
 
         ConversationContext context = service.prepare(OWNER_ID, CONVERSATION_ID, List.of("当前问题"));
@@ -72,7 +72,7 @@ class ConversationContextServiceTest {
         assertThat(context.summaryVersion()).isEqualTo(1);
         assertThat(context.modelContext()).hasSize(7);
         assertThat(context.modelContext().getFirst()).contains("较早会话摘要");
-        verify(store).commitSummary(eq(OWNER_ID), eq(CONVERSATION_ID), eq(0L), eq(summary), eq(6), any());
+        verify(store).commitSummary(eq(OWNER_ID), eq(CONVERSATION_ID), eq(0L), eq(0L), eq(summary), eq(6), any());
     }
 
     /** 无来源关键实体必须使同步摘要失败且不得提交 Redis。 */
@@ -87,7 +87,7 @@ class ConversationContextServiceTest {
 
         assertThatThrownBy(() -> service.prepare(OWNER_ID, CONVERSATION_ID, List.of("当前问题")))
                 .isInstanceOf(ApplicationException.class);
-        verify(store, never()).commitSummary(any(), any(), any(Long.class), any(), any(Integer.class), any());
+        verify(store, never()).commitSummary(any(), any(), any(Long.class), any(Long.class), any(), any(Integer.class), any());
     }
 
     /** 临时模型故障应只重试一次并在第二次成功后提交候选摘要。 */
@@ -99,14 +99,14 @@ class ConversationContextServiceTest {
         when(model.summarize(eq(null), any(), eq(1L), eq(6L)))
                 .thenThrow(new ModelInvocationException("TEMP", "临时失败", true, null))
                 .thenReturn(summary);
-        when(store.commitSummary(any(), any(), any(Long.class), any(), any(Integer.class), any()))
+        when(store.commitSummary(any(), any(), any(Long.class), any(Long.class), any(), any(Integer.class), any()))
                 .thenReturn(true);
 
         service.afterSuccessfulTurn(OWNER_ID, CONVERSATION_ID);
 
         verify(model, org.mockito.Mockito.times(2))
                 .summarize(eq(null), any(), eq(1L), eq(6L));
-        verify(store).commitSummary(eq(OWNER_ID), eq(CONVERSATION_ID), eq(0L), eq(summary), eq(6), any());
+        verify(store).commitSummary(eq(OWNER_ID), eq(CONVERSATION_ID), eq(0L), eq(0L), eq(summary), eq(6), any());
     }
 
     /** Schema 等确定性模型错误不得使用相同输入盲目重试或提交摘要。 */
@@ -121,7 +121,7 @@ class ConversationContextServiceTest {
         assertThatThrownBy(() -> service.prepare(OWNER_ID, CONVERSATION_ID, List.of("当前问题")))
                 .isInstanceOf(ApplicationException.class);
         verify(model).summarize(eq(null), any(), eq(1L), eq(14L));
-        verify(store, never()).commitSummary(any(), any(), any(Long.class), any(), any(Integer.class), any());
+        verify(store, never()).commitSummary(any(), any(), any(Long.class), any(Long.class), any(), any(Integer.class), any());
     }
 
     /** 硬阈值 CAS 冲突且没有观察到更新摘要时必须安全失败，不得静默丢弃旧轮次。 */
@@ -132,7 +132,7 @@ class ConversationContextServiceTest {
         when(store.memorySnapshot(OWNER_ID, CONVERSATION_ID)).thenReturn(snapshot(null, twenty),
                 snapshot(null, twenty));
         when(model.summarize(eq(null), any(), eq(1L), eq(14L))).thenReturn(summary);
-        when(store.commitSummary(eq(OWNER_ID), eq(CONVERSATION_ID), eq(0L), eq(summary), eq(6), any()))
+        when(store.commitSummary(eq(OWNER_ID), eq(CONVERSATION_ID), eq(0L), eq(0L), eq(summary), eq(6), any()))
                 .thenReturn(false);
 
         assertThatThrownBy(() -> service.prepare(OWNER_ID, CONVERSATION_ID, List.of("当前问题")))
@@ -152,7 +152,7 @@ class ConversationContextServiceTest {
 
         assertThatThrownBy(() -> service.prepare(OWNER_ID, CONVERSATION_ID, List.of("当前问题")))
                 .isInstanceOf(ApplicationException.class);
-        verify(store, never()).commitSummary(any(), any(), any(Long.class), any(), any(Integer.class), any());
+        verify(store, never()).commitSummary(any(), any(), any(Long.class), any(Long.class), any(), any(Integer.class), any());
     }
 
     /** 固定问题和证据本身超过预算时必须安全拒绝而不是删除安全内容。 */
@@ -177,7 +177,7 @@ class ConversationContextServiceTest {
     private MemorySnapshot snapshot(ConversationSummary summary, List<CompletedTurn> turns) {
         long version = turns.isEmpty() ? (summary == null ? 0 : summary.coveredThroughVersion())
                 : turns.getLast().conversationVersion();
-        return new MemorySnapshot(CONVERSATION_ID, version,
+        return new MemorySnapshot(CONVERSATION_ID, version, 0,
                 summary == null ? 0 : summary.summaryVersion(), summary, turns);
     }
 

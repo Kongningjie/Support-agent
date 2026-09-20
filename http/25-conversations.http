@@ -1,0 +1,24 @@
+@baseUrl = http://localhost:8080
+@accessToken = replace-with-login-access-token
+@conversationId = 22222222-2222-2222-2222-222222222222
+
+### 按最近访问时间倒序查询本人会话；page 从 1 开始，size 范围 1～100
+GET {{baseUrl}}/api/v1/conversations?page=1&size=20
+Authorization: Bearer {{accessToken}}
+
+### 查询单个会话元数据和最近成功轮次；不返回摘要正文或 Agent 内部状态
+GET {{baseUrl}}/api/v1/conversations/{{conversationId}}
+Authorization: Bearer {{accessToken}}
+
+### 原子重置本人会话；替换为详情接口返回的当前 version
+POST {{baseUrl}}/api/v1/conversations/{{conversationId}}/reset
+Authorization: Bearer {{accessToken}}
+Content-Type: application/json
+
+{
+  "expectedVersion": 1
+}
+
+### 原子删除本人会话；替换为详情接口返回的当前 version
+DELETE {{baseUrl}}/api/v1/conversations/{{conversationId}}?expectedVersion=0
+Authorization: Bearer {{accessToken}}

@@ -11,6 +11,7 @@ import com.lawrence.supportagent.chat.AnswerValidator;
 import com.lawrence.supportagent.chat.ChatUseCase;
 import com.lawrence.supportagent.chat.ConservativeTokenEstimator;
 import com.lawrence.supportagent.chat.ConversationContextService;
+import com.lawrence.supportagent.chat.ConversationLifecycleUseCase;
 import com.lawrence.supportagent.chat.ConversationMemorySettings;
 import com.lawrence.supportagent.chat.IntentRecognitionService;
 import com.lawrence.supportagent.chat.MySqlAgentAuditAdapter;
@@ -126,6 +127,11 @@ public class ChatConfiguration {
             ExecutorService conversationSummaryExecutor, TimeProvider time) {
         return new ConversationContextService(store, summaryModel, exactTerms, contentPolicy,
                 new ConservativeTokenEstimator(), settings, conversationSummaryExecutor, time);
+    }
+    /** 创建会话列表、详情、重置和删除的生命周期用例。 */
+    @Bean public ConversationLifecycleUseCase conversationLifecycleUseCase(
+            ConversationStorePort store, TimeProvider time) {
+        return new ConversationLifecycleUseCase(store, time);
     }
     /** 创建 MySQL Agent 安全审计适配器。 */
     @Bean public AgentAuditPort agentAuditPort(AgentAuditMapper mapper, ObjectMapper json) {

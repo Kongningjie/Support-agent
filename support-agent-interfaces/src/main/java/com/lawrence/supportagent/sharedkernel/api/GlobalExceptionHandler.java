@@ -13,6 +13,7 @@ import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.method.annotation.HandlerMethodValidationException;
 import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
+import org.springframework.web.bind.MissingServletRequestParameterException;
 
 /** 把可预期异常映射为安全、稳定的统一 JSON 响应。 */
 @RestControllerAdvice
@@ -31,7 +32,8 @@ public class GlobalExceptionHandler {
     /** 将请求校验错误映射为 400。 */
     @ExceptionHandler({MethodArgumentNotValidException.class, HandlerMethodValidationException.class,
             ConstraintViolationException.class, MethodArgumentTypeMismatchException.class,
-            HttpMessageNotReadableException.class, IllegalArgumentException.class})
+            MissingServletRequestParameterException.class, HttpMessageNotReadableException.class,
+            IllegalArgumentException.class})
     public ResponseEntity<ApiResult<Void>> handleValidation(Exception exception, HttpServletRequest request) {
         return response(HttpStatus.BAD_REQUEST, "COMMON_VALIDATION_FAILED", "请求参数不符合要求", request);
     }

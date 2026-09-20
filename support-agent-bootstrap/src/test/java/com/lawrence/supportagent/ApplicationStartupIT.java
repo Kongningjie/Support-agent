@@ -97,6 +97,41 @@ class ApplicationStartupIT {
         assertTrue(response.body().contains("\"conversationVersion\":1"));
     }
 
+    /** 验证认证会话可查询、重置和删除，且重置后旧轮次不会继续暴露。 */
+    @Test
+    void shouldManageAuthenticatedConversationLifecycle() throws Exception {
+        HttpClient client = HttpClient.newHttpClient();
+        HttpResponse<String> streamed = send(client, "POST", "/api/v1/chat/stream", """
+                {"clientMessageId":"%s","message":"告诉我今天的股票行情"}
+                """.formatted(UUID.randomUUID()), accessToken());
+        var matcher = java.util.regex.Pattern.compile("\\\"conversationId\\\":\\\"([0-9a-f-]{36})\\\"")
+                .matcher(streamed.body());
+        assertTrue(matcher.find());
+        String conversationId = matcher.group(1);
+
+        JsonNode page = objectMapper.readTree(get(client, "/api/v1/conversations?page=1&size=20").body())
+                .path("data");
+        assertTrue(page.path("items").toString().contains(conversationId));
+        JsonNode details = objectMapper.readTree(get(client, "/api/v1/conversations/" + conversationId).body())
+                .path("data");
+        assertEquals(1, details.path("conversation").path("version").asLong());
+        assertEquals(1, details.path("recentTurns").size());
+        assertFalse(details.toString().contains("agentState"));
+
+        JsonNode reset = objectMapper.readTree(sendJson(client, "POST",
+                "/api/v1/conversations/" + conversationId + "/reset", "{\"expectedVersion\":1}").body())
+                .path("data");
+        assertEquals(0, reset.path("version").asLong());
+        assertEquals(1, reset.path("generation").asLong());
+        assertEquals(0, objectMapper.readTree(get(client, "/api/v1/conversations/" + conversationId).body())
+                .path("data").path("recentTurns").size());
+
+        HttpResponse<String> deleted = send(client, "DELETE",
+                "/api/v1/conversations/" + conversationId + "?expectedVersion=0", "", accessToken());
+        assertEquals(200, deleted.statusCode());
+        assertEquals(404, get(client, "/api/v1/conversations/" + conversationId).statusCode());
+    }
+
     /** 验证存活探针为 UP，依赖不可用时就绪探针为 DOWN。 */
     @Test
     void shouldStartWithoutDashScopeKeyAndExposeProbeStates() throws IOException, InterruptedException {
@@ -258,6 +293,9 @@ class ApplicationStartupIT {
         assertTrue(paths.has("/api/v1/knowledge/documents/text"));
         assertTrue(paths.has("/api/v1/knowledge/documents/{documentId}/publish"));
         assertTrue(paths.has("/api/v1/chat/stream"));
+        assertTrue(paths.has("/api/v1/conversations"));
+        assertTrue(paths.has("/api/v1/conversations/{conversationId}"));
+        assertTrue(paths.has("/api/v1/conversations/{conversationId}/reset"));
         assertTrue(paths.has("/api/v1/tickets/drafts/from-conversation"));
         assertTrue(paths.has("/api/v1/tickets/{ticketNo}/resolve"));
         assertTrue(paths.has("/api/v1/resolved-cases/{caseId}"));

@@ -109,7 +109,7 @@ public class ConversationContextService {
             ConversationSummary candidate = generateSummary(snapshot, source, covered);
             validateCandidate(snapshot, source, candidate, covered);
             store.commitSummary(ownerUserId, snapshot.conversationId(), snapshot.summaryVersion(),
-                    candidate, settings.recentFullTurns(), time.now());
+                    snapshot.generation(), candidate, settings.recentFullTurns(), time.now());
         } catch (RuntimeException exception) {
             if (required) {
                 throw unavailable(exception);

@@ -1,6 +1,7 @@
 package com.lawrence.supportagent.chat.port;
 
 import com.lawrence.supportagent.chat.ChatIntent;
+import com.lawrence.supportagent.chat.ConversationLifecycleStatus;
 import com.lawrence.supportagent.chat.ConversationSummary;
 import com.lawrence.supportagent.retrieval.RetrievalStatus;
 import java.time.Instant;
@@ -46,7 +47,21 @@ public interface ConversationStorePort {
 
     /** 按摘要版本执行 CAS，并仅在成功后裁剪已经被摘要覆盖的旧轮次。 */
     boolean commitSummary(UUID ownerUserId, UUID conversationId, long expectedSummaryVersion,
-                          ConversationSummary summary, int recentFullTurns, Instant now);
+                          long expectedGeneration, ConversationSummary summary,
+                          int recentFullTurns, Instant now);
+
+    /** 按最近访问时间倒序分页读取指定用户拥有的会话元数据。 */
+    LifecyclePage listLifecycle(UUID ownerUserId, int offset, int limit, Instant now);
+
+    /** 读取单个会话元数据和最近成功轮次，并在 Redis 原子校验访问权限。 */
+    LifecycleSnapshot lifecycleDetails(UUID requesterUserId, boolean administrator,
+                                       UUID conversationId, int recentTurnLimit, Instant now);
+
+    /** 在版本一致且没有活动运行时原子清空会话上下文并开始新代次。 */
+    LifecycleSnapshot reset(UUID ownerUserId, UUID conversationId, long expectedVersion, Instant now);
+
+    /** 在版本一致且没有活动运行时原子删除会话及其全部关联 Redis 数据。 */
+    void delete(UUID ownerUserId, UUID conversationId, long expectedVersion, Instant now);
 
     /** 表示会话开始结果类型。 */
     enum BeginStatus { ACQUIRED, REPLAY }
@@ -100,16 +115,53 @@ public interface ConversationStorePort {
     /**
      * @param conversationId 当前会话 ID
      * @param conversationVersion 当前成功会话版本
+     * @param generation 当前会话重置代次，用于拒绝重置前摘要任务的迟到提交
      * @param summaryVersion 当前摘要 CAS 版本，尚无摘要时为零
      * @param summary 当前结构化摘要，尚无摘要时为空
      * @param turns Redis 中仍保留的完整成功轮次
      */
-    record MemorySnapshot(UUID conversationId, long conversationVersion, long summaryVersion,
+    record MemorySnapshot(UUID conversationId, long conversationVersion, long generation, long summaryVersion,
                           ConversationSummary summary, List<CompletedTurn> turns) {
         /** 复制轮次并校验快照版本非负。 */
         public MemorySnapshot {
-            if (conversationId == null || conversationVersion < 0 || summaryVersion < 0) {
+            if (conversationId == null || conversationVersion < 0 || generation < 0 || summaryVersion < 0) {
                 throw new IllegalArgumentException("会话记忆快照版本不能为负数");
+            }
+            turns = turns == null ? List.of() : List.copyOf(turns);
+        }
+    }
+
+    /**
+     * @param items 当前分页中的会话快照
+     * @param totalElements 清理过期索引项后的当前用户会话总数
+     */
+    record LifecyclePage(List<LifecycleSnapshot> items, long totalElements) {
+        /** 复制分页内容并拒绝负总数。 */
+        public LifecyclePage {
+            items = items == null ? List.of() : List.copyOf(items);
+            if (totalElements < 0) throw new IllegalArgumentException("会话总数不能为负数");
+        }
+    }
+
+    /**
+     * @param conversationId 公开会话 UUID
+     * @param ownerUserId 会话所有者公开用户 UUID
+     * @param status 当前是否存在有效活动运行
+     * @param version 已成功提交的轮次版本
+     * @param generation 同一会话 ID 的重置代次
+     * @param summaryVersion 当前滚动摘要修订版本
+     * @param lastAccessAt 最近一次成功会话活动时间
+     * @param expiresAt 按当前 Redis TTL 推算的过期时间
+     * @param turns 最近成功轮次；列表查询时为空
+     */
+    record LifecycleSnapshot(UUID conversationId, UUID ownerUserId, ConversationLifecycleStatus status,
+                             long version, long generation, long summaryVersion,
+                             Instant lastAccessAt, Instant expiresAt, List<CompletedTurn> turns) {
+        /** 校验公开元数据完整并复制轮次。 */
+        public LifecycleSnapshot {
+            if (conversationId == null || ownerUserId == null || status == null || version < 0
+                    || generation < 0 || summaryVersion < 0 || lastAccessAt == null || expiresAt == null) {
+                throw new IllegalArgumentException("会话生命周期快照字段不合法");
             }
             turns = turns == null ? List.of() : List.copyOf(turns);
         }
