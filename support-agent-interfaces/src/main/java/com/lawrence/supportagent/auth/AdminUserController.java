@@ -27,7 +27,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.bind.annotation.RequestParam;
 
-/** 暴露管理员创建用户和启停账号的阶段 11 接口。 */
+/** 暴露管理员用户分页、创建、角色、状态、密码、解锁和 Token 治理接口。 */
 @RestController
 @RequestMapping("/api/v1/admin/users")
 public class AdminUserController {
@@ -69,7 +69,7 @@ public class AdminUserController {
             @AuthenticationPrincipal AuthenticatedUser actor,
             @RequestParam(required = false) UserRole role,
             @RequestParam(required = false) UserStatus status,
-            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(defaultValue = "1") int page,
             @RequestParam(defaultValue = "20") int size,
             HttpServletRequest request) {
         UserPage result = useCase.list(actor, role, status, page, size);

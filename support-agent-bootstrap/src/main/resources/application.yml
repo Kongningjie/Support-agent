@@ -38,6 +38,18 @@ mybatis:
     map-underscore-to-camel-case: true
 
 support-agent:
+  security:
+    llm:
+      # 阶段 15 输入与阶段 16 输出安全总开关；生产环境不得关闭。
+      enabled: ${SUPPORT_AGENT_LLM_SECURITY_ENABLED:true}
+      # 高置信度直接注入在创建会话前以 422 拒绝。
+      block-high-confidence-input: ${SUPPORT_AGENT_LLM_BLOCK_HIGH_CONFIDENCE_INPUT:true}
+      # 高风险历史、摘要、记忆、证据和工单字段不得进入本次模型调用。
+      exclude-high-risk-context: ${SUPPORT_AGENT_LLM_EXCLUDE_HIGH_RISK_CONTEXT:true}
+      # 每次受保护生成调用注入仅存活于内存的随机泄漏标记；生产环境不得关闭。
+      prompt-canary-enabled: ${SUPPORT_AGENT_LLM_PROMPT_CANARY_ENABLED:true}
+      # 可修复的输出校验失败最多完整重生成一次；生产环境固定为 1。
+      maximum-regenerations: ${SUPPORT_AGENT_LLM_MAXIMUM_REGENERATIONS:1}
   auth:
     token-ttl: ${SUPPORT_AGENT_AUTH_TOKEN_TTL:2h}
     # 每位用户同时允许保留的有效不透明 Token 数量，超出时撤销最早 Token。

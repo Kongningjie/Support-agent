@@ -19,6 +19,7 @@ import com.lawrence.supportagent.ticket.TicketQueryUseCase;
 import com.lawrence.supportagent.ticket.SuggestedTicketUseCase;
 import com.lawrence.supportagent.chat.port.ConversationStorePort;
 import com.lawrence.supportagent.model.ChatModelPort;
+import com.lawrence.supportagent.security.ModelOutputSecurityService;
 import com.lawrence.supportagent.ticket.port.TicketRepository;
 import java.time.Duration;
 import java.util.Arrays;
@@ -53,10 +54,12 @@ public class UseCaseConfiguration {
     @Bean
     public SuggestedTicketUseCase suggestedTicketUseCase(ConversationStorePort conversations,
                                                           ChatModelPort model,
-                                                          TicketCommandUseCase commands,
-                                                          TicketQueryUseCase queries,
-                                                          TimeProvider timeProvider) {
-        return new SuggestedTicketUseCase(conversations, model, commands, queries, timeProvider);
+                                                           TicketCommandUseCase commands,
+                                                           TicketQueryUseCase queries,
+                                                           TimeProvider timeProvider,
+                                                           ModelOutputSecurityService outputSecurity) {
+        return new SuggestedTicketUseCase(conversations, model, commands, queries,
+                timeProvider, outputSecurity);
     }
 
     /** 创建供后续业务事务内投递任务的统一入口。 */
@@ -105,8 +108,10 @@ public class UseCaseConfiguration {
     @Bean
     public ResolvedCaseGenerationTaskHandler resolvedCaseGenerationTaskHandler(
             TicketRepository tickets, ResolvedCaseRepository cases,
-            ChatModelPort model, ExactTermExtractor terms, TimeProvider time) {
-        return new ResolvedCaseGenerationTaskHandler(tickets, cases, model, terms, time);
+            ChatModelPort model, ExactTermExtractor terms, TimeProvider time,
+            ModelOutputSecurityService outputSecurity) {
+        return new ResolvedCaseGenerationTaskHandler(tickets, cases, model, terms, time,
+                outputSecurity);
     }
 
     /** 解析逗号分隔的 Spring 简写或 ISO-8601 时长并拒绝空元素。 */

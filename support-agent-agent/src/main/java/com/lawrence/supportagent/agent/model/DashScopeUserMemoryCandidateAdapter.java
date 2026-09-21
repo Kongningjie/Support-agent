@@ -41,7 +41,8 @@ public class DashScopeUserMemoryCandidateAdapter implements UserMemoryCandidateP
 
     /** {@inheritDoc} */
     @Override public List<UserMemoryCandidate> propose(String userMessage) {
-        String rendered = prompt.render(Map.of("USER_MESSAGE", userMessage));
+        String rendered = prompt.render(Map.of("USER_MESSAGE",
+                PromptDataBoundary.wrap("current_user_message", userMessage)));
         Msg request = Msg.builder().role(MsgRole.USER).textContent(rendered).build();
         StringBuilder output = new StringBuilder();
         try {

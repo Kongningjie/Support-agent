@@ -1,6 +1,6 @@
 # 领域模型与字段字典
 
-本文描述一期逻辑数据模型。后续编写 Flyway DDL 时，必须逐字段添加中文 `COMMENT`，并以本文为语义依据。
+本文第 1～12 节保留一期逻辑数据模型。三期新增的用户、会话摘要、长期记忆与安全审计字段以本文第 13 节和 [当前系统基线](10-current-system-baseline.md) 为当前语义依据。
 
 ## 1. 通用数据约定
 
@@ -273,3 +273,87 @@ Elasticsearch `_id` 为 `{sourceType}:{sourceId}:{sourceVersion}:{chunkIndex}`�
 - 外部幂等记录保留 7 天。
 - Redis 会话连续 7 天未访问后自动过期。
 - 清理按批次执行，不使用数据库级联删除。
+
+## 13. 三期新增数据模型摘要
+
+### 13.1 本地用户 `app_user`
+
+| 字段 | 可空 | 含义与约束 |
+|---|---:|---|
+| `id` | 否 | MySQL 内部自增主键，不通过 API 暴露 |
+| `user_id` | 否 | 用户公开 UUID，创建后不可变 |
+| `username` | 否 | 规范化为小写的唯一登录名，3～64 字符 |
+| `display_name` | 否 | 用户展示名称，最长 100 字符，不参与登录 |
+| `password_hash` | 否 | BCrypt 密码哈希，禁止通过接口或日志暴露 |
+| `role` | 否 | 两级角色：`USER` 或 `ADMIN` |
+| `status` | 否 | 账号状态：`ACTIVE` 或 `DISABLED` |
+| `version` | 否 | 账号乐观锁版本，初始为 0 |
+| `password_changed_at` | 否 | 最近一次设置密码的 UTC 时间 |
+| `must_change_password` | 否 | 是否必须先修改管理员设置的一次性密码 |
+| `locked_until` | 是 | 临时锁定截止 UTC 时间；空值表示未锁定 |
+| `created_by` | 否 | 创建者公开用户 UUID 或 `SYSTEM_BOOTSTRAP` |
+| `created_at` | 否 | 创建 UTC 时间 |
+| `updated_by` | 否 | 最近修改者公开用户 UUID、认证系统身份或 `SYSTEM_BOOTSTRAP` |
+| `updated_at` | 否 | 最近修改 UTC 时间 |
+
+### 13.2 长期记忆开关 `user_memory_settings`
+
+| 字段 | 可空 | 含义与约束 |
+|---|---:|---|
+| `id` | 否 | MySQL 内部自增主键，不通过 API 暴露 |
+| `user_id` | 否 | 设置所属用户的公开 UUID，每个用户最多一行 |
+| `enabled` | 否 | 是否允许生成和注入长期记忆，默认 `false` |
+| `version` | 否 | 设置修改使用的乐观锁版本 |
+| `created_at` | 否 | 设置首次创建 UTC 时间 |
+| `updated_at` | 否 | 设置最近修改 UTC 时间 |
+
+### 13.3 用户长期记忆 `user_memory`
+
+| 字段 | 可空 | 含义与约束 |
+|---|---:|---|
+| `id` | 否 | MySQL 内部自增主键，不通过 API 暴露 |
+| `memory_id` | 否 | 对外使用的长期记忆 UUID |
+| `user_id` | 否 | 记忆所有者公开 UUID |
+| `memory_type` | 否 | `PREFERENCE`、`CONSTRAINT` 或 `ENVIRONMENT` |
+| `content` | 否 | 用户可见正文，最多 500 个 Unicode 字符 |
+| `content_hash` | 否 | 规范化正文 SHA-256，用于同用户同类型去重 |
+| `status` | 否 | `PROPOSED`、`ACTIVE` 或 `REVOKED` |
+| `pinned` | 否 | 用户是否显式固定并提高注入优先级，默认 `false` |
+| `source_conversation_id` | 否 | 产生候选的公开会话 UUID |
+| `source_turn_id` | 否 | 产生候选的客户端消息 UUID |
+| `expires_at` | 是 | 可选 UTC 失效时间；到期后不再注入上下文 |
+| `version` | 否 | 确认、更正和撤销使用的乐观锁版本 |
+| `created_by` | 否 | 候选创建主体；模型候选固定为 `MODEL_CANDIDATE` |
+| `created_at` | 否 | 候选创建 UTC 时间，也是 30 天候选清理依据 |
+| `confirmed_by` | 是 | 确认候选的公开用户 UUID |
+| `confirmed_at` | 是 | 候选确认 UTC 时间 |
+| `updated_by` | 否 | 最近修改主体 |
+| `updated_at` | 否 | 最近修改 UTC 时间 |
+| `revoked_by` | 是 | 撤销记忆的公开用户 UUID |
+| `revoked_at` | 是 | 记忆撤销 UTC 时间 |
+
+### 13.4 安全事件 `security_event`
+
+| 字段 | 可空 | 含义与约束 |
+|---|---:|---|
+| `id` | 否 | 安全事件内部自增主键 |
+| `event_type` | 否 | 登录、密码、角色、状态、解锁或 Token 撤销的稳定事件类型 |
+| `target_user_id` | 是 | 目标用户公开 UUID；未知账号登录失败时为空 |
+| `actor_id` | 否 | 操作者公开 UUID、`ANONYMOUS` 或稳定系统身份 |
+| `result` | 否 | `SUCCEEDED` 或 `DENIED` |
+| `reason` | 否 | 不含正文的低基数原因分类 |
+| `source_hash` | 是 | 客户端来源 SHA-256；不保存原始地址 |
+| `occurred_at` | 否 | 事件发生 UTC 时间 |
+
+### 13.5 既有表归属增量
+
+| 字段 | 可空 | 含义与约束 |
+|---|---:|---|
+| `ticket.owner_user_id` | 是 | 工单所有者公开 UUID；空值表示阶段 11 前历史工单，只允许管理员访问 |
+| `agent_run.user_id` | 是 | 发起本次 Agent 运行的用户 UUID；空值表示历史运行，只用于安全关联 |
+
+Redis 会话当前包含 `ownerUserId`、`generation`、结构化滚动摘要、最近完整轮次和用户有序索引。会话空闲 TTL 仍为 7 天；模型上下文保留最近 6 个完整轮次并受 Token 预算控制，不再简单依赖“最多 20 轮后直接丢弃”的一期策略。
+
+Redis 认证只保存 Token SHA-256 和用户 Token ZSET 索引。Token 固定有效期为 2 小时，每用户最多 5 个有效 Token；登录失败键只保存用户名或客户端来源的不可逆哈希、失败次数和锁定截止时间。
+
+`security_event` 不保存用户名、密码、原始 Token、Token 哈希或请求正文。`user_memory` 候选必须由用户确认后才能注入；每用户最多保留 100 条未永久删除的记忆。

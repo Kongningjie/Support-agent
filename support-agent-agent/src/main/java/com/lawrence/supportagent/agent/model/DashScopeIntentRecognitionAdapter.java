@@ -40,7 +40,9 @@ public class DashScopeIntentRecognitionAdapter implements IntentRecognitionPort 
     /** {@inheritDoc} */
     @Override
     public IntentDecision recognize(String message, List<String> recentTurns) {
-        String rendered = prompt.render(Map.of("HISTORY", String.join("\n", recentTurns), "MESSAGE", message));
+        String rendered = prompt.render(Map.of(
+                "HISTORY", PromptDataBoundary.wrapAll("conversation_history", recentTurns),
+                "MESSAGE", PromptDataBoundary.wrap("current_user_message", message)));
         Msg request = Msg.builder().role(MsgRole.USER).textContent(rendered).build();
         StringBuilder output = new StringBuilder();
         model.stream(List.of(request), List.of(), options())

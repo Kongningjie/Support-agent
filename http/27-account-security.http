@@ -19,7 +19,7 @@ POST {{baseUrl}}/api/v1/users/me/tokens/revoke-all
 Authorization: Bearer {{userToken}}
 
 ### 管理员分页查询活动普通用户
-GET {{baseUrl}}/api/v1/admin/users?role=USER&status=ACTIVE&page=0&size=20
+GET {{baseUrl}}/api/v1/admin/users?role=USER&status=ACTIVE&page=1&size=20
 Authorization: Bearer {{adminToken}}
 
 ### 管理员变更用户角色；管理员不能降低自己的角色

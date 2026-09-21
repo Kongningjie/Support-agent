@@ -63,6 +63,21 @@ class FoundationWebTest {
         assertEquals(NOW, response.getBody().timestamp());
     }
 
+    /** 高置信度 Prompt 注入必须使用 422 且只暴露稳定安全消息。 */
+    @Test
+    void shouldMapPromptInjectionBlockToUnprocessableEntity() {
+        GlobalExceptionHandler handler = new GlobalExceptionHandler(() -> NOW);
+        MockHttpServletRequest request = new MockHttpServletRequest();
+        request.setAttribute(TraceIdFilter.TRACE_ID_ATTRIBUTE, TRACE_ID.toString());
+
+        var response = handler.handleApplication(new ApplicationException(
+                ErrorCode.CHAT_PROMPT_INJECTION_BLOCKED, "请求包含无法安全处理的指令"), request);
+
+        assertEquals(HttpStatus.UNPROCESSABLE_ENTITY, response.getStatusCode());
+        assertEquals("CHAT_PROMPT_INJECTION_BLOCKED", response.getBody().code());
+        assertEquals("请求包含无法安全处理的指令", response.getBody().message());
+    }
+
     /** 验证过滤器写入可信 traceId，并在请求结束后清理 MDC。 */
     @Test
     void shouldCreateAndCleanTraceId() throws Exception {

@@ -1,6 +1,6 @@
 # 开发与 AI Coding 强制规范
 
-本目录规定 Support Agent 的强制开发规则。开始任何阶段前，应先阅读本页、相关专项规范、`../implementation-plan/README.md` 和最近一份 `../work-logs/` 记录。
+本目录规定 Support Agent 的强制开发规则。开始任何阶段前，应先阅读本页、相关专项规范、`../implementation-plan/README.md`、`../implementation-plan/10-current-system-baseline.md` 和最近一份 `../work-logs/` 记录。
 
 ## 规则优先级
 

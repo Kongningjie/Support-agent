@@ -67,6 +67,7 @@ public class GlobalExceptionHandler {
         return switch (exception.errorCode()) {
             case COMMON_VALIDATION_FAILED, KNOWLEDGE_SENSITIVE_CONTENT,
                     MEMORY_SENSITIVE_CONTENT -> HttpStatus.BAD_REQUEST;
+            case CHAT_PROMPT_INJECTION_BLOCKED -> HttpStatus.UNPROCESSABLE_ENTITY;
             case AUTH_INVALID_CREDENTIALS, AUTH_UNAUTHORIZED -> HttpStatus.UNAUTHORIZED;
             case AUTH_FORBIDDEN, AUTH_SELF_DISABLE_FORBIDDEN,
                     AUTH_SELF_ROLE_CHANGE_FORBIDDEN, AUTH_PASSWORD_CHANGE_REQUIRED -> HttpStatus.FORBIDDEN;

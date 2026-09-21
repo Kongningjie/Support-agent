@@ -48,6 +48,12 @@ import com.lawrence.supportagent.retrieval.RetrievalAnalysisProfile;
 import com.lawrence.supportagent.retrieval.RetrievalParameters;
 import com.lawrence.supportagent.retrieval.RetrievalService;
 import com.lawrence.supportagent.retrieval.port.KnowledgeSourceValidityPort;
+import com.lawrence.supportagent.security.DeterministicPromptSecurityPolicy;
+import com.lawrence.supportagent.security.LlmSecuritySettings;
+import com.lawrence.supportagent.security.DeterministicModelOutputSecurityPolicy;
+import com.lawrence.supportagent.security.ModelOutputSecurityPolicy;
+import com.lawrence.supportagent.security.ModelOutputSecurityService;
+import com.lawrence.supportagent.security.PromptSecurityPolicy;
 import com.lawrence.supportagent.sharedkernel.port.TimeProvider;
 import com.lawrence.supportagent.sharedkernel.port.UuidGenerator;
 import com.lawrence.supportagent.ticket.TicketQueryUseCase;
@@ -55,6 +61,8 @@ import io.micrometer.core.instrument.MeterRegistry;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.core.env.Environment;
+import org.springframework.core.env.Profiles;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import tools.jackson.databind.ObjectMapper;
 import java.time.Duration;
@@ -64,6 +72,26 @@ import java.util.concurrent.Executors;
 /** 装配阶段四聊天、混合检索、模型适配和会话审计能力。 */
 @Configuration
 public class ChatConfiguration {
+    /** 创建阶段 15 冻结的输入阻断和高风险上下文排除设置。 */
+    @Bean public LlmSecuritySettings llmSecuritySettings(
+            @Value("${support-agent.security.llm.enabled:true}") boolean enabled,
+            @Value("${support-agent.security.llm.block-high-confidence-input:true}") boolean blockInput,
+            @Value("${support-agent.security.llm.exclude-high-risk-context:true}") boolean excludeContext,
+            @Value("${support-agent.security.llm.prompt-canary-enabled:true}") boolean promptCanaryEnabled,
+            @Value("${support-agent.security.llm.maximum-regenerations:1}") int maximumRegenerations,
+            Environment environment) {
+        if (environment.acceptsProfiles(Profiles.of("prod"))
+                && (!enabled || !blockInput || !excludeContext || !promptCanaryEnabled
+                || maximumRegenerations != 1)) {
+            throw new IllegalArgumentException("生产环境不得关闭 LLM 安全策略或修改输出重生成次数");
+        }
+        return new LlmSecuritySettings(enabled, blockInput, excludeContext,
+                promptCanaryEnabled, maximumRegenerations);
+    }
+    /** 创建不依赖外部模型或服务的确定性 Prompt 注入策略。 */
+    @Bean public PromptSecurityPolicy promptSecurityPolicy(LlmSecuritySettings settings) {
+        return new DeterministicPromptSecurityPolicy(settings);
+    }
     /** 创建不携带正文和高基数标签的二期优化遥测端口。 */
     @Bean public OptimizationTelemetryPort optimizationTelemetryPort(MeterRegistry registry) {
         return new MicrometerOptimizationTelemetryAdapter(registry);
@@ -197,10 +225,11 @@ public class ChatConfiguration {
             ExactTermExtractor exactTerms, DocumentContentPolicy contentPolicy,
             ConversationMemorySettings settings,
             ExecutorService conversationSummaryExecutor, TimeProvider time,
-            UserMemoryContextService userMemoryContextService) {
+            UserMemoryContextService userMemoryContextService,
+            PromptSecurityPolicy promptSecurity) {
         return new ConversationContextService(store, summaryModel, exactTerms, contentPolicy,
                 new ConservativeTokenEstimator(), settings, conversationSummaryExecutor, time,
-                userMemoryContextService);
+                userMemoryContextService, promptSecurity);
     }
     /** 创建会话列表、详情、重置和删除的生命周期用例。 */
     @Bean public ConversationLifecycleUseCase conversationLifecycleUseCase(
@@ -255,6 +284,15 @@ public class ChatConfiguration {
                                                  DocumentContentPolicy contentPolicy) {
         return new AnswerValidator(extractor, contentPolicy);
     }
+    /** 创建不依赖外部服务的确定性模型输出安全策略。 */
+    @Bean public ModelOutputSecurityPolicy modelOutputSecurityPolicy(AnswerValidator validator) {
+        return new DeterministicModelOutputSecurityPolicy(validator);
+    }
+    /** 创建单次随机标记与输出决策的统一安全服务。 */
+    @Bean public ModelOutputSecurityService modelOutputSecurityService(
+            ModelOutputSecurityPolicy policy, LlmSecuritySettings settings, UuidGenerator ids) {
+        return new ModelOutputSecurityService(policy, settings, ids);
+    }
     /** 创建阶段四聊天用例。 */
     @Bean public ChatUseCase chatUseCase(IntentRecognitionService intents, RetrievalService retrieval,
                                          ChatModelPort model, TicketQueryUseCase tickets,
@@ -265,13 +303,15 @@ public class ChatConfiguration {
                                          ConversationContextService contextService,
                                          UserMemoryCandidateService memoryCandidates,
                                          OptimizationTelemetryPort telemetry,
+                                         PromptSecurityPolicy promptSecurity,
+                                         ModelOutputSecurityService outputSecurity,
                                          @Value("${support-agent.conversation.suggestion-ttl:24h}")
                                          Duration suggestionTtl) {
         var config = properties.dashscope();
         return new ChatUseCase(intents, retrieval, model, tickets, conversations, audits, validator,
                 ids, time, config.chatModel(), config.embeddingModel(), config.rerankModel(),
                 parameters.groundedThreshold(), telemetry, suggestionTtl, contextService,
-                memoryCandidates);
+                memoryCandidates, promptSecurity, outputSecurity);
     }
 
     /** 将启动模块配置转换为模型适配层不可变生成参数。 */

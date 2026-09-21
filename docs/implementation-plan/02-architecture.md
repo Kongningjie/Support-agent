@@ -1,5 +1,7 @@
 # 系统架构与模块边界
 
+> 本文保留一期架构基线。阶段 14 完成后的端口、认证、会话和记忆增量统一见 [当前系统基线](10-current-system-baseline.md)。
+
 ## 1. 部署形态
 
 采用单体部署的 Maven 多模块结构。所有模块最终装配成一个 Spring Boot 可执行 JAR；模块用于约束代码职责，不形成分布式服务。
@@ -71,6 +73,10 @@ agent + infrastructure + interfaces <- bootstrap
 - `IntentRecognitionPort`：识别意图并生成独立检索问题。
 - `EmbeddingModelPort`：分别生成查询向量和文档向量。
 - `RerankModelPort`：对候选分块重新排序。
+- `ConversationSummaryPort`：生成结构化滚动摘要，不与 Chat 端口复用。
+- `UserMemoryCandidatePort`：生成待用户确认的长期记忆候选。
+- `AuthenticationPort`：隔离 HTTP 认证与本地 Token 或未来外部身份提供商。
+- `ExternalIdentityMappingPort`：定义未来外部主体到本地用户的显式关联边界，本期没有真实适配器。
 - Repository 端口：持久化和读取领域对象。
 - 搜索端口：隔离 Elasticsearch 查询细节。
 
@@ -83,6 +89,8 @@ agent + infrastructure + interfaces <- bootstrap
 ```text
 com.lawrence.supportagent
 ├─ chat
+├─ auth
+├─ memory
 ├─ ticket
 ├─ knowledge
 ├─ retrieval

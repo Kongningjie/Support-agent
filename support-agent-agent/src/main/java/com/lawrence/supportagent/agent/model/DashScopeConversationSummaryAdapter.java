@@ -68,7 +68,8 @@ public class DashScopeConversationSummaryAdapter implements ConversationSummaryP
                                          long nextSummaryVersion,
                                          long coveredThroughVersion) {
         String rendered = prompt.render(Map.of(
-                "PREVIOUS_SUMMARY", previousSummary == null ? "无" : write(previousSummary),
+                "PREVIOUS_SUMMARY", previousSummary == null ? "无" : PromptDataBoundary.wrap(
+                        "previous_summary", write(previousSummary)),
                 "SOURCE_TURNS", renderTurns(sourceTurns)));
         Msg request = Msg.builder().role(MsgRole.USER).textContent(rendered).build();
         StringBuilder output = new StringBuilder();
@@ -182,9 +183,11 @@ public class DashScopeConversationSummaryAdapter implements ConversationSummaryP
 
     /** 将来源轮次渲染为带成功版本的摘要模型输入。 */
     private String renderTurns(List<CompletedTurn> turns) {
-        return turns.stream().map(turn -> "[TURN " + turn.conversationVersion() + "]\n用户："
-                + turn.userMessage() + "\n助手：" + turn.answer()).reduce("",
-                (left, right) -> left.isEmpty() ? right : left + "\n\n" + right);
+        return turns.stream().map(turn -> PromptDataBoundary.wrap(
+                        "source_turn_" + turn.conversationVersion(),
+                        "[TURN " + turn.conversationVersion() + "]\n用户："
+                                + turn.userMessage() + "\n助手：" + turn.answer()))
+                .reduce("", (left, right) -> left.isEmpty() ? right : left + "\n" + right);
     }
 
     /** 序列化已有结构化摘要，失败时返回稳定模型异常且不泄露正文。 */

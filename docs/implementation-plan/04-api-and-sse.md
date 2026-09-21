@@ -1,5 +1,7 @@
 # API、统一响应与 SSE 契约
 
+> 第 1～10 节保留一期 API 基线；阶段 11～14 新增接口以第 11 节和 [当前系统基线](10-current-system-baseline.md) 为准。除登录、健康检查和开发文档外，当前业务接口均要求 Bearer Token。
+
 ## 1. 通用规则
 
 - REST 基础路径为 `/api/v1`。
@@ -8,7 +10,7 @@
 - 分页信息放在 `PageResult<T>` 中，不增加 `ApiResult` 顶层字段。
 - API DTO 不复用领域对象、MyBatis DO 或 Elasticsearch Document。
 - 所有 OpenAPI 字段必须注明中文含义、是否可空、长度限制和示例。
-- 一期服务端固定操作者 `dev-operator`，不读取客户端伪造的身份头。
+- 当前操作者来自已认证 `AuthenticatedUser`，不读取客户端伪造的身份头；系统异步任务使用稳定系统身份。
 
 ## 2. `ApiResult<T>`
 
@@ -160,6 +162,7 @@
 | `CHAT_CONVERSATION_BUSY` | 409 | 同一会话已有运行任务 |
 | `CHAT_DUPLICATE_MESSAGE` | 409 | 同一 `clientMessageId` 重复提交且无法复用原结果 |
 | `CHAT_MODEL_UNAVAILABLE` | 503 | Chat 模型未配置、超时、熔断或不可用 |
+| `CHAT_PROMPT_INJECTION_BLOCKED` | 422 | 当前消息包含无法安全处理的高置信度注入指令 |
 | `CHAT_ANSWER_VALIDATION_FAILED` | 502 | 模型答案两次均未通过确定性校验 |
 | `CHAT_TICKET_SUGGESTION_EXPIRED` | 410 | 工单建议已经过期 |
 | `CHAT_TICKET_SUGGESTION_NOT_FOUND` | 404 | 建议不存在或不属于当前会话 |
@@ -195,3 +198,55 @@ http/60-retrieval-evaluation.http
 ```
 
 文件不得包含真实密钥；检索评估文件明确标注仅用于本地开发。
+
+## 11. 三期新增公共接口
+
+### 11.1 认证与账号安全
+
+| 方法与路径 | 含义 | 权限与关键字段 |
+|---|---|---|
+| `POST /auth/login` | 本地用户名密码登录 | 匿名；`username`、`password`；成功返回一次性原始 Token、失效时间和用户摘要 |
+| `POST /auth/logout` | 撤销当前 Token | 已认证；重复注销保持幂等 |
+| `GET /users/me` | 查询本人安全摘要 | 已认证；不返回密码或 Token 哈希 |
+| `POST /users/me/password` | 修改本人密码 | `oldPassword`、`newPassword`；成功后全部旧 Token 失效 |
+| `POST /users/me/tokens/revoke-all` | 撤销本人全部 Token | 已认证；包含当前 Token |
+| `GET /admin/users` | 分页查询用户 | `ADMIN`；可按 `role/status` 筛选，`page` 从 1 开始 |
+| `PATCH /admin/users/{userId}/role` | 修改角色 | `ADMIN`；`role`、`version`；禁止管理员降低自己的角色 |
+| `PATCH /admin/users/{userId}/status` | 启用或禁用账号 | `ADMIN`；禁用立即撤销目标用户全部 Token |
+| `POST /admin/users/{userId}/password-reset` | 设置一次性密码 | `ADMIN`；`newPassword`、`version`；设置 `mustChangePassword=true` |
+| `POST /admin/users/{userId}/unlock` | 清除账号锁定 | `ADMIN`；`version`；不把 `DISABLED` 改为 `ACTIVE` |
+| `POST /admin/users/{userId}/tokens/revoke-all` | 撤销目标用户全部 Token | `ADMIN` |
+
+受限 Token 的 `mustChangePassword=true` 时只允许 `GET /users/me`、`POST /users/me/password` 和 `POST /auth/logout`。
+
+### 11.2 会话与长期记忆
+
+| 方法与路径 | 含义 | 核心约束 |
+|---|---|---|
+| `GET /conversations` | 查询本人会话列表 | 按最近访问时间倒序，不扫描 Redis 全部键 |
+| `GET /conversations/{id}` | 查询会话详情 | 只返回安全摘要元数据和最近成功轮次 |
+| `POST /conversations/{id}/reset` | 原子重置会话 | 校验所有者、版本和运行状态；代次递增 |
+| `DELETE /conversations/{id}` | 永久删除会话 | 校验所有者、版本和运行状态 |
+| `GET/PATCH /users/me/memory-settings` | 查询或修改本人长期记忆开关 | 默认关闭，修改使用乐观锁和幂等键 |
+| `GET /memories` | 查询本人长期记忆 | 只返回当前用户的数据 |
+| `POST /memories/{memoryId}/confirm` | 确认候选 | `PROPOSED -> ACTIVE`，使用版本和幂等键 |
+| `PATCH /memories/{memoryId}` | 更正正文、固定状态或失效时间 | 所有者校验、敏感内容检查和乐观锁 |
+| `POST /memories/{memoryId}/revoke` | 撤销注入资格 | 撤销后不再进入模型上下文 |
+| `DELETE /memories/{memoryId}` | 永久删除本人记忆 | 删除后不可恢复且不再注入 |
+
+认证失败返回 401，权限不足返回 403，资源不存在返回 404，版本或状态冲突返回 409，登录退避返回 429。所有普通 JSON 响应仍使用 `ApiResult<T>`。
+
+## 12. 阶段 15 Prompt 输入安全语义
+
+- `/chat/stream` 在建立 SSE 和创建会话前检查当前消息。高置信度注入返回 HTTP 422、`ApiResult` 错误码 `CHAT_PROMPT_INJECTION_BLOCKED`，公开消息固定为“请求包含无法安全处理的指令”。
+- `ALLOW` 与 `GUARD` 都允许继续处理；`GUARD` 只影响服务端安全边界，不增加客户端字段，也不公开命中的内部信号。
+- 检索证据、历史、摘要、长期记忆和工单字段均按不可信数据处理。高风险内容只从本次模型上下文排除，不修改或删除原始数据。
+- 可靠证据全部被排除时沿用 `NO_RELIABLE_KNOWLEDGE`，不会向客户端伪装为检索故障。
+- 阶段 15 未改变既有 SSE 成功事件顺序；模型输出统一安全网关仍属于阶段 16。
+
+## 13. 阶段 16 模型输出失败语义
+
+- 问候、RAG 和工单回答必须先完整缓冲并通过统一输出安全网关，之后才允许发送 `answer.started`、`answer.delta` 和引用。
+- 第一次可修复失败在服务端完整重生成一次，首次正文对客户端不可见；第二次仍失败或随机标记、Prompt、凭据、个人敏感信息等不可恢复泄漏只发送既有 `error` 终结事件。
+- 输出安全失败沿用 `CHAT_ANSWER_VALIDATION_FAILED`，不增加公共响应字段，也不向客户端暴露规则编号、随机标记或模型原文。
+- 工单草稿和案例草稿在通过相同网关前不得调用业务持久化入口；因此失败不会创建半轮会话、工单草稿或案例草稿。

@@ -7,6 +7,7 @@ import com.lawrence.supportagent.chat.port.ConversationStorePort.Citation;
 import com.lawrence.supportagent.chat.port.ConversationStorePort.CompletedTurn;
 import com.lawrence.supportagent.model.ChatModelPort;
 import com.lawrence.supportagent.model.ChatModelPort.ModelAnswer;
+import com.lawrence.supportagent.model.ModelInvocationSecurity;
 import com.lawrence.supportagent.model.ModelInvocationException;
 import com.lawrence.supportagent.memory.UserMemoryCandidateService;
 import com.lawrence.supportagent.observability.OptimizationTelemetryPort;
@@ -15,6 +16,14 @@ import com.lawrence.supportagent.retrieval.RetrievalEvidence;
 import com.lawrence.supportagent.retrieval.RetrievalResult;
 import com.lawrence.supportagent.retrieval.RetrievalStatus;
 import com.lawrence.supportagent.retrieval.RetrievalService;
+import com.lawrence.supportagent.security.DeterministicPromptSecurityPolicy;
+import com.lawrence.supportagent.security.LlmSecuritySettings;
+import com.lawrence.supportagent.security.ModelOutputAction;
+import com.lawrence.supportagent.security.ModelOutputAssessment;
+import com.lawrence.supportagent.security.ModelOutputSecurityService;
+import com.lawrence.supportagent.security.ModelOutputType;
+import com.lawrence.supportagent.security.PromptSecurityPolicy;
+import com.lawrence.supportagent.security.PromptSecuritySource;
 import com.lawrence.supportagent.sharedkernel.error.ApplicationException;
 import com.lawrence.supportagent.sharedkernel.error.ErrorCode;
 import com.lawrence.supportagent.sharedkernel.port.TimeProvider;
@@ -27,6 +36,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicBoolean;
 
@@ -40,13 +50,15 @@ public class ChatUseCase {
     private static final String NO_KNOWLEDGE = "当前知识库中没有找到足够可靠的依据，因此我不能给出确定的处理步骤。你可以确认创建一个技术支持工单，由人工继续处理。";
     private static final String OUT_OF_SCOPE = "我只能协助企业内部技术支持、知识问答和工单查询。请提供相关技术问题或工单编号。";
     private static final String TICKET_REQUIRED = "请提供格式为 T 加 12 位数字的工单编号。";
+    private static final String SECURITY_REDACTED = "[内容已因安全策略隐藏]";
+    private static final PromptSecurityPolicy DEFAULT_PROMPT_SECURITY =
+            new DeterministicPromptSecurityPolicy(new LlmSecuritySettings(true, true, true));
     private final IntentRecognitionService intents;
     private final RetrievalService retrieval;
     private final ChatModelPort chatModel;
     private final TicketQueryUseCase tickets;
     private final ConversationStorePort conversations;
     private final AgentAuditPort audits;
-    private final AnswerValidator validator;
     private final UuidGenerator ids;
     private final TimeProvider time;
     private final String chatModelName;
@@ -57,6 +69,8 @@ public class ChatUseCase {
     private final Duration suggestionTtl;
     private final ConversationContextService contextService;
     private final UserMemoryCandidateService memoryCandidates;
+    private final PromptSecurityPolicy promptSecurity;
+    private final ModelOutputSecurityService outputSecurity;
 
     /** 创建不向 Agent 下放检索路由或写权限的聊天用例。 */
     public ChatUseCase(IntentRecognitionService intents, RetrievalService retrieval,
@@ -107,7 +121,7 @@ public class ChatUseCase {
                        ConversationContextService contextService) {
         this(intents, retrieval, chatModel, tickets, conversations, audits, validator, ids, time,
                 chatModelName, embeddingModelName, rerankModelName, groundedThreshold,
-                telemetry, suggestionTtl, contextService, null);
+                telemetry, suggestionTtl, contextService, null, DEFAULT_PROMPT_SECURITY);
     }
 
     /** 创建带阶段 13 长期记忆候选生成能力的聊天用例。 */
@@ -120,6 +134,41 @@ public class ChatUseCase {
                        OptimizationTelemetryPort telemetry, Duration suggestionTtl,
                        ConversationContextService contextService,
                        UserMemoryCandidateService memoryCandidates) {
+        this(intents, retrieval, chatModel, tickets, conversations, audits, validator, ids, time,
+                chatModelName, embeddingModelName, rerankModelName, groundedThreshold,
+                telemetry, suggestionTtl, contextService, memoryCandidates,
+                DEFAULT_PROMPT_SECURITY);
+    }
+
+    /** 创建带阶段 15 Prompt 信任边界和全部既有聊天能力的用例。 */
+    public ChatUseCase(IntentRecognitionService intents, RetrievalService retrieval,
+                       ChatModelPort chatModel, TicketQueryUseCase tickets,
+                       ConversationStorePort conversations, AgentAuditPort audits,
+                       AnswerValidator validator, UuidGenerator ids, TimeProvider time,
+                       String chatModelName, String embeddingModelName,
+                       String rerankModelName, double groundedThreshold,
+                       OptimizationTelemetryPort telemetry, Duration suggestionTtl,
+                       ConversationContextService contextService,
+                       UserMemoryCandidateService memoryCandidates,
+                       PromptSecurityPolicy promptSecurity) {
+        this(intents, retrieval, chatModel, tickets, conversations, audits, validator, ids, time,
+                chatModelName, embeddingModelName, rerankModelName, groundedThreshold,
+                telemetry, suggestionTtl, contextService, memoryCandidates, promptSecurity,
+                ModelOutputSecurityService.standard(validator, ids));
+    }
+
+    /** 创建带阶段 16 统一模型输出安全网关和全部既有聊天能力的用例。 */
+    public ChatUseCase(IntentRecognitionService intents, RetrievalService retrieval,
+                       ChatModelPort chatModel, TicketQueryUseCase tickets,
+                       ConversationStorePort conversations, AgentAuditPort audits,
+                       AnswerValidator validator, UuidGenerator ids, TimeProvider time,
+                       String chatModelName, String embeddingModelName,
+                       String rerankModelName, double groundedThreshold,
+                       OptimizationTelemetryPort telemetry, Duration suggestionTtl,
+                       ConversationContextService contextService,
+                       UserMemoryCandidateService memoryCandidates,
+                       PromptSecurityPolicy promptSecurity,
+                       ModelOutputSecurityService outputSecurity) {
         if (suggestionTtl == null || suggestionTtl.isZero() || suggestionTtl.isNegative()) {
             throw new IllegalArgumentException("工单建议有效期必须大于 0");
         }
@@ -129,7 +178,6 @@ public class ChatUseCase {
         this.tickets = tickets;
         this.conversations = conversations;
         this.audits = audits;
-        this.validator = validator;
         this.ids = ids;
         this.time = time;
         this.chatModelName = chatModelName;
@@ -140,6 +188,8 @@ public class ChatUseCase {
         this.suggestionTtl = suggestionTtl;
         this.contextService = contextService;
         this.memoryCandidates = memoryCandidates;
+        this.promptSecurity = Objects.requireNonNull(promptSecurity, "Prompt 安全策略不能为空");
+        this.outputSecurity = Objects.requireNonNull(outputSecurity, "模型输出安全服务不能为空");
     }
 
     /**
@@ -151,6 +201,10 @@ public class ChatUseCase {
     public PreparedChat prepare(ChatRequest request) {
         if (request.actor() == null) {
             throw new ApplicationException(ErrorCode.AUTH_UNAUTHORIZED, "认证信息无效或已经过期");
+        }
+        if (promptSecurity.assess(request.message(), PromptSecuritySource.USER_MESSAGE).blocked()) {
+            throw new ApplicationException(ErrorCode.CHAT_PROMPT_INJECTION_BLOCKED,
+                    "请求包含无法安全处理的指令");
         }
         UUID runId = ids.generate();
         BeginResult begin = conversations.begin(request.actor().userId(), request.conversationId(), request.clientMessageId(),
@@ -264,10 +318,27 @@ public class ChatUseCase {
     /** 调用问候模型并记录真实首 Token 回调耗时。 */
     private Outcome greeting(UUID ownerUserId, UUID conversationId, UUID runId,
                              String message, List<String> context) {
-        long modelStarted = System.nanoTime();
-        ModelAnswer answer = chatModel.greeting(message, context,
-                firstTokenCallback(ownerUserId, conversationId, runId, modelStarted));
-        return fromModel(answer, "GREETING", null, List.of(), null, null);
+        int regenerations = 0;
+        List<String> feedback = List.of();
+        while (true) {
+            ModelInvocationSecurity invocation = outputSecurity.newInvocation(feedback);
+            long modelStarted = System.nanoTime();
+            ModelAnswer answer = chatModel.greeting(message, context,
+                    firstTokenCallback(ownerUserId, conversationId, runId, modelStarted), invocation);
+            ModelOutputAssessment assessment = outputSecurity.assess(
+                    ModelOutputType.GREETING, answer == null ? null : answer.text(),
+                    invocation, message, List.of());
+            if (assessment.action() == ModelOutputAction.PASS) {
+                return fromModel(answer, "GREETING", null, List.of(), null, null);
+            }
+            if (assessment.action() == ModelOutputAction.REGENERATE
+                    && outputSecurity.canRegenerate(regenerations)) {
+                regenerations++;
+                feedback = assessment.feedbackRules();
+                continue;
+            }
+            throw outputValidationFailure();
+        }
     }
 
     /** 执行仅允许一次指定工单读取的 AgentScope 分支。 */
@@ -276,13 +347,30 @@ public class ChatUseCase {
                            IntentDecision decision) {
         if (decision.ticketNo() == null) return fixed(TICKET_REQUIRED, "TICKET_NUMBER_REQUIRED");
         try {
-            TicketDetails ticket = tickets.get(actor, decision.ticketNo());
+            TicketDetails ticket = secureTicket(tickets.get(actor, decision.ticketNo()));
             List<String> answerContext = modelContext(actor.userId(), conversationId,
                     ticketFixedSections(message, ticket));
-            ModelAnswer answer = chatModel.ticketAnswer(message, decision.ticketNo(), ticket, answerContext,
-                    () -> renew(actor.userId(), conversationId, runId));
-            return fromModel(answer, "TICKET_FOUND", null, List.of(), null,
-                    answer.serializedAgentState());
+            int regenerations = 0;
+            List<String> feedback = List.of();
+            while (true) {
+                ModelInvocationSecurity invocation = outputSecurity.newInvocation(feedback);
+                ModelAnswer answer = chatModel.ticketAnswer(message, decision.ticketNo(), ticket,
+                        answerContext, () -> renew(actor.userId(), conversationId, runId), invocation);
+                ModelOutputAssessment assessment = outputSecurity.assess(
+                        ModelOutputType.TICKET_ANSWER, answer == null ? null : answer.text(),
+                        invocation, message, List.of());
+                if (assessment.action() == ModelOutputAction.PASS) {
+                    return fromModel(answer, "TICKET_FOUND", null, List.of(), null,
+                            answer.serializedAgentState());
+                }
+                if (assessment.action() == ModelOutputAction.REGENERATE
+                        && outputSecurity.canRegenerate(regenerations)) {
+                    regenerations++;
+                    feedback = assessment.feedbackRules();
+                    continue;
+                }
+                throw outputValidationFailure();
+            }
         } catch (ApplicationException exception) {
             if (exception.errorCode() == ErrorCode.TICKET_NOT_FOUND) {
                 return fixed("未找到工单 " + decision.ticketNo() + "，请核对编号。",
@@ -297,7 +385,7 @@ public class ChatUseCase {
                             String message, List<String> context,
                             IntentDecision decision, ChatEventSink sink) {
         emit(ownerUserId, sink, conversationId, runId, "retrieval.started", Map.of("mode", "HYBRID"));
-        RetrievalResult result = retrieval.retrieve(decision.standaloneQuery());
+        RetrievalResult result = secureRetrieval(retrieval.retrieve(decision.standaloneQuery()));
         audits.recordRetrieval(runId, decision.standaloneQuery(), result, groundedThreshold, time.now());
         Map<String, Object> completed = new LinkedHashMap<>();
         completed.put("status", result.status().name());
@@ -316,22 +404,30 @@ public class ChatUseCase {
         }
         List<Citation> citations = citations(result.evidence());
         List<String> answerContext = modelContext(ownerUserId, conversationId, fixedSections(message, result.evidence()));
-        long modelStarted = System.nanoTime();
-        ModelAnswer answer = chatModel.groundedAnswer(message, answerContext, result.evidence(), null,
-                firstTokenCallback(ownerUserId, conversationId, runId, modelStarted));
-        answer = withDisclosure(answer, result.evidence());
-        List<String> failures = validator.validate(answer.text(), result.evidence());
-        if (!failures.isEmpty()) {
-            modelStarted = System.nanoTime();
-            answer = chatModel.groundedAnswer(message, answerContext, result.evidence(),
-                    String.join(",", failures), firstTokenCallback(ownerUserId, conversationId, runId, modelStarted));
-            answer = withDisclosure(answer, result.evidence());
-            if (!validator.validate(answer.text(), result.evidence()).isEmpty()) {
-                throw new ApplicationException(ErrorCode.CHAT_ANSWER_VALIDATION_FAILED,
-                        "模型答案未通过引用与安全校验");
+        int regenerations = 0;
+        List<String> feedback = List.of();
+        while (true) {
+            ModelInvocationSecurity invocation = outputSecurity.newInvocation(feedback);
+            long modelStarted = System.nanoTime();
+            ModelAnswer answer = chatModel.groundedAnswer(message, answerContext,
+                    result.evidence(), firstTokenCallback(ownerUserId, conversationId, runId,
+                            modelStarted), invocation);
+            answer = answer == null ? null : withDisclosure(answer, result.evidence());
+            ModelOutputAssessment assessment = outputSecurity.assess(
+                    ModelOutputType.GROUNDED, answer == null ? null : answer.text(),
+                    invocation, message, result.evidence());
+            if (assessment.action() == ModelOutputAction.PASS) {
+                return fromModel(answer, "GROUNDED", RetrievalStatus.GROUNDED,
+                        citations, null, null);
             }
+            if (assessment.action() == ModelOutputAction.REGENERATE
+                    && outputSecurity.canRegenerate(regenerations)) {
+                regenerations++;
+                feedback = assessment.feedbackRules();
+                continue;
+            }
+            throw outputValidationFailure();
         }
-        return fromModel(answer, "GROUNDED", RetrievalStatus.GROUNDED, citations, null, null);
     }
 
     /** 对文档与已解决案例混合证据追加固定冲突边界说明。 */
@@ -354,9 +450,52 @@ public class ChatUseCase {
     private List<String> modelContext(UUID ownerUserId, UUID conversationId, List<String> fixedSections) {
         if (contextService == null) {
             return conversations.recentContext(ownerUserId, conversationId,
-                    MODEL_CONTEXT_TURNS, MODEL_CONTEXT_CHARACTERS);
+                            MODEL_CONTEXT_TURNS, MODEL_CONTEXT_CHARACTERS).stream()
+                    .filter(value -> !promptSecurity.assess(
+                            value, PromptSecuritySource.HISTORY).blocked())
+                    .toList();
         }
         return contextService.prepare(ownerUserId, conversationId, fixedSections).modelContext();
+    }
+
+    /** 排除本次检索中携带高置信度注入指令的证据并重新确定检索三态。 */
+    private RetrievalResult secureRetrieval(RetrievalResult result) {
+        if (result.status() != RetrievalStatus.GROUNDED) {
+            return result;
+        }
+        List<RetrievalEvidence> evidence = result.evidence().stream()
+                .filter(item -> !promptSecurity.assess(
+                        evidenceSecurityText(item), PromptSecuritySource.EVIDENCE).blocked())
+                .toList();
+        RetrievalStatus status = evidence.isEmpty()
+                ? RetrievalStatus.NO_RELIABLE_KNOWLEDGE : RetrievalStatus.GROUNDED;
+        return new RetrievalResult(status, result.bm25Status(), result.vectorStatus(),
+                result.rerankStatus(), evidence, result.candidates(), result.durationMs());
+    }
+
+    /** 合并证据所有可控文本字段，防止标题或标题路径绕过正文检查。 */
+    private String evidenceSecurityText(RetrievalEvidence evidence) {
+        return String.join("\n", String.valueOf(evidence.title()),
+                String.valueOf(evidence.headingPath()), String.valueOf(evidence.content()));
+    }
+
+    /** 仅在本次模型调用中隐藏包含高置信度注入指令的可变工单正文。 */
+    private TicketDetails secureTicket(TicketDetails ticket) {
+        return new TicketDetails(ticket.ticketNo(), secureTicketField(ticket.title()),
+                secureTicketField(ticket.problemDescription()),
+                secureTicketField(ticket.attemptedActions()), ticket.status(),
+                secureTicketField(ticket.rootCause()), secureTicketField(ticket.solution()),
+                secureTicketField(ticket.closeReason()), ticket.version(), ticket.createdAt(),
+                ticket.updatedAt(), ticket.resolvedAt(), ticket.closedAt());
+    }
+
+    /** 保留普通或模糊工单文本，只替换高置信度攻击字段。 */
+    private String secureTicketField(String value) {
+        if (value == null) {
+            return null;
+        }
+        return promptSecurity.assess(value, PromptSecuritySource.TICKET_FIELD).blocked()
+                ? SECURITY_REDACTED : value;
     }
 
     /** 汇总当前问题及完整证据内容，用于在回答模型调用前核算输入预算。 */
@@ -457,7 +596,18 @@ public class ChatUseCase {
 
     /** 构造固定安全回答结果。 */
     private Outcome fixed(String answer, String resultStatus) {
+        ModelOutputAssessment assessment = outputSecurity.assess(
+                ModelOutputType.FIXED, answer, ModelInvocationSecurity.none(), null, List.of());
+        if (assessment.action() != ModelOutputAction.PASS) {
+            throw outputValidationFailure();
+        }
         return new Outcome(answer, "fixed-v1", resultStatus, null, List.of(), null, null);
+    }
+
+    /** 创建不包含失败正文和规则细节的统一输出校验异常。 */
+    private ApplicationException outputValidationFailure() {
+        return new ApplicationException(ErrorCode.CHAT_ANSWER_VALIDATION_FAILED,
+                "模型答案未通过安全校验");
     }
 
     /** 把完整模型结果转换为统一路由结果。 */

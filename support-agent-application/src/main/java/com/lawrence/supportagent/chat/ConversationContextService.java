@@ -9,6 +9,10 @@ import com.lawrence.supportagent.knowledge.DocumentContentPolicy;
 import com.lawrence.supportagent.model.ConversationSummaryPort;
 import com.lawrence.supportagent.model.ModelInvocationException;
 import com.lawrence.supportagent.memory.UserMemoryContextService;
+import com.lawrence.supportagent.security.DeterministicPromptSecurityPolicy;
+import com.lawrence.supportagent.security.LlmSecuritySettings;
+import com.lawrence.supportagent.security.PromptSecurityPolicy;
+import com.lawrence.supportagent.security.PromptSecuritySource;
 import com.lawrence.supportagent.sharedkernel.error.ApplicationException;
 import com.lawrence.supportagent.sharedkernel.error.ErrorCode;
 import com.lawrence.supportagent.sharedkernel.port.TimeProvider;
@@ -17,12 +21,15 @@ import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.Executor;
 
 /** 编排单会话 Token 预算、滚动摘要、实体校验和 Redis CAS 提交。 */
 public class ConversationContextService {
+    private static final PromptSecurityPolicy DEFAULT_PROMPT_SECURITY =
+            new DeterministicPromptSecurityPolicy(new LlmSecuritySettings(true, true, true));
     private final ConversationStorePort store;
     private final ConversationSummaryPort summaryModel;
     private final ExactTermExtractor exactTerms;
@@ -32,6 +39,7 @@ public class ConversationContextService {
     private final Executor summaryExecutor;
     private final TimeProvider time;
     private final UserMemoryContextService longTermMemories;
+    private final PromptSecurityPolicy promptSecurity;
 
     /** 注入会话存储、独立摘要模型、确定性校验器、预算、执行器和统一时钟。 */
     public ConversationContextService(ConversationStorePort store,
@@ -42,7 +50,7 @@ public class ConversationContextService {
                                       ConversationMemorySettings settings,
                                       Executor summaryExecutor, TimeProvider time) {
         this(store, summaryModel, exactTerms, contentPolicy, tokens, settings,
-                summaryExecutor, time, null);
+                summaryExecutor, time, null, DEFAULT_PROMPT_SECURITY);
     }
 
     /** 注入阶段 13 长期记忆选择服务，并保持单会话摘要职责独立。 */
@@ -54,6 +62,20 @@ public class ConversationContextService {
                                       ConversationMemorySettings settings,
                                       Executor summaryExecutor, TimeProvider time,
                                       UserMemoryContextService longTermMemories) {
+        this(store, summaryModel, exactTerms, contentPolicy, tokens, settings,
+                summaryExecutor, time, longTermMemories, DEFAULT_PROMPT_SECURITY);
+    }
+
+    /** 注入阶段 15 Prompt 安全策略并保持现有摘要和长期记忆职责。 */
+    public ConversationContextService(ConversationStorePort store,
+                                      ConversationSummaryPort summaryModel,
+                                      ExactTermExtractor exactTerms,
+                                      DocumentContentPolicy contentPolicy,
+                                      ConservativeTokenEstimator tokens,
+                                      ConversationMemorySettings settings,
+                                      Executor summaryExecutor, TimeProvider time,
+                                      UserMemoryContextService longTermMemories,
+                                      PromptSecurityPolicy promptSecurity) {
         this.store = store;
         this.summaryModel = summaryModel;
         this.exactTerms = exactTerms;
@@ -63,6 +85,7 @@ public class ConversationContextService {
         this.summaryExecutor = summaryExecutor;
         this.time = time;
         this.longTermMemories = longTermMemories;
+        this.promptSecurity = Objects.requireNonNull(promptSecurity, "Prompt 安全策略不能为空");
     }
 
     /**
@@ -103,14 +126,14 @@ public class ConversationContextService {
     /** 判断原始轮次或完整调用预算是否要求在当前模型调用前同步摘要。 */
     private boolean requiresHardSummary(MemorySnapshot snapshot, List<String> fixedSections,
                                         List<String> userMemories) {
-        return snapshot.turns().size() >= settings.hardTriggerTurns()
+        return safeTurnCount(snapshot) >= settings.hardTriggerTurns()
                 || totalTokens(snapshot, fixedSections, userMemories) > settings.availableInputTokens();
     }
 
     /** 判断成功轮次数量或会话记忆估算是否达到异步摘要软阈值。 */
     private boolean requiresSoftSummary(MemorySnapshot snapshot) {
         return compressible(snapshot)
-                && (snapshot.turns().size() >= settings.softTriggerTurns()
+                && (safeTurnCount(snapshot) >= settings.softTriggerTurns()
                 || memoryTokens(snapshot) >= settings.softTriggerMemoryTokens());
     }
 
@@ -139,22 +162,26 @@ public class ConversationContextService {
     /** 对临时模型故障最多重试一次，确定性结构或实体错误不盲目重试。 */
     private ConversationSummary generateSummary(MemorySnapshot snapshot,
                                                 List<CompletedTurn> source, long covered) {
+        ConversationSummary previous = safeSummary(snapshot);
         try {
-            return summaryModel.summarize(snapshot.summary(), source,
+            return summaryModel.summarize(previous, source,
                     snapshot.summaryVersion() + 1, covered);
         } catch (ModelInvocationException exception) {
             if (!exception.retryable()) {
                 throw exception;
             }
-            return summaryModel.summarize(snapshot.summary(), source,
+            return summaryModel.summarize(previous, source,
                     snapshot.summaryVersion() + 1, covered);
         }
     }
 
     /** 返回可被本次摘要覆盖的较早轮次，并始终保留冻结数量的最近完整轮次。 */
     private List<CompletedTurn> sourceTurns(List<CompletedTurn> turns) {
-        int end = turns.size() - settings.recentFullTurns();
-        return end <= 0 ? List.of() : List.copyOf(turns.subList(0, end));
+        List<CompletedTurn> safeTurns = turns.stream()
+                .filter(turn -> allowed(render(turn), PromptSecuritySource.HISTORY))
+                .toList();
+        int end = safeTurns.size() - settings.recentFullTurns();
+        return end <= 0 ? List.of() : List.copyOf(safeTurns.subList(0, end));
     }
 
     /** 校验模型返回版本、覆盖边界以及所有关键实体均可回溯到来源轮次。 */
@@ -165,7 +192,10 @@ public class ConversationContextService {
             throw new IllegalArgumentException("摘要模型返回的版本或覆盖边界不合法");
         }
         contentPolicy.verifyNoSensitiveContent(candidate.toModelContext());
-        Map<String, Set<Long>> allowed = allowedEntities(snapshot.summary(), source);
+        if (!allowed(candidate.toModelContext(), PromptSecuritySource.SUMMARY)) {
+            throw new IllegalArgumentException("会话摘要包含高风险注入指令");
+        }
+        Map<String, Set<Long>> allowed = allowedEntities(safeSummary(snapshot), source);
         for (ConversationSummaryKeyEntity entity : candidate.keyEntities()) {
             String key = entity.type().name() + '\u0000' + entity.normalizedValue();
             Set<Long> versions = allowed.get(key);
@@ -173,6 +203,13 @@ public class ConversationContextService {
                 throw new IllegalArgumentException("摘要模型生成了无法回溯的关键实体");
             }
         }
+    }
+
+    /** 仅返回允许继续参与摘要生成和实体回溯的既有摘要。 */
+    private ConversationSummary safeSummary(MemorySnapshot snapshot) {
+        return snapshot.summary() != null
+                && allowed(snapshot.summary().toModelContext(), PromptSecuritySource.SUMMARY)
+                ? snapshot.summary() : null;
     }
 
     /** 汇总已有摘要与本轮来源中的可用关键实体及其来源版本。 */
@@ -205,13 +242,17 @@ public class ConversationContextService {
         }
         List<String> result = new ArrayList<>();
         for (String memory : userMemories) {
+            if (!allowed(memory, PromptSecuritySource.MEMORY)) {
+                continue;
+            }
             int memoryTokens = tokens.estimate(memory);
             if (memoryTokens <= remaining) {
                 result.add(memory);
                 remaining -= memoryTokens;
             }
         }
-        if (snapshot.summary() != null) {
+        if (snapshot.summary() != null && allowed(
+                snapshot.summary().toModelContext(), PromptSecuritySource.SUMMARY)) {
             String summary = snapshot.summary().toModelContext();
             int summaryTokens = tokens.estimate(summary);
             if (summaryTokens > remaining) {
@@ -226,6 +267,9 @@ public class ConversationContextService {
         for (int index = turns.size() - 1;
              index >= 0 && selectedNewestFirst.size() < settings.recentFullTurns(); index--) {
             String value = render(turns.get(index));
+            if (!allowed(value, PromptSecuritySource.HISTORY)) {
+                continue;
+            }
             int turnTokens = tokens.estimate(value);
             if (turnTokens > remaining) {
                 break;
@@ -244,27 +288,43 @@ public class ConversationContextService {
     /** 估算完整会话记忆但不包含当前调用固定内容的 Token。 */
     private int memoryTokens(MemorySnapshot snapshot) {
         List<String> values = new ArrayList<>();
-        if (snapshot.summary() != null) {
+        if (snapshot.summary() != null && allowed(
+                snapshot.summary().toModelContext(), PromptSecuritySource.SUMMARY)) {
             values.add(snapshot.summary().toModelContext());
         }
-        snapshot.turns().stream().map(this::render).forEach(values::add);
+        snapshot.turns().stream().map(this::render)
+                .filter(value -> allowed(value, PromptSecuritySource.HISTORY))
+                .forEach(values::add);
         return tokens.estimate(values);
     }
 
     /** 估算会话记忆、当前问题和当前证据的合计输入 Token。 */
     private int totalTokens(MemorySnapshot snapshot, List<String> fixedSections,
                             List<String> userMemories) {
-        return memoryTokens(snapshot) + tokens.estimate(fixedSections) + tokens.estimate(userMemories);
+        List<String> safeMemories = userMemories.stream()
+                .filter(value -> allowed(value, PromptSecuritySource.MEMORY)).toList();
+        return memoryTokens(snapshot) + tokens.estimate(fixedSections) + tokens.estimate(safeMemories);
     }
 
     /** 判断当前快照是否存在至少一个可压缩且不会侵入最近窗口的轮次。 */
     private boolean compressible(MemorySnapshot snapshot) {
-        return snapshot.turns().size() > settings.recentFullTurns();
+        return safeTurnCount(snapshot) > settings.recentFullTurns();
+    }
+
+    /** 统计当前可进入模型上下文的成功轮次，避免攻击轮次持续触发无效摘要。 */
+    private long safeTurnCount(MemorySnapshot snapshot) {
+        return snapshot.turns().stream().map(this::render)
+                .filter(value -> allowed(value, PromptSecuritySource.HISTORY)).count();
     }
 
     /** 将一个成功轮次渲染为与模型适配器约定一致的历史片段。 */
     private String render(CompletedTurn turn) {
         return "用户：" + turn.userMessage() + "\n助手：" + turn.answer();
+    }
+
+    /** 判断一段上下文是否允许进入当前模型调用，不修改其持久化来源。 */
+    private boolean allowed(String value, PromptSecuritySource source) {
+        return !promptSecurity.assess(value, source).blocked();
     }
 
     /** 把同步摘要失败映射为不会泄露模型响应的稳定应用错误。 */

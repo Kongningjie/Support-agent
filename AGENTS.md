@@ -1,6 +1,6 @@
 # Repository Guidelines
 
-开始任何实现前，必须先阅读 `docs/implementation-plan/00-phased-implementation-plan.md`、`docs/standards/README.md` 和最近一份阶段工作记录。执行二期阶段 6～9 时，还必须完整阅读 `docs/implementation-plan/08-phase-2-optimization-plan.md`。一次只能执行当前冻结计划中的一个阶段，完成并通过门禁后必须停止，等待用户确认。
+开始任何实现前，必须先阅读 `docs/implementation-plan/00-phased-implementation-plan.md`、`docs/implementation-plan/10-current-system-baseline.md`、`docs/standards/README.md` 和最近一份阶段工作记录。查阅已完成阶段的设计依据时，再完整阅读对应的一期、二期或三期计划；历史计划中的范围排除不代表当前能力缺失。一次只能执行当前冻结计划中的一个阶段，完成并通过门禁后必须停止，等待用户确认。
 
 ## 项目结构与模块职责
 

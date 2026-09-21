@@ -78,6 +78,8 @@ public enum ErrorCode {
     CHAT_CONVERSATION_BUSY,
     /** 相同客户端消息编号承载了不同内容。 */
     CHAT_MESSAGE_ID_REUSED,
+    /** 当前用户消息包含无法安全交给模型处理的高置信度注入指令。 */
+    CHAT_PROMPT_INJECTION_BLOCKED,
     /** 混合检索的两个召回分支均不可用。 */
     RETRIEVAL_FAILED,
     /** 模型不可用、超时或返回了无效结果。 */

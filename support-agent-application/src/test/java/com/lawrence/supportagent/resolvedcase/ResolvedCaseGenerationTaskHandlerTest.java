@@ -8,6 +8,7 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.when;
+import static org.mockito.Mockito.times;
 
 import com.lawrence.supportagent.asynctask.AggregateType;
 import com.lawrence.supportagent.asynctask.AsyncTask;
@@ -16,6 +17,7 @@ import com.lawrence.supportagent.asynctask.AsyncTaskExecutionException;
 import com.lawrence.supportagent.asynctask.AsyncTaskType;
 import com.lawrence.supportagent.knowledge.ExactTermExtractor;
 import com.lawrence.supportagent.model.ChatModelPort;
+import com.lawrence.supportagent.model.ModelInvocationSecurity;
 import com.lawrence.supportagent.resolvedcase.port.ResolvedCaseRepository;
 import com.lawrence.supportagent.ticket.Ticket;
 import com.lawrence.supportagent.ticket.port.TicketRepository;
@@ -37,7 +39,7 @@ class ResolvedCaseGenerationTaskHandlerTest {
         Ticket ticket = resolvedTicket();
         when(tickets.findById(1)).thenReturn(Optional.of(ticket));
         when(cases.findBySourceTicketId(1)).thenReturn(Optional.empty());
-        when(model.generateResolvedCaseDraft(any())).thenReturn(
+        when(model.generateResolvedCaseDraft(any(), any(ModelInvocationSecurity.class))).thenReturn(
                 new ChatModelPort.ResolvedCaseDraft("MySQL 连接失败", "应用无法连接 MySQL"));
         AsyncTask task = AsyncTask.pending(AsyncTaskType.CASE_GENERATION, AggregateType.TICKET,
                 1, ticket.version(), "case-generation:1:2", "dev-operator", NOW);
@@ -53,7 +55,7 @@ class ResolvedCaseGenerationTaskHandlerTest {
         assertEquals(ResolvedCaseStatus.DRAFT, captor.getValue().status());
     }
 
-    /** 验证模型新增来源工单中不存在的 URL 时按可重试事实违规拒绝。 */
+    /** 验证模型连续新增来源工单中不存在的 URL 时完整重生成一次后拒绝。 */
     @Test
     void shouldRejectInventedExactFact() {
         TicketRepository tickets = mock(TicketRepository.class);
@@ -62,7 +64,7 @@ class ResolvedCaseGenerationTaskHandlerTest {
         Ticket ticket = resolvedTicket();
         when(tickets.findById(1)).thenReturn(Optional.of(ticket));
         when(cases.findBySourceTicketId(1)).thenReturn(Optional.empty());
-        when(model.generateResolvedCaseDraft(any())).thenReturn(new ChatModelPort.ResolvedCaseDraft(
+        when(model.generateResolvedCaseDraft(any(), any(ModelInvocationSecurity.class))).thenReturn(new ChatModelPort.ResolvedCaseDraft(
                 "MySQL 连接失败", "访问 https://invented.example.com 后应用恢复"));
         AsyncTask task = AsyncTask.pending(AsyncTaskType.CASE_GENERATION, AggregateType.TICKET,
                 1, ticket.version(), "case-generation:1:2", "dev-operator", NOW);
@@ -72,8 +74,34 @@ class ResolvedCaseGenerationTaskHandlerTest {
         AsyncTaskExecutionException failure = assertThrows(AsyncTaskExecutionException.class,
                 () -> handler.execute(new AsyncTaskExecutionContext(task, () -> true)));
 
-        assertEquals("CASE_GENERATION_SCHEMA_INVALID", failure.errorCode());
-        assertTrue(failure.retryable());
+        assertEquals("CASE_GENERATION_OUTPUT_REJECTED", failure.errorCode());
+        assertTrue(!failure.retryable());
+        verify(model, times(2)).generateResolvedCaseDraft(any(), any(ModelInvocationSecurity.class));
+        verify(cases, never()).save(any());
+    }
+
+    /** 验证案例草稿泄漏随机标记时立即拒绝且不落库、不重生成。 */
+    @Test
+    void shouldRejectCanaryLeakBeforeCasePersistence() {
+        TicketRepository tickets = mock(TicketRepository.class);
+        ResolvedCaseRepository cases = mock(ResolvedCaseRepository.class);
+        ChatModelPort model = mock(ChatModelPort.class);
+        Ticket ticket = resolvedTicket();
+        when(tickets.findById(1)).thenReturn(Optional.of(ticket));
+        when(cases.findBySourceTicketId(1)).thenReturn(Optional.empty());
+        when(model.generateResolvedCaseDraft(any(), any(ModelInvocationSecurity.class)))
+                .thenAnswer(invocation -> new ChatModelPort.ResolvedCaseDraft(
+                        invocation.<ModelInvocationSecurity>getArgument(1).canary(), "应用无法连接 MySQL"));
+        AsyncTask task = AsyncTask.pending(AsyncTaskType.CASE_GENERATION, AggregateType.TICKET,
+                1, ticket.version(), "case-generation:1:2", "dev-operator", NOW);
+        ResolvedCaseGenerationTaskHandler handler = new ResolvedCaseGenerationTaskHandler(
+                tickets, cases, model, new ExactTermExtractor(), () -> NOW);
+
+        AsyncTaskExecutionException failure = assertThrows(AsyncTaskExecutionException.class,
+                () -> handler.execute(new AsyncTaskExecutionContext(task, () -> true)));
+
+        assertEquals("CASE_GENERATION_OUTPUT_REJECTED", failure.errorCode());
+        verify(model, times(1)).generateResolvedCaseDraft(any(), any(ModelInvocationSecurity.class));
         verify(cases, never()).save(any());
     }
 

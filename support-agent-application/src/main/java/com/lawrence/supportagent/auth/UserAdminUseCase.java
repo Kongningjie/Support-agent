@@ -120,13 +120,13 @@ public class UserAdminUseCase {
     public UserPage list(AuthenticatedUser actor, UserRole role, UserStatus status,
                          int page, int size) {
         requireAdmin(actor);
-        if (page < 0 || size < 1 || size > 100) {
-            throw new IllegalArgumentException("页码不能小于 0，每页数量必须为 1 至 100");
+        if (page < 1 || size < 1 || size > 100) {
+            throw new IllegalArgumentException("页码不能小于 1，每页数量必须为 1 至 100");
         }
-        if (page > Integer.MAX_VALUE / size) {
+        if (page - 1 > Integer.MAX_VALUE / size) {
             throw new IllegalArgumentException("分页偏移量超出允许范围");
         }
-        return new UserPage(users.findPage(role, status, page * size, size).stream()
+        return new UserPage(users.findPage(role, status, (page - 1) * size, size).stream()
                 .map(UserView::from).toList(), page, size, users.countPage(role, status));
     }
 

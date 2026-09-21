@@ -55,15 +55,23 @@ class UserAdminUseCaseTest {
                 .thenReturn(List.of(account(USER_ID, UserRole.USER, false, null, 0)));
         when(users.countPage(UserRole.USER, UserStatus.ACTIVE)).thenReturn(21L);
 
-        UserPage page = useCase.list(ADMIN, UserRole.USER, UserStatus.ACTIVE, 1, 20);
+        UserPage page = useCase.list(ADMIN, UserRole.USER, UserStatus.ACTIVE, 2, 20);
 
         assertThat(page.total()).isEqualTo(21);
+        assertThat(page.page()).isEqualTo(2);
         assertThat(page.items()).hasSize(1);
+    }
+
+    /** 用户分页必须遵守全项目统一的从 1 开始契约。 */
+    @Test void shouldRejectZeroBasedPage() {
+        assertThatThrownBy(() -> useCase.list(ADMIN, null, null, 0, 20))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("页码不能小于 1");
     }
 
     /** 非管理员不得访问任何用户治理能力。 */
     @Test void shouldRejectNonAdministrator() {
-        assertThatThrownBy(() -> useCase.list(USER, null, null, 0, 20))
+        assertThatThrownBy(() -> useCase.list(USER, null, null, 1, 20))
                 .isInstanceOfSatisfying(ApplicationException.class, exception ->
                         assertThat(exception.errorCode()).isEqualTo(ErrorCode.AUTH_FORBIDDEN));
     }

@@ -1,6 +1,8 @@
 # Support Agent
 
-基于 Java 21、Spring Boot 4.1、AgentScope Java 和 DashScope 的企业内部技术支持 Agent。一期覆盖托管知识、混合检索、流式问答、工单和已解决案例闭环。
+基于 Java 21、Spring Boot 4.1、AgentScope Java 和 DashScope 的企业内部技术支持 Agent。当前已完成一期阶段 0～5、二期阶段 6～9、三期阶段 10～14，覆盖知识检索与工单闭环、上下文压缩、本地认证、会话生命周期、用户可控长期记忆和账号安全。
+
+当前实现的完整事实基线见 [当前系统基线](docs/implementation-plan/10-current-system-baseline.md)，历史阶段计划只用于解释当时的范围和决策。Prompt 注入与模型输出安全优化已经形成[四期冻结方案](docs/implementation-plan/11-phase-4-llm-security-plan.md)；阶段 15～16 已完成，阶段 17 尚未执行。
 
 ## 核心流程
 
@@ -8,6 +10,9 @@
 知识文档发布 ─┐
               ├─> BM25 + 向量 + RRF + Rerank ─> 带来源回答
 工单解决 -> AI 案例草稿 -> 人工审核发布 ┘
+
+本地账号 -> Bearer Token -> 用户资源归属 -> 会话滚动摘要
+                                    └-> 用户确认的跨会话长期记忆
 ```
 
 知识来源只有 `MANAGED_DOCUMENT`（托管文档）和 `RESOLVED_CASE`（已解决案例）。两者冲突时优先采用托管文档并披露差异。AI 不会自动解决工单或自动发布案例。
@@ -23,10 +28,10 @@
 | 模块 | 职责 |
 |---|---|
 | `support-agent-domain` | 纯 Java 聚合、状态机和值对象 |
-| `support-agent-application` | 用例、端口、异步任务和检索评测 |
+| `support-agent-application` | 用例、端口、认证、会话与记忆编排、异步任务和评测 |
 | `support-agent-agent` | AgentScope、DashScope、Prompt 与结构化输出 |
-| `support-agent-infrastructure` | MySQL、Redis、Elasticsearch、Flyway 与 Outbox |
-| `support-agent-interfaces` | REST、SSE、OpenAPI 和统一响应 |
+| `support-agent-infrastructure` | MySQL、Redis、Elasticsearch、Flyway、Outbox、认证与安全审计适配 |
+| `support-agent-interfaces` | REST、SSE、Spring Security、OpenAPI 和统一响应 |
 | `support-agent-bootstrap` | Spring Boot 启动、配置和模块装配 |
 
 ## Windows 11 本地运行
@@ -49,10 +54,17 @@ java -jar .\support-agent-bootstrap\target\support-agent-bootstrap-0.1.0-SNAPSHO
 |---|---|
 | `DASHSCOPE_API_KEY` | DashScope 密钥，禁止提交或写入日志 |
 | `DASHSCOPE_HTTP_BASE_URL` | 工作空间原生 API 根地址，应以 `/api/v1` 结尾 |
-| `DASHSCOPE_CHAT_MODEL` | 回答与案例结构化生成模型 |
-| `DASHSCOPE_INTENT_MODEL` | 独立意图识别模型 |
-| `DASHSCOPE_EMBEDDING_MODEL` | 文档和查询向量模型 |
-| `DASHSCOPE_RERANK_MODEL` | 混合召回重排序模型 |
+| `SUPPORT_AGENT_CHAT_MODEL` | 回答与案例结构化生成模型 |
+| `SUPPORT_AGENT_INTENT_MODEL` | 独立意图识别模型 |
+| `SUPPORT_AGENT_SUMMARY_MODEL` | 会话滚动摘要模型，当前为 `qwen3.7-flash` |
+| `SUPPORT_AGENT_EMBEDDING_MODEL` | 文档和查询向量模型 |
+| `SUPPORT_AGENT_RERANK_MODEL` | 混合召回重排序模型 |
+| `SUPPORT_AGENT_AUTH_TOKEN_TTL` | 不透明 Bearer Token 固定有效期，默认 2 小时 |
+| `SUPPORT_AGENT_AUTH_MAXIMUM_ACTIVE_TOKENS` | 每用户同时有效 Token 上限，默认 5 |
+| `SUPPORT_AGENT_BOOTSTRAP_ADMIN_*` | 用户表为空时可选的一次性初始管理员引导配置 |
+| `SUPPORT_AGENT_LLM_SECURITY_ENABLED` | LLM 输入与上下文安全总开关，生产环境不得关闭 |
+| `SUPPORT_AGENT_LLM_BLOCK_HIGH_CONFIDENCE_INPUT` | 是否在创建会话前拒绝高置信度直接注入，默认开启 |
+| `SUPPORT_AGENT_LLM_EXCLUDE_HIGH_RISK_CONTEXT` | 是否从本次模型调用排除高风险上下文，默认开启 |
 | `SUPPORT_AGENT_MYSQL_URL` | MySQL JDBC 地址 |
 | `SUPPORT_AGENT_REDIS_URL` | Redis 地址 |
 | `SUPPORT_AGENT_ELASTICSEARCH_URL` | Elasticsearch 根地址 |
@@ -78,6 +90,8 @@ mvn verify -Ponline-test
 
 聊天接口 `POST /api/v1/chat/stream` 使用 SSE。服务端在检索和生成期间发送进度事件或注释心跳；模型原始 delta 不会直接下发。完整答案通过引用与精确值校验后，才发送 `answer.started -> answer.delta -> answer.completed`；两次生成均未通过时只发送 `error`。各分支请求样例和事件顺序见 `http/20-chat.http`。
 
+除登录和健康检查外，业务接口均要求 Redis 不透明 Bearer Token。普通用户只能访问自己的会话、工单和长期记忆；管理员负责用户、知识、案例和异步任务治理。账号安全示例见 `http/27-account-security.http`。
+
 ## 固定检索评测
 
 仓库内保存 15 条自编中文知识语料和 50 条固定问题，覆盖已知知识、精确术语、同义改写、无知识和冲突。`dev/test` 环境可通过 `/api/v1/retrieval-evaluations` 对比 `BM25_ONLY`、`VECTOR_ONLY`、`HYBRID`、`HYBRID_RERANK`。结果只保存在内存，报告写入 `target/retrieval-evaluation/`，不会自动修改检索参数。
@@ -86,7 +100,7 @@ mvn verify -Ponline-test
 
 ## 数据清理
 
-应用不提供业务数据物理删除接口：工单保留审计记录，已发布知识只能归档。停止基础设施不会删除数据：
+工单保留审计记录，已发布知识只能归档；用户可以删除自己的会话和长期记忆。未确认的长期记忆候选达到 30 天后按批次清理。停止基础设施不会删除数据：
 
 ```powershell
 docker compose -f .\deploy\compose.yml down
@@ -96,4 +110,4 @@ docker compose -f .\deploy\compose.yml down
 
 ## 安全边界
 
-禁止提交密钥、`.env`、生产数据、完整 Prompt 或模型完整输出。测试数据必须自编或脱敏；一期不引入公开数据集、消息队列、认证、多租户、前端和自动调参。
+禁止提交密钥、`.env`、生产数据、完整 Prompt 或模型完整输出。测试数据必须自编或脱敏。当前消息与所有模型上下文统一按不可信数据处理：高置信度直接注入在创建会话前拒绝，高风险证据、历史、摘要、记忆和工单字段只从本次调用排除。问候、RAG、工单回答、工单草稿和案例草稿在外发或持久化前统一执行完整输出安全校验，每次受保护生成调用使用仅存活于内存的随机泄漏标记。当前采用本地用户名密码、BCrypt 和 Redis 不透明 Token，不使用 JWT、Refresh Token、真实 OIDC/SSO、复杂 RBAC、多租户、前端、RocketMQ 或自动调参。

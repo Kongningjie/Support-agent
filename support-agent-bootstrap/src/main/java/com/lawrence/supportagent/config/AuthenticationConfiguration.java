@@ -26,7 +26,7 @@ import org.springframework.context.annotation.Configuration;
 import org.springframework.core.env.Environment;
 import org.springframework.data.redis.core.StringRedisTemplate;
 
-/** 装配阶段 11 本地认证端口、用例和首次管理员引导。 */
+/** 装配本地认证、账号安全用例、稳定认证端口和首次管理员引导。 */
 @Configuration
 public class AuthenticationConfiguration {
     /** 创建固定 strength 12 的 BCrypt 密码适配器。 */
