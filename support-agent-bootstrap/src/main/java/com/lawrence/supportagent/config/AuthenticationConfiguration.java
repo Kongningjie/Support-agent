@@ -3,12 +3,15 @@ package com.lawrence.supportagent.config;
 import com.lawrence.supportagent.auth.AuthenticationUseCase;
 import com.lawrence.supportagent.auth.BCryptPasswordHashAdapter;
 import com.lawrence.supportagent.auth.InitialAdminUseCase;
+import com.lawrence.supportagent.auth.LocalAuthenticationAdapter;
 import com.lawrence.supportagent.auth.RedisAccessTokenAdapter;
 import com.lawrence.supportagent.auth.RedisLoginAttemptAdapter;
 import com.lawrence.supportagent.auth.UserAdminUseCase;
 import com.lawrence.supportagent.auth.port.AccessTokenPort;
+import com.lawrence.supportagent.auth.port.AuthenticationPort;
 import com.lawrence.supportagent.auth.port.LoginAttemptPort;
 import com.lawrence.supportagent.auth.port.PasswordHashPort;
+import com.lawrence.supportagent.auth.port.SecurityEventPort;
 import com.lawrence.supportagent.auth.port.UserRepository;
 import com.lawrence.supportagent.idempotency.IdempotentExecutor;
 import com.lawrence.supportagent.sharedkernel.port.TimeProvider;
@@ -38,6 +41,12 @@ public class AuthenticationConfiguration {
         return new RedisAccessTokenAdapter(redis);
     }
 
+    /** 以本地不透明 Token 实现稳定认证端口。 */
+    @Bean
+    public AuthenticationPort authenticationPort(AccessTokenPort tokens) {
+        return new LocalAuthenticationAdapter(tokens);
+    }
+
     /** 创建 Redis 登录失败限流适配器。 */
     @Bean
     public LoginAttemptPort loginAttemptPort(StringRedisTemplate redis) {
@@ -50,18 +59,24 @@ public class AuthenticationConfiguration {
                                                         PasswordHashPort passwords,
                                                         AccessTokenPort tokens,
                                                         LoginAttemptPort attempts,
+                                                        SecurityEventPort events,
                                                         TimeProvider time,
                                                         @Value("${support-agent.auth.token-ttl:2h}")
-                                                        Duration tokenTtl) {
-        return new AuthenticationUseCase(users, passwords, tokens, attempts, time, tokenTtl);
+                                                        Duration tokenTtl,
+                                                        @Value("${support-agent.auth.maximum-active-tokens:5}")
+                                                        int maximumActiveTokens) {
+        return new AuthenticationUseCase(users, passwords, tokens, attempts, events, time,
+                tokenTtl, maximumActiveTokens);
     }
 
     /** 创建管理员用户管理用例。 */
     @Bean
     public UserAdminUseCase userAdminUseCase(UserRepository users, PasswordHashPort passwords,
                                              AccessTokenPort tokens, UuidGenerator ids,
-                                             TimeProvider time, IdempotentExecutor idempotency) {
-        return new UserAdminUseCase(users, passwords, tokens, ids, time, idempotency);
+                                             TimeProvider time, IdempotentExecutor idempotency,
+                                             LoginAttemptPort attempts, SecurityEventPort events) {
+        return new UserAdminUseCase(users, passwords, tokens, ids, time, idempotency,
+                attempts, events);
     }
 
     /** 创建首次管理员引导用例。 */

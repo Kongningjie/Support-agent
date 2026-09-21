@@ -4,7 +4,12 @@ import com.lawrence.supportagent.user.UserRole;
 import java.util.UUID;
 
 /** 当前请求已经认证且不可变的最小用户上下文。 */
-public record AuthenticatedUser(UUID userId, String username, UserRole role) {
+public record AuthenticatedUser(UUID userId, String username, UserRole role,
+                                boolean mustChangePassword) {
+    /** 创建没有强制改密限制的兼容认证上下文。 */
+    public AuthenticatedUser(UUID userId, String username, UserRole role) {
+        this(userId, username, role, false);
+    }
     /** 拒绝缺失标识、用户名或角色的认证上下文。 */
     public AuthenticatedUser {
         if (userId == null || username == null || username.isBlank() || role == null) {

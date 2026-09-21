@@ -1,6 +1,6 @@
 package com.lawrence.supportagent.auth;
 
-import com.lawrence.supportagent.auth.port.AccessTokenPort;
+import com.lawrence.supportagent.auth.port.AuthenticationPort;
 import com.lawrence.supportagent.sharedkernel.port.TimeProvider;
 import jakarta.servlet.DispatcherType;
 import org.springframework.context.annotation.Bean;
@@ -24,14 +24,21 @@ public class SecurityConfiguration {
 
     /** 创建 Bearer Token 认证过滤器。 */
     @Bean
-    public BearerTokenAuthenticationFilter bearerTokenAuthenticationFilter(AccessTokenPort tokens) {
-        return new BearerTokenAuthenticationFilter(tokens);
+    public BearerTokenAuthenticationFilter bearerTokenAuthenticationFilter(AuthenticationPort authentication) {
+        return new BearerTokenAuthenticationFilter(authentication);
+    }
+
+    /** 创建强制改密 Token 的接口限制过滤器。 */
+    @Bean
+    public PasswordChangeRequiredFilter passwordChangeRequiredFilter(SecurityErrorWriter errors) {
+        return new PasswordChangeRequiredFilter(errors);
     }
 
     /** 定义匿名、管理员和普通认证请求的 URL 规则。 */
     @Bean
     public SecurityFilterChain securityFilterChain(HttpSecurity http,
                                                     BearerTokenAuthenticationFilter bearer,
+                                                    PasswordChangeRequiredFilter passwordChange,
                                                     SecurityErrorWriter errors) throws Exception {
         http.csrf(csrf -> csrf.disable())
                 .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
@@ -48,7 +55,8 @@ public class SecurityConfiguration {
                                 request, response, 401, "AUTH_UNAUTHORIZED", "认证信息无效或已经过期"))
                         .accessDeniedHandler((request, response, exception) -> errors.write(
                                 request, response, 403, "AUTH_FORBIDDEN", "当前用户没有执行此操作的权限")))
-                .addFilterBefore(bearer, UsernamePasswordAuthenticationFilter.class);
+                .addFilterBefore(bearer, UsernamePasswordAuthenticationFilter.class)
+                .addFilterAfter(passwordChange, BearerTokenAuthenticationFilter.class);
         return http.build();
     }
 }

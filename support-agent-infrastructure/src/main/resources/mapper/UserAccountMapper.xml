@@ -3,7 +3,7 @@
 <mapper namespace="com.lawrence.supportagent.persistence.mapper.UserAccountMapper">
     <sql id="columns">
         id,user_id,username,display_name,password_hash,role,status,version,
-        password_changed_at,created_by,created_at,updated_by,updated_at
+        password_changed_at,must_change_password,locked_until,created_by,created_at,updated_by,updated_at
     </sql>
     <select id="count" resultType="long">SELECT COUNT(*) FROM app_user</select>
     <select id="findByUsername" resultType="com.lawrence.supportagent.persistence.record.UserAccountDO">
@@ -17,14 +17,40 @@
     </select>
     <insert id="insert" useGeneratedKeys="true" keyProperty="id">
         INSERT INTO app_user (user_id,username,display_name,password_hash,role,status,version,
-            password_changed_at,created_by,created_at,updated_by,updated_at)
+            password_changed_at,must_change_password,locked_until,created_by,created_at,updated_by,updated_at)
         VALUES (#{userId},#{username},#{displayName},#{passwordHash},#{role},#{status},#{version},
-            #{passwordChangedAt},#{createdBy},#{createdAt},#{updatedBy},#{updatedAt})
+            #{passwordChangedAt},#{mustChangePassword},#{lockedUntil},#{createdBy},#{createdAt},#{updatedBy},#{updatedAt})
     </insert>
     <update id="update">
         UPDATE app_user SET display_name=#{user.displayName},password_hash=#{user.passwordHash},role=#{user.role},
             status=#{user.status},version=#{user.version},password_changed_at=#{user.passwordChangedAt},
+            must_change_password=#{user.mustChangePassword},locked_until=#{user.lockedUntil},
             updated_by=#{user.updatedBy},updated_at=#{user.updatedAt}
         WHERE id=#{user.id} AND version=#{expectedVersion}
+    </update>
+    <select id="findPage" resultType="com.lawrence.supportagent.persistence.record.UserAccountDO">
+        SELECT <include refid="columns"/> FROM app_user
+        <where>
+            <if test="role != null">role=#{role}</if>
+            <if test="status != null">AND status=#{status}</if>
+        </where>
+        ORDER BY created_at DESC,id DESC LIMIT #{offset},#{size}
+    </select>
+    <select id="countPage" resultType="long">
+        SELECT COUNT(*) FROM app_user
+        <where>
+            <if test="role != null">role=#{role}</if>
+            <if test="status != null">AND status=#{status}</if>
+        </where>
+    </select>
+    <update id="extendLock">
+        UPDATE app_user SET locked_until=#{lockedUntil},version=version+1,
+            updated_by=#{operator},updated_at=#{now}
+        WHERE user_id=#{userId} AND (locked_until IS NULL OR locked_until &lt; #{lockedUntil})
+    </update>
+    <update id="clearExpiredLock">
+        UPDATE app_user SET locked_until=NULL,version=version+1,
+            updated_by=#{operator},updated_at=#{now}
+        WHERE user_id=#{userId} AND locked_until IS NOT NULL AND locked_until &lt;= #{now}
     </update>
 </mapper>

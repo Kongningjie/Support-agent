@@ -2,7 +2,7 @@ package com.lawrence.supportagent.auth;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-import java.time.Duration;
+import java.time.Instant;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -39,23 +39,26 @@ class RedisLoginAttemptAdapterIT {
         connectionFactory.destroy();
     }
 
-    /** 同一用户名更换来源或同一来源更换用户名都不能绕过失败阈值。 */
+    /** 第三、第四和第五次失败分别应用 30 秒、2 分钟和 15 分钟退避。 */
     @Test
-    void shouldLimitByUsernameOrClientSource() {
-        for (int attempt = 0; attempt < 5; attempt++) {
-            adapter.recordFailure("alice", "source-a", 5, Duration.ofMinutes(15));
-        }
-
-        assertThat(adapter.blocked("alice", "source-b", 5)).isTrue();
-        assertThat(adapter.blocked("another-user", "source-a", 5)).isTrue();
-        assertThat(adapter.blocked("another-user", "source-b", 5)).isFalse();
+    void shouldApplyProgressiveBackoff() {
+        Instant now = Instant.parse("2026-09-21T00:00:00Z");
+        assertThat(adapter.recordFailure("alice", "source-a", now).blockedUntil()).isNull();
+        assertThat(adapter.recordFailure("alice", "source-a", now).blockedUntil()).isNull();
+        assertThat(adapter.recordFailure("alice", "source-a", now).blockedUntil())
+                .isEqualTo(now.plusSeconds(30));
+        assertThat(adapter.recordFailure("alice", "source-a", now.plusSeconds(31)).blockedUntil())
+                .isEqualTo(now.plusSeconds(151));
+        assertThat(adapter.recordFailure("alice", "source-a", now.plusSeconds(152)).blockedUntil())
+                .isEqualTo(now.plusSeconds(1052));
     }
 
     /** 成功登录后应清理当前用户名和来源的失败计数。 */
     @Test
     void shouldClearCurrentSubjectsAfterSuccess() {
-        adapter.recordFailure("alice", "source-a", 1, Duration.ofMinutes(15));
+        Instant now = Instant.parse("2026-09-21T00:00:00Z");
+        adapter.recordFailure("alice", "source-a", now);
         adapter.clear("alice", "source-a");
-        assertThat(adapter.blocked("alice", "source-a", 1)).isFalse();
+        assertThat(adapter.blockedUntil("alice", "source-a", now)).isEmpty();
     }
 }

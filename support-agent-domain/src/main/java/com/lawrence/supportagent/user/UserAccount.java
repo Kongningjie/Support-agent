@@ -8,7 +8,8 @@ import java.util.regex.Pattern;
 /** 本地用户聚合，集中维护登录标识、角色、状态和审计版本。 */
 public record UserAccount(Long id, UUID userId, String username, String displayName,
                           String passwordHash, UserRole role, UserStatus status, long version,
-                          Instant passwordChangedAt, String createdBy, Instant createdAt,
+                          Instant passwordChangedAt, boolean mustChangePassword,
+                          Instant lockedUntil, String createdBy, Instant createdAt,
                           String updatedBy, Instant updatedAt) {
     private static final Pattern USERNAME = Pattern.compile("[a-z][a-z0-9._-]{2,63}");
 
@@ -30,7 +31,7 @@ public record UserAccount(Long id, UUID userId, String username, String displayN
                                      String passwordHash, UserRole role,
                                      String operator, Instant now) {
         return new UserAccount(null, userId, username, displayName, passwordHash, role,
-                UserStatus.ACTIVE, 0, now, operator, now, operator, now);
+                UserStatus.ACTIVE, 0, now, false, null, operator, now, operator, now);
     }
 
     /** 由管理员变更账号状态并递增乐观锁版本。 */
@@ -39,7 +40,42 @@ public record UserAccount(Long id, UUID userId, String username, String displayN
             throw new IllegalArgumentException("用户状态不能为空");
         }
         return new UserAccount(id, userId, username, displayName, passwordHash, role, newStatus,
-                version + 1, passwordChangedAt, createdBy, createdAt, operator, now);
+                version + 1, passwordChangedAt, mustChangePassword, lockedUntil,
+                createdBy, createdAt, operator, now);
+    }
+
+    /** 使用新哈希变更密码并清除强制改密标记和临时锁定。 */
+    public UserAccount changePassword(String newPasswordHash, String operator, Instant now) {
+        return new UserAccount(id, userId, username, displayName, newPasswordHash, role, status,
+                version + 1, now, false, null, createdBy, createdAt, operator, now);
+    }
+
+    /** 由管理员重置为一次性密码并要求用户下次登录后立即改密。 */
+    public UserAccount resetPassword(String newPasswordHash, String operator, Instant now) {
+        return new UserAccount(id, userId, username, displayName, newPasswordHash, role, status,
+                version + 1, now, true, null, createdBy, createdAt, operator, now);
+    }
+
+    /** 更新临时锁定截止时间；空值表示管理员或成功认证已解除锁定。 */
+    public UserAccount changeLock(Instant newLockedUntil, String operator, Instant now) {
+        return new UserAccount(id, userId, username, displayName, passwordHash, role, status,
+                version + 1, passwordChangedAt, mustChangePassword, newLockedUntil,
+                createdBy, createdAt, operator, now);
+    }
+
+    /** 变更两级角色并递增乐观锁版本。 */
+    public UserAccount changeRole(UserRole newRole, String operator, Instant now) {
+        if (newRole == null) {
+            throw new IllegalArgumentException("用户角色不能为空");
+        }
+        return new UserAccount(id, userId, username, displayName, passwordHash, newRole, status,
+                version + 1, passwordChangedAt, mustChangePassword, lockedUntil,
+                createdBy, createdAt, operator, now);
+    }
+
+    /** 判断账号在给定时刻是否仍处于临时锁定。 */
+    public boolean lockedAt(Instant now) {
+        return lockedUntil != null && lockedUntil.isAfter(now);
     }
 
     /** 规范化并校验公开登录名。 */

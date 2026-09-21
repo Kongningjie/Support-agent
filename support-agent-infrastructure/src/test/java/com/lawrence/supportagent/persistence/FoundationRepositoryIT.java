@@ -12,6 +12,8 @@ import com.lawrence.supportagent.asynctask.AsyncTaskStatus;
 import com.lawrence.supportagent.asynctask.AsyncTaskType;
 import com.lawrence.supportagent.auth.AuthenticatedUser;
 import com.lawrence.supportagent.auth.MySqlUserRepository;
+import com.lawrence.supportagent.auth.MySqlSecurityEventAdapter;
+import com.lawrence.supportagent.auth.SecurityEventType;
 import com.lawrence.supportagent.asynctask.port.AsyncTaskRepository;
 import com.lawrence.supportagent.idempotency.IdempotencyCommand;
 import com.lawrence.supportagent.idempotency.IdempotentExecutor;
@@ -29,6 +31,7 @@ import com.lawrence.supportagent.memory.port.UserMemoryRepository;
 import com.lawrence.supportagent.persistence.mapper.FoundationMapper;
 import com.lawrence.supportagent.persistence.mapper.AsyncTaskWorkflowMapper;
 import com.lawrence.supportagent.persistence.mapper.UserAccountMapper;
+import com.lawrence.supportagent.persistence.mapper.SecurityEventMapper;
 import com.lawrence.supportagent.persistence.record.AsyncTaskMetricsDO;
 import com.lawrence.supportagent.persistence.repository.TicketMyBatisRepository;
 import com.lawrence.supportagent.resolvedcase.ResolvedCase;
@@ -67,6 +70,9 @@ import org.springframework.context.annotation.ComponentScan;
 import org.springframework.context.annotation.Bean;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
+import javax.sql.DataSource;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.mysql.MySQLContainer;
@@ -105,6 +111,10 @@ class FoundationRepositoryIT {
     private IdempotentExecutor idempotentExecutor;
     @Autowired
     private UserAccountMapper userAccountMapper;
+    @Autowired
+    private SecurityEventMapper securityEventMapper;
+    @Autowired
+    private DataSource dataSource;
     @Autowired
     private UserMemoryRepository userMemoryRepository;
 
@@ -288,6 +298,37 @@ class FoundationRepositoryIT {
                 UserStatus.DISABLED, ACTOR.userId().toString(), NOW.plusSeconds(1)));
         assertEquals(1, disabled.version());
         assertEquals(UserStatus.DISABLED, disabled.status());
+
+        UserAccount reset = repository.save(disabled.resetPassword("new-bcrypt-hash",
+                ACTOR.userId().toString(), NOW.plusSeconds(2)));
+        assertTrue(reset.mustChangePassword());
+        assertEquals(2, reset.version());
+        assertEquals(reset, repository.findPage(UserRole.USER, UserStatus.DISABLED, 0, 10).getFirst());
+        assertEquals(1, repository.countPage(UserRole.USER, UserStatus.DISABLED));
+
+        repository.extendLock(userId, NOW.plusSeconds(60), "AUTHENTICATION", NOW.plusSeconds(3));
+        repository.extendLock(userId, NOW.plusSeconds(30), "AUTHENTICATION", NOW.plusSeconds(4));
+        assertEquals(NOW.plusSeconds(60), repository.findByUserId(userId).orElseThrow().lockedUntil());
+        repository.clearExpiredLock(userId, NOW.plusSeconds(61), "AUTHENTICATION");
+        assertEquals(null, repository.findByUserId(userId).orElseThrow().lockedUntil());
+    }
+
+    /** 验证安全事件只持久化冻结分类和不可逆来源摘要，并产生低基数指标。 */
+    @Test
+    void shouldPersistMinimalSecurityEventAndMetric() {
+        SimpleMeterRegistry metrics = new SimpleMeterRegistry();
+        MySqlSecurityEventAdapter adapter = new MySqlSecurityEventAdapter(securityEventMapper, metrics);
+        adapter.record(SecurityEventType.LOGIN_FAILED, ACTOR.userId(), "ANONYMOUS", "DENIED",
+                "INVALID_CREDENTIALS",
+                "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", NOW);
+
+        JdbcTemplate jdbc = new JdbcTemplate(dataSource);
+        assertEquals(1, jdbc.queryForObject(
+                "SELECT COUNT(*) FROM security_event WHERE event_type='LOGIN_FAILED' "
+                        + "AND result='DENIED' AND reason='INVALID_CREDENTIALS'", Long.class));
+        assertEquals(1.0, metrics.get("support.agent.security.events")
+                .tags("type", "LOGIN_FAILED", "result", "DENIED",
+                        "reason", "INVALID_CREDENTIALS").counter().count());
     }
 
     /** 验证托管文档插入、发布状态和审计字段往返。 */

@@ -4,15 +4,17 @@ import com.lawrence.supportagent.auth.port.LoginAttemptPort;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
-import java.time.Duration;
+import java.time.Instant;
 import java.util.HexFormat;
 import java.util.List;
+import java.util.Optional;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.script.DefaultRedisScript;
 
-/** 使用不可逆主体哈希在 Redis 维护短时登录失败计数。 */
+/** 使用不可逆主体哈希在 Redis 原子维护三级登录退避。 */
 public class RedisLoginAttemptAdapter implements LoginAttemptPort {
     private static final String PREFIX = "support-agent:auth:login-limit:";
+    private static final long STATE_TTL_SECONDS = 86_400;
     private final StringRedisTemplate redis;
 
     /** 注入字符串 Redis 客户端。 */
@@ -21,20 +23,34 @@ public class RedisLoginAttemptAdapter implements LoginAttemptPort {
     }
 
     /** {@inheritDoc} */
-    @Override public boolean blocked(String username, String clientSource, int maximumFailures) {
-        List<String> values = redis.opsForValue().multiGet(keys(username, clientSource));
-        return values != null && values.stream().anyMatch(value -> blocked(value, maximumFailures));
+    @Override public Optional<Instant> blockedUntil(String username, String clientSource,
+                                                    Instant now) {
+        Instant usernameUntil = readBlockedUntil(key("username", username));
+        Instant sourceUntil = readBlockedUntil(key("source", clientSource));
+        Instant latest = latest(usernameUntil, sourceUntil);
+        return latest != null && latest.isAfter(now) ? Optional.of(latest) : Optional.empty();
     }
 
     /** {@inheritDoc} */
-    @Override public void recordFailure(String username, String clientSource,
-                                        int maximumFailures, Duration window) {
-        String script = "for _,key in ipairs(KEYS) do local count=redis.call('INCR',key); "
-                + "if count==1 then redis.call('EXPIRE',key,ARGV[1]) end; "
-                + "if count>tonumber(ARGV[2]) then redis.call('SET',key,ARGV[2],'EX',ARGV[1]) end end; return 1";
-        redis.execute(new DefaultRedisScript<>(script, Long.class),
-                keys(username, clientSource), Long.toString(window.toSeconds()),
-                Integer.toString(maximumFailures));
+    @Override public LoginAttemptDecision recordFailure(String username, String clientSource,
+                                                        Instant now) {
+        String script = "local maxCount=0; local maxUntil=0; "
+                + "for _,key in ipairs(KEYS) do "
+                + "local count=redis.call('HINCRBY',key,'count',1); local delay=0; "
+                + "if count==3 then delay=30 elseif count==4 then delay=120 elseif count>=5 then delay=900 end; "
+                + "local blockedUntil=0; if delay>0 then blockedUntil=tonumber(ARGV[1])+delay; "
+                + "redis.call('HSET',key,'blockedUntil',blockedUntil) end; "
+                + "redis.call('EXPIRE',key,ARGV[2]); if count>maxCount then maxCount=count end; "
+                + "if blockedUntil>maxUntil then maxUntil=blockedUntil end end; "
+                + "return tostring(maxCount)..':'..tostring(maxUntil)";
+        String value = redis.execute(new DefaultRedisScript<>(script, String.class),
+                keys(username, clientSource), Long.toString(now.getEpochSecond()),
+                Long.toString(STATE_TTL_SECONDS));
+        if (value == null) throw new IllegalStateException("登录失败状态写入失败");
+        String[] fields = value.split(":", -1);
+        long count = Long.parseLong(fields[0]);
+        long until = Long.parseLong(fields[1]);
+        return new LoginAttemptDecision(count, until == 0 ? null : Instant.ofEpochSecond(until));
     }
 
     /** {@inheritDoc} */
@@ -42,17 +58,30 @@ public class RedisLoginAttemptAdapter implements LoginAttemptPort {
         redis.delete(keys(username, clientSource));
     }
 
-    /** 判断单个 Redis 失败计数是否达到阈值，异常数据按已阻断处理。 */
-    private boolean blocked(String value, int maximumFailures) {
-        if (value == null) return false;
+    /** {@inheritDoc} */
+    @Override public void clearUsername(String username) {
+        redis.delete(key("username", username));
+    }
+
+    /** 读取单个主体的锁定截止时间；异常值按长期锁定处理。 */
+    private Instant readBlockedUntil(String key) {
+        Object value = redis.opsForHash().get(key, "blockedUntil");
+        if (value == null) return null;
         try {
-            return Long.parseLong(value) >= maximumFailures;
-        } catch (NumberFormatException exception) {
-            return true;
+            return Instant.ofEpochSecond(Long.parseLong(value.toString()));
+        } catch (RuntimeException exception) {
+            return Instant.MAX;
         }
     }
 
-    /** 分别生成用户名和来源的不可逆 Redis 键，任一主体达到阈值即限流。 */
+    /** 返回两个可空时间中的较晚值。 */
+    private Instant latest(Instant first, Instant second) {
+        if (first == null) return second;
+        if (second == null) return first;
+        return first.isAfter(second) ? first : second;
+    }
+
+    /** 分别生成用户名和来源的不可逆 Redis 键。 */
     private List<String> keys(String username, String clientSource) {
         return List.of(key("username", username), key("source", clientSource));
     }

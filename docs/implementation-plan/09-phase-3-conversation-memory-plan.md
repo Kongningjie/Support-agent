@@ -1,6 +1,6 @@
 # Support Agent 三期用户与记忆治理实施计划
 
-> 版本：2.2；冻结日期：2026-09-20；状态：阶段 10 已完成离线门禁且真实在线评测暂缓；阶段 11～13 及阶段 13 补强批次已完成全部规定离线与集成门禁；阶段 14 等待执行。
+> 版本：2.3；冻结日期：2026-09-21；状态：阶段 10 已完成离线门禁且真实在线评测暂缓；阶段 11～14 及阶段 13 补强批次已完成全部规定离线与集成门禁。
 
 ## 1. 文档目的
 
@@ -472,6 +472,17 @@ Token 创建、单 Token 注销和用户全部 Token 撤销必须使用原子 Re
 阶段 14 至少提供用户改密、管理员重置密码、管理员解锁、撤销本人全部 Token 和管理员撤销指定用户全部 Token 的接口。改密请求中的 `oldPassword` 是当前密码，`newPassword` 是待设置密码；管理员重置请求中的 `newPassword` 是一次性初始密码；`mustChangePassword` 表示用户下次认证后是否必须先改密；`lockedUntil` 表示临时锁定截止时间，空值表示未被临时锁定。
 
 阶段 14 不实现组织架构、多租户、第三方登录页面、OAuth 授权服务器或企业 SSO 联调。
+
+### 15.1 阶段 14 补充冻结参数
+
+- 登录失败采用 Redis 递增退避：用户名和客户端来源分别累计连续失败，第 3 次锁定 30 秒，第 4 次锁定 2 分钟，第 5 次及以上锁定 15 分钟。登录成功同时清除用户名与来源计数；管理员解锁只清除目标账号锁定与用户名计数，无法也不得批量清除可能影响其他用户的来源计数。管理员解锁不改变 `DISABLED` 状态。
+- 管理员重置密码后设置 `mustChangePassword=true`。用户使用一次性密码登录后取得受限 Token，只允许查询本人、修改密码和注销；改密成功后撤销该用户全部旧 Token，必须重新登录。
+- Token TTL 保持 2 小时不变；每位用户最多同时保留 5 个有效 Token，签发第 6 个时原子撤销签发时间最早的 Token。
+- 安全事件写入 MySQL `security_event`，只保存事件类型、目标用户、操作者、结果、时间、脱敏来源哈希和低敏详情分类；禁止保存用户名、密码、原始 Token、Token 哈希或请求正文。
+- 公共接口固定为：`POST /api/v1/users/me/password`、`POST /api/v1/users/me/tokens/revoke-all`、`GET /api/v1/admin/users`、`PATCH /api/v1/admin/users/{userId}/role`、`POST /api/v1/admin/users/{userId}/password-reset`、`POST /api/v1/admin/users/{userId}/unlock`、`POST /api/v1/admin/users/{userId}/tokens/revoke-all`。
+- 用户列表按创建时间和内部主键倒序分页，可按角色与状态筛选；管理员不得降低自己的角色。
+- `AuthenticationPort` 负责认证主体解析；本地适配器使用既有用户名密码认证，外部主体映射只定义端口和稳定数据契约，不接入真实 OIDC/SSO。
+- 账号安全指标仅使用事件类型、结果和原因等低基数标签，不含用户、来源、Token 或请求正文。
 
 ## 16. 阶段 11～14 通用安全与测试门禁
 

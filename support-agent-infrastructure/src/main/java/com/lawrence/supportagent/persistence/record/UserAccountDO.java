@@ -22,6 +22,10 @@ public class UserAccountDO {
     public long version;
     /** 最近设置密码时间。 */
     public Instant passwordChangedAt;
+    /** 是否必须先修改管理员设置的一次性密码。 */
+    public boolean mustChangePassword;
+    /** 临时锁定截止时间；空值表示未锁定。 */
+    public Instant lockedUntil;
     /** 创建操作者。 */
     public String createdBy;
     /** 创建时间。 */

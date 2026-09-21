@@ -40,6 +40,8 @@ mybatis:
 support-agent:
   auth:
     token-ttl: ${SUPPORT_AGENT_AUTH_TOKEN_TTL:2h}
+    # 每位用户同时允许保留的有效不透明 Token 数量，超出时撤销最早 Token。
+    maximum-active-tokens: ${SUPPORT_AGENT_AUTH_MAXIMUM_ACTIVE_TOKENS:5}
     bootstrap-admin:
       enabled: ${SUPPORT_AGENT_BOOTSTRAP_ADMIN_ENABLED:false}
       username: ${SUPPORT_AGENT_BOOTSTRAP_ADMIN_USERNAME:}

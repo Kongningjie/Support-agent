@@ -3,112 +3,129 @@ package com.lawrence.supportagent.auth;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import com.lawrence.supportagent.auth.port.AccessTokenPort;
+import com.lawrence.supportagent.auth.port.LoginAttemptPort;
 import com.lawrence.supportagent.auth.port.PasswordHashPort;
+import com.lawrence.supportagent.auth.port.SecurityEventPort;
 import com.lawrence.supportagent.auth.port.UserRepository;
 import com.lawrence.supportagent.idempotency.IdempotentExecutor;
-import com.lawrence.supportagent.idempotency.IdempotentResource;
 import com.lawrence.supportagent.sharedkernel.error.ApplicationException;
 import com.lawrence.supportagent.sharedkernel.error.ErrorCode;
 import com.lawrence.supportagent.user.UserAccount;
 import com.lawrence.supportagent.user.UserRole;
 import com.lawrence.supportagent.user.UserStatus;
 import java.time.Instant;
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
-import java.util.function.Supplier;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
-/** 验证管理员创建用户、禁用撤销和越权防护。 */
+/** 验证管理员列表、角色、重置、解锁和 Token 治理。 */
 @ExtendWith(MockitoExtension.class)
 class UserAdminUseCaseTest {
-    private static final Instant NOW = Instant.parse("2026-09-20T00:00:00Z");
+    private static final Instant NOW = Instant.parse("2026-09-21T00:00:00Z");
     private static final UUID ADMIN_ID = UUID.fromString("10000000-0000-0000-0000-000000000001");
     private static final UUID USER_ID = UUID.fromString("20000000-0000-0000-0000-000000000001");
     private static final AuthenticatedUser ADMIN = new AuthenticatedUser(ADMIN_ID, "admin", UserRole.ADMIN);
+    private static final AuthenticatedUser USER = new AuthenticatedUser(USER_ID, "alice", UserRole.USER);
     @Mock private UserRepository users;
     @Mock private PasswordHashPort passwords;
     @Mock private AccessTokenPort tokens;
     @Mock private IdempotentExecutor idempotency;
+    @Mock private LoginAttemptPort attempts;
+    @Mock private SecurityEventPort events;
     private UserAdminUseCase useCase;
 
-    /** 创建使用固定标识和时间的管理员用例。 */
-    @BeforeEach
-    void setUp() {
+    /** 建立管理员用户治理用例。 */
+    @BeforeEach void setUp() {
         useCase = new UserAdminUseCase(users, passwords, tokens, () -> USER_ID, () -> NOW,
-                idempotency);
+                idempotency, attempts, events);
     }
 
-    /** 管理员创建用户时只持久化哈希且响应不包含密码字段。 */
-    @Test
-    void shouldCreateActiveUserWithPasswordHash() {
-        when(users.findByUsername("alice")).thenReturn(Optional.empty());
-        when(passwords.hash("strong-password")).thenReturn("bcrypt-hash");
-        when(users.save(any())).thenAnswer(invocation -> {
-            UserAccount value = invocation.getArgument(0);
-            return new UserAccount(2L, value.userId(), value.username(), value.displayName(),
-                    value.passwordHash(), value.role(), value.status(), value.version(),
-                    value.passwordChangedAt(), value.createdBy(), value.createdAt(),
-                    value.updatedBy(), value.updatedAt());
-        });
-        when(idempotency.execute(any(), any(), any())).thenAnswer(invocation -> {
-            Supplier<IdempotentResource<UserView>> action = invocation.getArgument(1);
-            return action.get().value();
-        });
+    /** 用户列表必须传递筛选和分页并返回安全视图。 */
+    @Test void shouldListUsersWithFilters() {
+        when(users.findPage(UserRole.USER, UserStatus.ACTIVE, 20, 20))
+                .thenReturn(List.of(account(USER_ID, UserRole.USER, false, null, 0)));
+        when(users.countPage(UserRole.USER, UserStatus.ACTIVE)).thenReturn(21L);
 
-        UserView created = useCase.create(ADMIN, "Alice", "Alice", "strong-password",
-                UserRole.USER, "create-alice");
+        UserPage page = useCase.list(ADMIN, UserRole.USER, UserStatus.ACTIVE, 1, 20);
 
-        assertThat(created.userId()).isEqualTo(USER_ID);
-        assertThat(created.status()).isEqualTo(UserStatus.ACTIVE);
-        verify(passwords).hash("strong-password");
+        assertThat(page.total()).isEqualTo(21);
+        assertThat(page.items()).hasSize(1);
     }
 
-    /** 普通用户不得调用用户管理能力。 */
-    @Test
-    void shouldRejectNonAdministrator() {
-        AuthenticatedUser user = new AuthenticatedUser(USER_ID, "alice", UserRole.USER);
-
-        assertThatThrownBy(() -> useCase.create(user, "bob", "Bob", "strong-password",
-                UserRole.USER, "create-bob"))
+    /** 非管理员不得访问任何用户治理能力。 */
+    @Test void shouldRejectNonAdministrator() {
+        assertThatThrownBy(() -> useCase.list(USER, null, null, 0, 20))
                 .isInstanceOfSatisfying(ApplicationException.class, exception ->
                         assertThat(exception.errorCode()).isEqualTo(ErrorCode.AUTH_FORBIDDEN));
-        verify(users, never()).save(any());
     }
 
-    /** 禁用用户必须递增版本并立即撤销该用户全部 Token。 */
-    @Test
-    void shouldRevokeAllTokensWhenDisablingUser() {
-        UserAccount account = account(USER_ID, UserStatus.ACTIVE, 0);
-        when(users.findByUserId(USER_ID)).thenReturn(Optional.of(account));
+    /** 管理员不得降低自己的角色。 */
+    @Test void shouldRejectSelfRoleDowngrade() {
+        assertThatThrownBy(() -> useCase.changeRole(ADMIN, ADMIN_ID, UserRole.USER, 0))
+                .isInstanceOfSatisfying(ApplicationException.class, exception ->
+                        assertThat(exception.errorCode()).isEqualTo(
+                                ErrorCode.AUTH_SELF_ROLE_CHANGE_FORBIDDEN));
+    }
+
+    /** 角色变化必须递增版本并撤销旧角色 Token。 */
+    @Test void shouldChangeRoleAndRevokeTokens() {
+        when(users.findByUserId(USER_ID)).thenReturn(Optional.of(
+                account(USER_ID, UserRole.USER, false, null, 0)));
         when(users.save(any())).thenAnswer(invocation -> invocation.getArgument(0));
 
-        UserView changed = useCase.changeStatus(ADMIN, USER_ID, UserStatus.DISABLED, 0);
+        UserView changed = useCase.changeRole(ADMIN, USER_ID, UserRole.ADMIN, 0);
 
-        assertThat(changed.version()).isEqualTo(1);
+        assertThat(changed.role()).isEqualTo(UserRole.ADMIN);
         verify(tokens).revokeAll(USER_ID);
     }
 
-    /** 管理员不得通过当前接口禁用自己。 */
-    @Test
-    void shouldRejectSelfDisable() {
-        assertThatThrownBy(() -> useCase.changeStatus(ADMIN, ADMIN_ID, UserStatus.DISABLED, 0))
-                .isInstanceOfSatisfying(ApplicationException.class, exception ->
-                        assertThat(exception.errorCode()).isEqualTo(ErrorCode.AUTH_SELF_DISABLE_FORBIDDEN));
+    /** 管理员重置密码必须标记强制改密并撤销全部 Token。 */
+    @Test void shouldResetPasswordAsOneTimePassword() {
+        when(users.findByUserId(USER_ID)).thenReturn(Optional.of(
+                account(USER_ID, UserRole.USER, false, null, 3)));
+        when(passwords.hash("temporary-pass")).thenReturn("new-hash");
+        when(users.save(any())).thenAnswer(invocation -> invocation.getArgument(0));
+
+        UserView changed = useCase.resetPassword(ADMIN, USER_ID, "temporary-pass", 3);
+
+        assertThat(changed.mustChangePassword()).isTrue();
+        verify(tokens).revokeAll(USER_ID);
+        verify(attempts).clearUsername("alice");
     }
 
-    /** 创建具备给定状态和版本的测试用户。 */
-    private UserAccount account(UUID userId, UserStatus status, long version) {
-        return new UserAccount(1L, userId, "alice", "Alice", "bcrypt-hash",
-                UserRole.USER, status, version, NOW, ADMIN_ID.toString(), NOW,
+    /** 解锁不得改变禁用状态，只清空锁定和用户名失败计数。 */
+    @Test void shouldUnlockWithoutEnablingDisabledAccount() {
+        when(users.findByUserId(USER_ID)).thenReturn(Optional.of(
+                account(USER_ID, UserRole.USER, false, NOW.plusSeconds(900), 2, UserStatus.DISABLED)));
+        when(users.save(any())).thenAnswer(invocation -> invocation.getArgument(0));
+
+        UserView unlocked = useCase.unlock(ADMIN, USER_ID, 2);
+
+        assertThat(unlocked.status()).isEqualTo(UserStatus.DISABLED);
+        assertThat(unlocked.lockedUntil()).isNull();
+        verify(attempts).clearUsername("alice");
+    }
+
+    /** 创建活动测试用户。 */
+    private UserAccount account(UUID userId, UserRole role, boolean mustChange,
+                                Instant lockedUntil, long version) {
+        return account(userId, role, mustChange, lockedUntil, version, UserStatus.ACTIVE);
+    }
+
+    /** 创建具备完整安全状态的测试用户。 */
+    private UserAccount account(UUID userId, UserRole role, boolean mustChange,
+                                Instant lockedUntil, long version, UserStatus status) {
+        return new UserAccount(1L, userId, "alice", "Alice", "bcrypt-hash", role,
+                status, version, NOW, mustChange, lockedUntil, ADMIN_ID.toString(), NOW,
                 ADMIN_ID.toString(), NOW);
     }
 }

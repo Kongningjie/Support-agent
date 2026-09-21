@@ -8,8 +8,8 @@ import java.util.UUID;
 
 /** 隔离不透明 Token 的随机生成、哈希存储、认证与撤销。 */
 public interface AccessTokenPort {
-    /** 签发原始 Token；服务端存储只能保留哈希。 */
-    IssuedToken issue(AuthenticatedUser user, Instant issuedAt, Duration ttl);
+    /** 签发原始 Token；服务端只保留哈希，并原子淘汰超出上限的最早 Token。 */
+    IssuedToken issue(AuthenticatedUser user, Instant issuedAt, Duration ttl, int maximumActiveTokens);
     /** 验证原始 Token 并返回其不可变用户快照。 */
     Optional<AuthenticatedUser> authenticate(String rawToken);
     /** 幂等撤销当前原始 Token。 */

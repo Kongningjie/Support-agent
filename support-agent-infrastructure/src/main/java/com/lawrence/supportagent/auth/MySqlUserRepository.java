@@ -9,6 +9,7 @@ import com.lawrence.supportagent.user.UserAccount;
 import com.lawrence.supportagent.user.UserRole;
 import com.lawrence.supportagent.user.UserStatus;
 import java.nio.ByteBuffer;
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 import org.springframework.dao.DuplicateKeyException;
@@ -67,6 +68,7 @@ public class MySqlUserRepository implements UserRepository {
         record.passwordHash = value.passwordHash(); record.role = value.role().name();
         record.status = value.status().name(); record.version = value.version();
         record.passwordChangedAt = value.passwordChangedAt(); record.createdBy = value.createdBy();
+        record.mustChangePassword = value.mustChangePassword(); record.lockedUntil = value.lockedUntil();
         record.createdAt = value.createdAt(); record.updatedBy = value.updatedBy();
         record.updatedAt = value.updatedAt();
         return record;
@@ -76,8 +78,34 @@ public class MySqlUserRepository implements UserRepository {
     private UserAccount toDomain(UserAccountDO value) {
         return new UserAccount(value.id, toUuid(value.userId), value.username, value.displayName,
                 value.passwordHash, UserRole.valueOf(value.role), UserStatus.valueOf(value.status),
-                value.version, value.passwordChangedAt, value.createdBy, value.createdAt,
+                value.version, value.passwordChangedAt, value.mustChangePassword, value.lockedUntil,
+                value.createdBy, value.createdAt,
                 value.updatedBy, value.updatedAt);
+    }
+
+    /** {@inheritDoc} */
+    @Override public List<UserAccount> findPage(UserRole role, UserStatus status,
+                                                int offset, int size) {
+        return mapper.findPage(role == null ? null : role.name(),
+                status == null ? null : status.name(), offset, size).stream()
+                .map(this::toDomain).toList();
+    }
+
+    /** {@inheritDoc} */
+    @Override public long countPage(UserRole role, UserStatus status) {
+        return mapper.countPage(role == null ? null : role.name(),
+                status == null ? null : status.name());
+    }
+
+    /** {@inheritDoc} */
+    @Override public void extendLock(UUID userId, java.time.Instant lockedUntil,
+                                     String operator, java.time.Instant now) {
+        mapper.extendLock(toBytes(userId), lockedUntil, operator, now);
+    }
+
+    /** {@inheritDoc} */
+    @Override public void clearExpiredLock(UUID userId, java.time.Instant now, String operator) {
+        mapper.clearExpiredLock(toBytes(userId), now, operator);
     }
 
     /** 把 UUID 编码为 MySQL BINARY(16)。 */

@@ -1,0 +1,56 @@
+### 阶段 14 账号安全接口示例
+@baseUrl = http://localhost:8080
+@userToken = replace-with-user-token
+@adminToken = replace-with-admin-token
+@userId = 00000000-0000-0000-0000-000000000000
+
+### 本人修改密码；成功后包括当前 Token 在内的全部旧 Token 失效
+POST {{baseUrl}}/api/v1/users/me/password
+Authorization: Bearer {{userToken}}
+Content-Type: application/json
+
+{
+  "oldPassword": "replace-current-password",
+  "newPassword": "replace-new-password"
+}
+
+### 本人撤销全部 Token
+POST {{baseUrl}}/api/v1/users/me/tokens/revoke-all
+Authorization: Bearer {{userToken}}
+
+### 管理员分页查询活动普通用户
+GET {{baseUrl}}/api/v1/admin/users?role=USER&status=ACTIVE&page=0&size=20
+Authorization: Bearer {{adminToken}}
+
+### 管理员变更用户角色；管理员不能降低自己的角色
+PATCH {{baseUrl}}/api/v1/admin/users/{{userId}}/role
+Authorization: Bearer {{adminToken}}
+Content-Type: application/json
+
+{
+  "role": "ADMIN",
+  "version": 0
+}
+
+### 管理员设置一次性密码；目标用户下次登录后只能先改密
+POST {{baseUrl}}/api/v1/admin/users/{{userId}}/password-reset
+Authorization: Bearer {{adminToken}}
+Content-Type: application/json
+
+{
+  "newPassword": "replace-temporary-password",
+  "version": 0
+}
+
+### 管理员解除临时锁定；不会把 DISABLED 账号改为 ACTIVE
+POST {{baseUrl}}/api/v1/admin/users/{{userId}}/unlock
+Authorization: Bearer {{adminToken}}
+Content-Type: application/json
+
+{
+  "version": 0
+}
+
+### 管理员撤销指定用户全部 Token
+POST {{baseUrl}}/api/v1/admin/users/{{userId}}/tokens/revoke-all
+Authorization: Bearer {{adminToken}}

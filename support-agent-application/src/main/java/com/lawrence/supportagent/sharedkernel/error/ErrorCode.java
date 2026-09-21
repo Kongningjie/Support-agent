@@ -28,6 +28,12 @@ public enum ErrorCode {
     AUTH_USER_VERSION_CONFLICT,
     /** 管理员试图禁用自己的账号。 */
     AUTH_SELF_DISABLE_FORBIDDEN,
+    /** 管理员试图降低自己的角色。 */
+    AUTH_SELF_ROLE_CHANGE_FORBIDDEN,
+    /** 新密码与当前密码相同。 */
+    AUTH_PASSWORD_REUSED,
+    /** 当前 Token 仅允许完成强制改密流程。 */
+    AUTH_PASSWORD_CHANGE_REQUIRED,
     /** 指定长期记忆不存在或不属于当前用户。 */
     MEMORY_NOT_FOUND,
     /** 长期记忆或开关的乐观锁版本已经变化。 */
