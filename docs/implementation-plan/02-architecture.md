@@ -1,6 +1,6 @@
 # 系统架构与模块边界
 
-> 本文保留一期架构基线。阶段 14 完成后的端口、认证、会话和记忆增量统一见 [当前系统基线](10-current-system-baseline.md)。
+> 本文保留一期架构基线，并已补充三期形成的主要端口。阶段 17 完成后的认证、会话、记忆和 LLM 安全现状统一见 [当前系统基线](10-current-system-baseline.md)；历史范围排除不代表当前能力缺失。
 
 ## 1. 部署形态
 
@@ -13,7 +13,7 @@
 | 技术 | 版本或选择 | 用途 |
 |---|---|---|
 | Java | 21 | 编译和运行时基线 |
-| Spring Boot | 4.1.x，骨架使用 4.1.1 | Web、配置、Actuator 和应用装配 |
+| Spring Boot | 4.1.1 | Web、配置、Actuator 和应用装配 |
 | AgentScope Java | 2.0.1 | `ReActAgent`、流式执行和 Agent 状态接入 |
 | MyBatis Starter | 4.1.0 | MySQL 数据访问，XML Mapper |
 | MySQL | 8.4.11 LTS | 业务数据、审计和持久化异步任务 |
@@ -90,6 +90,7 @@ agent + infrastructure + interfaces <- bootstrap
 com.lawrence.supportagent
 ├─ chat
 ├─ auth
+├─ user
 ├─ memory
 ├─ ticket
 ├─ knowledge
@@ -98,6 +99,8 @@ com.lawrence.supportagent
 ├─ asynctask
 ├─ model
 ├─ observability
+├─ evaluation
+├─ security
 └─ sharedkernel
 ```
 

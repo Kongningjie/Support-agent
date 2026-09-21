@@ -2,7 +2,7 @@
 
 ## 1. 文档目的
 
-本文保留一期阶段 0～5 的冻结执行细节，并提供二期、三期和四期执行入口。阶段 14 完成后的实际系统状态统一以 [当前系统基线](10-current-system-baseline.md) 为准；历史阶段中的“不实现”描述只约束当时阶段，不代表当前能力缺失。
+本文保留一期阶段 0～5 的冻结执行细节，并提供二期、三期和四期执行入口。阶段 17 完成后的实际系统状态统一以 [当前系统基线](10-current-system-baseline.md) 为准；历史阶段中的“不实现”描述只约束当时阶段，不代表当前能力缺失。
 
 执行任何阶段前必须同时阅读：
 
@@ -249,11 +249,11 @@ DashScope 模型冻结为：Chat `qwen3.7-plus-2026-05-26`、Intent `qwen3.7-fla
 
 ### 9.4 阶段验收
 
-执行 `mvn test`、`mvn verify -Pintegration`，并在授权环境执行 `mvn verify -Ponline-test`。逐项核对 [一期验收标准与当前骨架边界](07-delivery-scope.md) 的最终完成标准；未验证项目必须明确记录复现命令、原因和风险，不能用环境限制掩盖未完成实现。
+执行 `mvn test`、`mvn verify -Pintegration`，并在授权环境执行 `mvn verify -Ponline-test`。逐项核对 [一期验收与项目骨架历史快照](07-delivery-scope.md) 的最终完成标准；未验证项目必须明确记录复现命令、原因和风险，不能用环境限制掩盖未完成实现。
 
 ### 9.5 本阶段依据
 
-[产品范围与业务闭环](01-product-scope.md)、[领域模型与字段字典](03-domain-and-data-model.md)、[API、统一响应与 SSE 契约](04-api-and-sse.md)、[Agent、模型与 RAG 设计](05-agent-and-rag.md)、[异步、一致性、安全、运维与测试](06-engineering-and-operations.md)、[一期验收标准与当前骨架边界](07-delivery-scope.md)。
+[产品范围与业务闭环](01-product-scope.md)、[领域模型与字段字典](03-domain-and-data-model.md)、[API、统一响应与 SSE 契约](04-api-and-sse.md)、[Agent、模型与 RAG 设计](05-agent-and-rag.md)、[异步、一致性、安全、运维与测试](06-engineering-and-operations.md)、[一期验收与项目骨架历史快照](07-delivery-scope.md)。
 
 ## 10. 每阶段统一完成清单
 
@@ -307,7 +307,7 @@ DashScope 模型冻结为：Chat `qwen3.7-plus-2026-05-26`、Intent `qwen3.7-fla
 
 ## 14. 四期 LLM 安全优化执行入口
 
-阶段 14 完成后的安全核查确认：当前系统具备完整答案缓冲、凭据模式检查、引用和精确值校验，但尚未形成覆盖直接注入、知识库间接注入、上下文污染、Prompt 泄漏和全部模型输出分支的统一安全防线。
+阶段 14 完成后的安全核查曾确认：当时系统具备完整答案缓冲、凭据模式检查、引用和精确值校验，但尚未形成覆盖直接注入、知识库间接注入、上下文污染、Prompt 泄漏和全部模型输出分支的统一安全防线。该差距现已由阶段 15～17 补齐，当前结论以 [当前系统基线](10-current-system-baseline.md) 为准。
 
 四期阶段 15～17 统一依据 [Support Agent 四期 LLM 安全优化实施计划](11-phase-4-llm-security-plan.md) 执行，Prompt 信任边界、统一模型输出安全网关、80 条固定中文安全评测和低基数运行指标均已完成规定离线与集成门禁。真实模型对抗效果仍必须在单独授权后通过 `online-test` 验证，不得把确定性离线结果等同于真实模型安全率。
 

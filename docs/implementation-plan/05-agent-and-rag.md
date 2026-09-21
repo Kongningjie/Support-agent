@@ -19,10 +19,12 @@ get_ticket(ticketNo)
 
 | 能力 | 模型 | 用途 |
 |---|---|---|
-| Chat | `qwen3.7-plus-2026-05-26` | 非思考模式；流式回答、工具调用、结构化工单和案例生成 |
+| Chat | `qwen3.8-flash` | 阶段 8 评测选型后的正式默认模型；回答、工具调用、结构化工单和案例生成 |
 | Intent | `qwen3.7-flash` | 结构化意图识别和独立检索问题改写 |
+| Summary | `qwen3.7-flash` | 单会话结构化滚动摘要 |
+| Memory | `qwen3.7-flash` | 生成待用户确认的长期记忆候选 |
 | Embedding | `text-embedding-v4` | 生成 1024 维查询和文档向量 |
-| Rerank | `qwen3-rerank` | 对融合后的前 30 个候选重新排序 |
+| Rerank | `qwen3-rerank` | 对融合后的前 20 个候选重新排序 |
 
 不配置备用模型或备用供应商。
 
@@ -30,6 +32,8 @@ get_ticket(ticketNo)
 
 - `ChatModelPort`：问候、边界回复、知识回答、工单回答、工单草稿和案例草稿。
 - `IntentRecognitionPort`：意图及独立查询识别。
+- `ConversationSummaryPort`：生成结构化滚动摘要。
+- `UserMemoryCandidatePort`：生成待用户确认的长期记忆候选。
 - `EmbeddingModelPort`：`embedQuery` 与 `embedDocuments`。
 - `RerankModelPort`：按稳定 `chunkId` 返回重排结果。
 
@@ -121,23 +125,23 @@ Java、JSON、YAML、SQL 等代码块不整体视为命令。多行命令作为�
 ## 7. 混合检索流水线
 
 ```text
-BM25 Top 50 --------\
-                     -> RRF(k=60) Top 30 -> Rerank -> Top 5 -> 证据门槛
-Vector Top 50 ------/
+BM25 Top 30 ----------------\
+                              -> RRF(k=20) Top 20 -> Rerank Top 20 -> Top 5 -> 证据门槛
+Vector Top 30 / candidates 100 /
 ```
 
 - BM25 和向量分支并行执行。
 - 一个分支失败时使用另一个分支降级。
 - 两个分支都失败时为 `RETRIEVAL_FAILED`，禁止生成答案或建议建单。
-- 融合在应用层执行 RRF，`k=60`。
-- Rerank 输入最多 30 个候选，最终最多 5 个证据。
+- 融合在应用层执行 RRF，`k=20`。
+- Rerank 输入最多 20 个候选，最终最多 5 个证据；离线排名指标保留前 10。
 - 参数全部配置化，不提供在线自动调参。
 
 ## 8. 可靠知识门槛
 
 基础过滤：仅接受 MySQL 当前仍为 `PUBLISHED` 且版本有效的来源；去重；同一 `sourceId` 最多 2 个分块；向量分支应用最低相似度配置。
 
-Rerank 正常时，以 `rerankScore` 判定。配置项 `support-agent.retrieval.rerank-grounded-threshold` 初始为 0.35，但该值只是启动值，必须通过固定评估集校准，不视为已验证最佳值。
+Rerank 正常时，以 `rerankScore` 判定。阶段 7 通过固定开发集与锁定集冻结 `support-agent.retrieval.rerank-grounded-threshold=0.30`；修改该值必须重新执行相同质量门禁，不得在线自动调整。
 
 Rerank 降级时，候选至少满足以下一项才可成为可靠证据：
 
@@ -210,28 +214,34 @@ Rerank 降级时，候选至少满足以下一项才可成为可靠证据：
 
 ## 13. Prompt 管理
 
-Prompt 使用 UTF-8 Markdown 并随 Git 管理，规划位置：
+Prompt 使用 UTF-8 Markdown 并随 Git 管理，当前位置：
 
 ```text
 support-agent-agent/src/main/resources/prompts/
-├─ support-agent-system.md
+├─ conversation-summary.md
+├─ greeting.md
+├─ grounded-answer-compact.md
 ├─ grounded-answer.md
-├─ no-knowledge-answer.md
-├─ ticket-draft-generation.md
-└─ resolved-case-generation.md
+├─ intent.md
+├─ resolved-case-generation.md
+├─ ticket-agent.md
+├─ ticket-draft.md
+└─ user-memory-candidate.md
 ```
 
 模板变量采用允许名单，缺失变量立即失败。用户输入和检索证据都标记为不可信内容，不能覆盖系统指令或强迫调用工具。Prompt 内容使用短 SHA-256 作为 `promptVersion` 写入运行轨迹。一期不提供数据库 Prompt 管理或在线编辑器。
 
-## 14. 超时、重试和熔断
+## 14. 超时、重试和并发边界
 
 | 调用 | 策略 |
 |---|---|
 | 意图识别 | 总超时 3 秒；不重试；失败降级为 `SUPPORT_QUERY` |
-| Embedding | 单次 10 秒；仅网络错误、限流和服务端错误重试 2 次 |
-| Rerank | 单次 10 秒；不重试；失败使用 RRF 保守门槛 |
-| Chat | 首响应最多 15 秒，整次流最多 120 秒；失败不自动重试，防止重复输出 |
+| Embedding | 单次 10 秒；幂等调用遇网络错误、限流和服务端错误时最多尝试 3 次 |
+| Rerank | 单次 10 秒；幂等调用遇可重试错误时最多尝试 3 次，最终失败使用 RRF 保守门槛 |
+| Chat | 完整生成最多 120 秒；外部调用失败不自动重试，输出安全校验可在正文未外发前完整重生成 1 次 |
+| 会话摘要 | 单次 30 秒；失败保留原始消息，不先删除历史 |
+| 长期记忆候选 | 单次 15 秒；失败或限流不影响已完成的聊天 |
 | 工单结构化生成 | 单次 30 秒；Schema 校验或临时服务错误重试 1 次 |
 | 案例结构化生成 | 单次 60 秒；由持久化任务按统一退避策略重试 |
 
-使用 Resilience4j 实现超时、并发隔离和熔断。熔断只阻止继续调用，不能把模型故障伪装成“没有知识”。记录用途、模型名、耗时、状态和错误码，不记录完整 Prompt 与模型原文。
+适配器显式执行超时、取消和安全幂等重试；长期记忆候选另有单实例全局 4、单用户 1 的并发许可且无等待队列。任何模型或检索故障都不能伪装成“没有知识”。记录用途、模型名、耗时、状态和错误码，不记录完整 Prompt 与模型原文。

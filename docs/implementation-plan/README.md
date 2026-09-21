@@ -13,7 +13,7 @@
 5. [API、统一响应与 SSE 契约](04-api-and-sse.md)
 6. [Agent、模型与 RAG 设计](05-agent-and-rag.md)
 7. [异步、一致性、安全、运维与测试](06-engineering-and-operations.md)
-8. [一期验收标准与当前骨架边界](07-delivery-scope.md)
+8. [一期验收与项目骨架历史快照](07-delivery-scope.md)
 9. [二期优化实施计划（阶段 6～9 执行入口）](08-phase-2-optimization-plan.md)
 10. [三期用户与记忆治理实施计划（阶段 10～14 执行入口）](09-phase-3-conversation-memory-plan.md)
 11. [当前系统基线（阶段 17 完成后的现状入口）](10-current-system-baseline.md)
@@ -21,12 +21,19 @@
 
 后续业务开发必须以总计划为执行入口，一次只执行一个阶段；专题文档提供该阶段所需的精确字段和契约。
 
+## 文档时效与解释规则
+
+- [当前系统基线](10-current-system-baseline.md)、根目录 `README.md` 和各模块 `README.md` 描述当前已实现状态。
+- 一至四期计划是冻结设计和执行记录；其中“暂不实现”“当前没有”等表述只在对应阶段有效。
+- `docs/work-logs/` 是不可回写历史的实施证据。后续能力完成后，不修改旧记录中的当时结论，而由新记录和当前基线承接。
+- 专题文档同时包含一期基线与后续增量时，以编号更后的增量章节和当前系统基线为准。
+
 ## 决策摘要
 
 - 单体部署，Maven 六模块，Java 21。
-- Spring Boot 4.1.x；骨架锁定当前 4.1 系列稳定版本 4.1.1。
+- Spring Boot 4.1.1。
 - 使用 AgentScope Java 2.0.1，只采用 `ReActAgent`。
-- DashScope 统一提供 Chat、Embedding、Rerank，但能力端口相互独立。
+- DashScope 统一提供 Chat、Intent、Summary、Memory、Embedding、Rerank，但能力端口相互独立。
 - MySQL 8.4.11 LTS、Redis 8.8.0、Elasticsearch 9.5.2 + ICU 9.5.2。
 - 一期必须支持 BM25、向量混合检索、RRF 和 Rerank。
 - 一期不引入 RocketMQ，使用 MySQL `async_task` 持久化工作队列。

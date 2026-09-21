@@ -215,7 +215,7 @@
 | 字段 | 含义 |
 |---|---|
 | `conversationId` | 会话公开 UUID |
-| `userId` | 会话所属用户，一期固定 `dev-operator` |
+| `userId` | 会话所属用户；一期固定为 `dev-operator`，阶段 11 后为已认证用户 UUID |
 | `version` | 成功完成一轮后递增的会话版本 |
 | `status` | `IDLE` 或 `RUNNING` |
 | `activeRunId` | 当前运行的 Agent 执行 ID，空闲时为空 |

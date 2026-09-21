@@ -1,6 +1,6 @@
 # API、统一响应与 SSE 契约
 
-> 第 1～10 节保留一期 API 基线；阶段 11～14 新增接口以第 11 节和 [当前系统基线](10-current-system-baseline.md) 为准。除登录、健康检查和开发文档外，当前业务接口均要求 Bearer Token。
+> 第 1～10 节保留一期 API 基线；阶段 11～14 新增接口见第 11 节，阶段 15～17 安全语义见第 12～14 节。完整现状以 [当前系统基线](10-current-system-baseline.md) 为准。除登录、健康检查和开发文档外，当前业务接口均要求 Bearer Token。
 
 ## 1. 通用规则
 
@@ -183,14 +183,18 @@
 
 接口不得返回 Java 异常类名、SQL、DashScope 原始错误正文、内部地址、密钥或堆栈。
 
-## 10. IDEA HTTP Client 规划
+## 10. IDEA HTTP Client 文件
 
-后续业务实现提供：
+当前提供：
 
 ```text
 http/00-health.http
 http/10-knowledge-document.http
 http/20-chat.http
+http/25-conversations.http
+http/26-user-memories.http
+http/27-account-security.http
+http/28-prompt-security.http
 http/30-ticket.http
 http/40-resolved-case.http
 http/50-async-task.http

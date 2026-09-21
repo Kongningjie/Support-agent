@@ -1,6 +1,6 @@
 # 异步、一致性、安全、运维与测试
 
-> 本文保留一期工程基线。阶段 14 完成后的认证、记忆清理和安全审计增量见第 11 节及 [当前系统基线](10-current-system-baseline.md)。
+> 本文保留一期工程基线，并在第 11～14 节记录三期、四期增量。阶段 17 完成后的当前运行事实以 [当前系统基线](10-current-system-baseline.md) 为准。
 
 ## 1. 持久化异步任务
 
@@ -197,13 +197,13 @@ JaCoCo 生成报告但一期不设全局硬覆盖率。状态迁移、幂等、�
 - `SUPPORT_AGENT_LLM_SECURITY_ENABLED`：LLM 输入安全总开关，默认 `true`；生产环境不得关闭。
 - `SUPPORT_AGENT_LLM_BLOCK_HIGH_CONFIDENCE_INPUT`：是否在创建会话前拒绝高置信度直接注入，默认 `true`；生产环境不得关闭。
 - `SUPPORT_AGENT_LLM_EXCLUDE_HIGH_RISK_CONTEXT`：是否排除高风险上下文项，默认 `true`；生产环境不得关闭。
-- 阶段 15 不记录原始命中正文，也不实现阶段 16 的输出泄漏标记和统一输出安全网关。
+- 本阶段不记录原始命中正文；阶段 16 后已经实现输出泄漏标记和统一输出安全网关。此句仅说明阶段 15 当时的交付边界。
 
 ## 13. 阶段 16 输出安全运行配置
 
 - `support-agent.security.llm.prompt-canary-enabled` 默认 `true`：为每次受保护生成调用创建独立随机标记；标记只存在于调用内存和系统 Prompt，不得进入日志、指标、审计、数据库或客户端。
 - `support-agent.security.llm.maximum-regenerations` 默认 `1`：只允许第一次可修复输出失败后完整重生成一次。生产环境必须保持随机标记开启且重生成次数为 `1`，否则启动失败。
-- 输出规则只返回冻结枚举编号，不记录失败正文。阶段 16 不增加安全指标；低基数观测属于阶段 17。
+- 输出规则只返回冻结枚举编号，不记录失败正文。阶段 16 当时未增加安全指标；低基数观测已在阶段 17 实现。
 - 本地覆盖使用 `SUPPORT_AGENT_LLM_PROMPT_CANARY_ENABLED` 和 `SUPPORT_AGENT_LLM_MAXIMUM_REGENERATIONS`；不得通过公共 API 动态修改。
 
 ## 14. 阶段 17 安全评测与观测

@@ -1,8 +1,8 @@
 # Support Agent
 
-基于 Java 21、Spring Boot 4.1、AgentScope Java 和 DashScope 的企业内部技术支持 Agent。当前已完成一期阶段 0～5、二期阶段 6～9、三期阶段 10～14，覆盖知识检索与工单闭环、上下文压缩、本地认证、会话生命周期、用户可控长期记忆和账号安全。
+基于 Java 21、Spring Boot 4.1、AgentScope Java 和 DashScope 的企业内部技术支持 Agent。当前已完成一期阶段 0～5、二期阶段 6～9、三期阶段 10～14（含阶段 13 补强）和四期阶段 15～17，覆盖知识检索与工单闭环、上下文压缩、本地认证、会话生命周期、用户可控长期记忆、账号安全以及 LLM 输入与输出安全治理。
 
-当前实现的完整事实基线见 [当前系统基线](docs/implementation-plan/10-current-system-baseline.md)，历史阶段计划只用于解释当时的范围和决策。Prompt 注入与模型输出安全优化已经形成[四期冻结方案](docs/implementation-plan/11-phase-4-llm-security-plan.md)；阶段 15～16 已完成，阶段 17 尚未执行。
+当前实现的完整事实基线见 [当前系统基线](docs/implementation-plan/10-current-system-baseline.md)，历史阶段计划只用于解释当时的范围和决策。[四期 LLM 安全方案](docs/implementation-plan/11-phase-4-llm-security-plan.md)的阶段 15～17 已完成规定离线与集成门禁；真实 DashScope 对抗验证仍需单独授权，不能把固定数据集结果表述为在线模型安全率。
 
 ## 核心流程
 
@@ -13,6 +13,8 @@
 
 本地账号 -> Bearer Token -> 用户资源归属 -> 会话滚动摘要
                                     └-> 用户确认的跨会话长期记忆
+
+不可信输入/上下文 -> Prompt 安全策略 -> 模型生成 -> 输出安全网关 -> 安全 SSE/业务草稿
 ```
 
 知识来源只有 `MANAGED_DOCUMENT`（托管文档）和 `RESOLVED_CASE`（已解决案例）。两者冲突时优先采用托管文档并披露差异。AI 不会自动解决工单或自动发布案例。
@@ -57,6 +59,7 @@ java -jar .\support-agent-bootstrap\target\support-agent-bootstrap-0.1.0-SNAPSHO
 | `SUPPORT_AGENT_CHAT_MODEL` | 回答与案例结构化生成模型 |
 | `SUPPORT_AGENT_INTENT_MODEL` | 独立意图识别模型 |
 | `SUPPORT_AGENT_SUMMARY_MODEL` | 会话滚动摘要模型，当前为 `qwen3.7-flash` |
+| `SUPPORT_AGENT_MEMORY_MODEL` | 长期记忆候选生成模型，当前为 `qwen3.7-flash` |
 | `SUPPORT_AGENT_EMBEDDING_MODEL` | 文档和查询向量模型 |
 | `SUPPORT_AGENT_RERANK_MODEL` | 混合召回重排序模型 |
 | `SUPPORT_AGENT_AUTH_TOKEN_TTL` | 不透明 Bearer Token 固定有效期，默认 2 小时 |
@@ -97,6 +100,12 @@ mvn verify -Ponline-test
 仓库内保存 15 条自编中文知识语料和 50 条固定问题，覆盖已知知识、精确术语、同义改写、无知识和冲突。`dev/test` 环境可通过 `/api/v1/retrieval-evaluations` 对比 `BM25_ONLY`、`VECTOR_ONLY`、`HYBRID`、`HYBRID_RERANK`。结果只保存在内存，报告写入 `target/retrieval-evaluation/`，不会自动修改检索参数。
 
 评测语料位于 `support-agent-bootstrap/src/main/resources/evaluation/retrieval-corpus.jsonl`，问题位于同目录的 `retrieval-cases.jsonl`。其中 `MANAGED_DOCUMENT:1..10` 和 `RESOLVED_CASE:1..5` 是稳定测试标识。端到端评测前，应在空的本地测试库中按语料顺序导入并发布对应来源；生产环境不加载这些数据。
+
+## 固定 LLM 安全评测
+
+仓库内另有 80 条自编中文安全样本，覆盖直接注入、知识或上下文中的间接注入、输出泄漏或危险内容以及困难正常样本。`mvn test` 会复用生产确定性策略校验预期动作和安全信号；当前固定集结果为直接注入阻断率 100%、间接注入上下文逃逸 0、危险输出逃逸 0、困难正常样本误阻断率 0。
+
+安全数据位于 `support-agent-infrastructure/src/main/resources/evaluation/llm-security-cases.jsonl`。该结果只验证当前固定样本、确定性规则和应用失败关闭链路，不代表真实模型已经通过开放世界对抗测试。
 
 ## 数据清理
 
