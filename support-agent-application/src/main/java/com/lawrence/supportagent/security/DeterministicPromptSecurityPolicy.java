@@ -43,17 +43,28 @@ public class DeterministicPromptSecurityPolicy implements PromptSecurityPolicy {
             "不要解释|直接执行|照做|按此执行|并执行|实际执行|do\\s+not\\s+explain|execute\\s+it|follow\\s+it",
             Pattern.CASE_INSENSITIVE);
     private final LlmSecuritySettings settings;
+    private final LlmSecurityTelemetryPort telemetry;
 
     /** 注入已经过配置层生产约束校验的阶段 15 安全设置。 */
     public DeterministicPromptSecurityPolicy(LlmSecuritySettings settings) {
+        this(settings, LlmSecurityTelemetryPort.noOp());
+    }
+
+    /** 注入安全设置和不携带正文的低基数遥测端口。 */
+    public DeterministicPromptSecurityPolicy(LlmSecuritySettings settings,
+                                             LlmSecurityTelemetryPort telemetry) {
         this.settings = Objects.requireNonNull(settings, "LLM 安全设置不能为空");
+        this.telemetry = telemetry == null ? LlmSecurityTelemetryPort.noOp() : telemetry;
     }
 
     /** {@inheritDoc} */
     @Override
     public PromptSecurityAssessment assess(String content, PromptSecuritySource source) {
         if (!settings.enabled() || content == null || content.isBlank()) {
-            return new PromptSecurityAssessment(PromptSecurityAction.ALLOW, Set.of(), source);
+            PromptSecurityAssessment assessment = new PromptSecurityAssessment(
+                    PromptSecurityAction.ALLOW, Set.of(), source);
+            telemetry.recordPromptAssessment(source, assessment.action(), assessment.signals());
+            return assessment;
         }
         String normalized = Normalizer.normalize(content, Normalizer.Form.NFKC)
                 .toLowerCase(Locale.ROOT);
@@ -77,7 +88,12 @@ public class DeterministicPromptSecurityPolicy implements PromptSecurityPolicy {
                 && !settings.excludeHighRiskContext()) {
             action = PromptSecurityAction.GUARD;
         }
-        return new PromptSecurityAssessment(action, signals, source);
+        PromptSecurityAssessment assessment = new PromptSecurityAssessment(action, signals, source);
+        telemetry.recordPromptAssessment(source, assessment.action(), assessment.signals());
+        if (assessment.blocked() && source != PromptSecuritySource.USER_MESSAGE) {
+            telemetry.recordContextExclusion(source);
+        }
+        return assessment;
     }
 
     /** 仅在模式命中时加入对应低基数信号。 */

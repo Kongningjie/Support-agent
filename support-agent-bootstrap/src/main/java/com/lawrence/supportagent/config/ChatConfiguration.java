@@ -49,6 +49,7 @@ import com.lawrence.supportagent.retrieval.RetrievalParameters;
 import com.lawrence.supportagent.retrieval.RetrievalService;
 import com.lawrence.supportagent.retrieval.port.KnowledgeSourceValidityPort;
 import com.lawrence.supportagent.security.DeterministicPromptSecurityPolicy;
+import com.lawrence.supportagent.security.LlmSecurityTelemetryPort;
 import com.lawrence.supportagent.security.LlmSecuritySettings;
 import com.lawrence.supportagent.security.DeterministicModelOutputSecurityPolicy;
 import com.lawrence.supportagent.security.ModelOutputSecurityPolicy;
@@ -88,9 +89,14 @@ public class ChatConfiguration {
         return new LlmSecuritySettings(enabled, blockInput, excludeContext,
                 promptCanaryEnabled, maximumRegenerations);
     }
+    /** 创建只允许冻结枚举标签且不携带正文的 LLM 安全遥测端口。 */
+    @Bean public LlmSecurityTelemetryPort llmSecurityTelemetryPort(MeterRegistry registry) {
+        return new MicrometerLlmSecurityTelemetryAdapter(registry);
+    }
     /** 创建不依赖外部模型或服务的确定性 Prompt 注入策略。 */
-    @Bean public PromptSecurityPolicy promptSecurityPolicy(LlmSecuritySettings settings) {
-        return new DeterministicPromptSecurityPolicy(settings);
+    @Bean public PromptSecurityPolicy promptSecurityPolicy(
+            LlmSecuritySettings settings, LlmSecurityTelemetryPort telemetry) {
+        return new DeterministicPromptSecurityPolicy(settings, telemetry);
     }
     /** 创建不携带正文和高基数标签的二期优化遥测端口。 */
     @Bean public OptimizationTelemetryPort optimizationTelemetryPort(MeterRegistry registry) {
@@ -290,8 +296,9 @@ public class ChatConfiguration {
     }
     /** 创建单次随机标记与输出决策的统一安全服务。 */
     @Bean public ModelOutputSecurityService modelOutputSecurityService(
-            ModelOutputSecurityPolicy policy, LlmSecuritySettings settings, UuidGenerator ids) {
-        return new ModelOutputSecurityService(policy, settings, ids);
+            ModelOutputSecurityPolicy policy, LlmSecuritySettings settings, UuidGenerator ids,
+            LlmSecurityTelemetryPort telemetry) {
+        return new ModelOutputSecurityService(policy, settings, ids, telemetry);
     }
     /** 创建阶段四聊天用例。 */
     @Bean public ChatUseCase chatUseCase(IntentRecognitionService intents, RetrievalService retrieval,

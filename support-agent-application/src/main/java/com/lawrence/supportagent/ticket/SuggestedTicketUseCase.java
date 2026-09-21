@@ -77,10 +77,12 @@ public class SuggestedTicketUseCase {
                 }
                 if (assessment.action() == ModelOutputAction.REGENERATE
                         && outputSecurity.canRegenerate(regenerations)) {
+                    outputSecurity.recordRegeneration(ModelOutputType.TICKET_DRAFT);
                     regenerations++;
                     feedback = assessment.feedbackRules();
                     continue;
                 }
+                outputSecurity.recordFinalRejection(ModelOutputType.TICKET_DRAFT);
                 throw new ApplicationException(ErrorCode.CHAT_ANSWER_VALIDATION_FAILED,
                         "工单草稿未通过安全校验");
             } catch (ApplicationException exception) {

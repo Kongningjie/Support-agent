@@ -333,10 +333,12 @@ public class ChatUseCase {
             }
             if (assessment.action() == ModelOutputAction.REGENERATE
                     && outputSecurity.canRegenerate(regenerations)) {
+                outputSecurity.recordRegeneration(ModelOutputType.GREETING);
                 regenerations++;
                 feedback = assessment.feedbackRules();
                 continue;
             }
+            outputSecurity.recordFinalRejection(ModelOutputType.GREETING);
             throw outputValidationFailure();
         }
     }
@@ -365,10 +367,12 @@ public class ChatUseCase {
                 }
                 if (assessment.action() == ModelOutputAction.REGENERATE
                         && outputSecurity.canRegenerate(regenerations)) {
+                    outputSecurity.recordRegeneration(ModelOutputType.TICKET_ANSWER);
                     regenerations++;
                     feedback = assessment.feedbackRules();
                     continue;
                 }
+                outputSecurity.recordFinalRejection(ModelOutputType.TICKET_ANSWER);
                 throw outputValidationFailure();
             }
         } catch (ApplicationException exception) {
@@ -422,10 +426,12 @@ public class ChatUseCase {
             }
             if (assessment.action() == ModelOutputAction.REGENERATE
                     && outputSecurity.canRegenerate(regenerations)) {
+                outputSecurity.recordRegeneration(ModelOutputType.GROUNDED);
                 regenerations++;
                 feedback = assessment.feedbackRules();
                 continue;
             }
+            outputSecurity.recordFinalRejection(ModelOutputType.GROUNDED);
             throw outputValidationFailure();
         }
     }

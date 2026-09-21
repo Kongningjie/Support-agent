@@ -205,3 +205,11 @@ JaCoCo 生成报告但一期不设全局硬覆盖率。状态迁移、幂等、�
 - `support-agent.security.llm.maximum-regenerations` 默认 `1`：只允许第一次可修复输出失败后完整重生成一次。生产环境必须保持随机标记开启且重生成次数为 `1`，否则启动失败。
 - 输出规则只返回冻结枚举编号，不记录失败正文。阶段 16 不增加安全指标；低基数观测属于阶段 17。
 - 本地覆盖使用 `SUPPORT_AGENT_LLM_PROMPT_CANARY_ENABLED` 和 `SUPPORT_AGENT_LLM_MAXIMUM_REGENERATIONS`；不得通过公共 API 动态修改。
+
+## 14. 阶段 17 安全评测与观测
+
+- 固定数据集位于 `support-agent-infrastructure/src/main/resources/evaluation/llm-security-cases.jsonl`，字段 `caseId/category/source/input/expectedAction/requiredSignals/forbiddenSignals/notes` 分别表示稳定编号、样本类别、生产来源、测试正文、预期动作、必须命中的规则、禁止命中的规则和人工说明。数据集不含真实凭据或个人信息。
+- 数据集固定为直接注入 20、间接注入 20、输出泄漏或危险内容 15、困难正常样本 25；`mvn test` 自动执行生产确定性策略并生成不含正文的 `SecurityEvaluationReport`。
+- 指标前缀为 `support.agent.security`，记录 Prompt 评估、上下文排除、输出评估、完整重生成和最终拒绝。标签只允许 `source/action/signal/branch/rule`，未知输出规则折叠为固定 `NONE`，禁止业务标识、正文、随机标记和错误详情。
+- 安全策略异常执行失败关闭：输入预检异常不创建会话或调用模型；输出策略异常不外发、不提交会话且不持久化业务草稿。安全策略不参与 readiness，生产安全配置非法仍按既有规则启动失败。
+- 本阶段未运行 `mvn verify -Ponline-test`。固定数据集结果只证明本地策略与应用链路；真实 DashScope 对抗表现必须取得单独授权后验证。

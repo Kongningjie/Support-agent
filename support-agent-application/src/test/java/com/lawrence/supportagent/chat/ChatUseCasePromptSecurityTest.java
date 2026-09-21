@@ -1,6 +1,7 @@
 package com.lawrence.supportagent.chat;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.eq;
@@ -121,6 +122,25 @@ class ChatUseCasePromptSecurityTest {
         assertThat(ticket.title()).contains("系统提示词");
     }
 
+    /** 输入安全策略自身故障时必须在取得会话租约和调用模型前失败关闭。 */
+    @Test
+    void shouldFailClosedBeforeAnyStateOrModelCallWhenPromptPolicyFails() {
+        ConversationStorePort store = mock(ConversationStorePort.class);
+        ChatModelPort model = mock(ChatModelPort.class);
+        PromptSecurityPolicy failing = (content, source) -> {
+            throw new IllegalStateException("policy unavailable");
+        };
+        ChatUseCase useCase = useCase(store, mock(RetrievalService.class), model,
+                mock(TicketQueryUseCase.class), failing);
+
+        assertThatThrownBy(() -> useCase.prepare(new ChatRequest(ACTOR, null,
+                UUID.randomUUID(), "你好", null)))
+                .isInstanceOf(IllegalStateException.class);
+
+        verify(store, never()).begin(any(), any(), any(), any(), any(), any(), any());
+        verify(model, never()).greeting(any(), any(), any(), any(ModelInvocationSecurity.class));
+    }
+
     /** 创建具备稳定会话生命周期行为的测试存储端口。 */
     private ConversationStorePort preparedStore() {
         ConversationStorePort store = mock(ConversationStorePort.class);
@@ -138,13 +158,20 @@ class ChatUseCasePromptSecurityTest {
     /** 创建绑定真实确定性安全策略和测试替身的聊天用例。 */
     private ChatUseCase useCase(ConversationStorePort store, RetrievalService retrieval,
                                 ChatModelPort model, TicketQueryUseCase tickets) {
+        return useCase(store, retrieval, model, tickets, SECURITY);
+    }
+
+    /** 创建可注入安全策略的聊天用例，用于故障安全边界测试。 */
+    private ChatUseCase useCase(ConversationStorePort store, RetrievalService retrieval,
+                                ChatModelPort model, TicketQueryUseCase tickets,
+                                PromptSecurityPolicy promptSecurity) {
         return new ChatUseCase(new IntentRecognitionService(
                 (message, turns) -> new IntentDecision(ChatIntent.SUPPORT_QUERY, 1,
                         message, null, "TEST"), 0.70), retrieval, model, tickets, store,
                 mock(AgentAuditPort.class), mock(AnswerValidator.class), UUID::randomUUID,
                 () -> Instant.parse("2026-09-21T00:00:00Z"), "chat", "embedding", "rerank",
                 0.35, OptimizationTelemetryPort.noOp(), Duration.ofHours(24), null, null,
-                SECURITY);
+                promptSecurity);
     }
 
     /** 创建包含指定正文且满足检索结果结构的证据。 */

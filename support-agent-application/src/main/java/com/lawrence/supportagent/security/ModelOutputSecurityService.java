@@ -15,13 +15,21 @@ public class ModelOutputSecurityService {
     private final ModelOutputSecurityPolicy policy;
     private final LlmSecuritySettings settings;
     private final UuidGenerator ids;
+    private final LlmSecurityTelemetryPort telemetry;
 
     /** 注入输出策略、安全开关和随机标记生成器。 */
     public ModelOutputSecurityService(ModelOutputSecurityPolicy policy, LlmSecuritySettings settings,
                                       UuidGenerator ids) {
+        this(policy, settings, ids, LlmSecurityTelemetryPort.noOp());
+    }
+
+    /** 注入输出策略、安全开关、随机标记生成器和安全遥测端口。 */
+    public ModelOutputSecurityService(ModelOutputSecurityPolicy policy, LlmSecuritySettings settings,
+                                      UuidGenerator ids, LlmSecurityTelemetryPort telemetry) {
         this.policy = Objects.requireNonNull(policy, "模型输出安全策略不能为空");
         this.settings = Objects.requireNonNull(settings, "LLM 安全设置不能为空");
         this.ids = Objects.requireNonNull(ids, "随机标记生成器不能为空");
+        this.telemetry = telemetry == null ? LlmSecurityTelemetryPort.noOp() : telemetry;
     }
 
     /** 为一次受保护调用生成独立安全上下文，反馈中只保留低基数规则编号。 */
@@ -39,15 +47,30 @@ public class ModelOutputSecurityService {
                                         ModelInvocationSecurity invocation, String userMessage,
                                         List<RetrievalEvidence> evidence) {
         if (!settings.enabled()) {
-            return new ModelOutputAssessment(ModelOutputAction.PASS, List.of());
+            ModelOutputAssessment assessment = new ModelOutputAssessment(
+                    ModelOutputAction.PASS, List.of());
+            telemetry.recordOutputAssessment(type, assessment.action(), assessment.feedbackRules());
+            return assessment;
         }
-        return policy.assess(new ModelOutputRequest(type, output,
+        ModelOutputAssessment assessment = policy.assess(new ModelOutputRequest(type, output,
                 invocation == null ? null : invocation.canary(), userMessage, evidence));
+        telemetry.recordOutputAssessment(type, assessment.action(), assessment.feedbackRules());
+        return assessment;
     }
 
     /** 判断首次可修复失败是否允许执行一次完整重生成。 */
     public boolean canRegenerate(int regenerations) {
         return regenerations < settings.maximumRegenerations();
+    }
+
+    /** 记录一次完整重生成，不记录模型正文或业务标识。 */
+    public void recordRegeneration(ModelOutputType type) {
+        telemetry.recordRegeneration(type);
+    }
+
+    /** 记录最终拒绝，不记录未通过校验的模型正文。 */
+    public void recordFinalRejection(ModelOutputType type) {
+        telemetry.recordFinalRejection(type);
     }
 
     /** 创建适用于兼容构造器和单元测试的冻结默认实现。 */

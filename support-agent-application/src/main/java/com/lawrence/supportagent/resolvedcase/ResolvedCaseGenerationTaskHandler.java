@@ -124,11 +124,13 @@ public class ResolvedCaseGenerationTaskHandler implements AsyncTaskHandler {
             boolean correctable = assessment.action() == ModelOutputAction.REGENERATE
                     || assessment.action() == ModelOutputAction.PASS && !exactTermsValid;
             if (correctable && outputSecurity.canRegenerate(regenerations)) {
+                outputSecurity.recordRegeneration(ModelOutputType.RESOLVED_CASE_DRAFT);
                 regenerations++;
                 feedback = assessment.action() == ModelOutputAction.PASS
                         ? List.of("EXACT_VALUE_NOT_SUPPORTED") : assessment.feedbackRules();
                 continue;
             }
+            outputSecurity.recordFinalRejection(ModelOutputType.RESOLVED_CASE_DRAFT);
             throw new AsyncTaskExecutionException("CASE_GENERATION_OUTPUT_REJECTED",
                     "案例草稿未通过安全校验", false);
         }
