@@ -1,6 +1,8 @@
 # Repository Guidelines
 
-开始任何实现前，必须先阅读 `docs/implementation-plan/00-phased-implementation-plan.md`、`docs/implementation-plan/10-current-system-baseline.md`、`docs/standards/README.md` 和最近一份阶段工作记录。查阅已完成阶段的设计依据时，再完整阅读对应的一期、二期或三期计划；历史计划中的范围排除不代表当前能力缺失。一次只能执行当前冻结计划中的一个阶段，完成并通过门禁后必须停止，等待用户确认。
+开始任何实现前，必须先阅读 `docs/implementation-plan/00-phased-implementation-plan.md`、`docs/implementation-plan/10-current-system-baseline.md`、`docs/standards/README.md` 和最近一份阶段工作记录。执行轻量级云服务器部署时，还必须完整阅读 `docs/implementation-plan/12-phase-5-lightweight-deployment-plan.md`。查阅已完成阶段的设计依据时，再完整阅读对应的一期、二期、三期或四期计划；历史计划中的范围排除不代表当前能力缺失。一次只能执行当前冻结计划中的一个阶段，完成并通过门禁后必须停止，等待用户确认。
+
+执行前端阶段时，还必须完整阅读 `docs/frontend/implementation-plan/00-frontend-phased-implementation-plan.md`、`docs/frontend/implementation-plan/01-frontend-engineering-standard.md` 和最近一份 `docs/frontend/work-logs/` 记录。前端源代码固定放在 `support-agent-web/`，一次只执行 F1～F5 中一个明确阶段，不得用 Mock 或静态页面替代最终真实后端联调。
 
 ## 项目结构与模块职责
 
