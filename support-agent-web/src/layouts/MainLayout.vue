@@ -35,6 +35,14 @@ async function handleLogout(): Promise<void> {
           <span aria-hidden="true">◈</span>
           <span v-if="!collapsed">AI 支持</span>
         </RouterLink>
+        <RouterLink class="nav-item" to="/conversations">
+          <span aria-hidden="true">▤</span>
+          <span v-if="!collapsed">会话记录</span>
+        </RouterLink>
+        <RouterLink class="nav-item" to="/memories">
+          <span aria-hidden="true">◇</span>
+          <span v-if="!collapsed">长期记忆</span>
+        </RouterLink>
         <RouterLink class="nav-item" to="/account">
           <span aria-hidden="true">○</span>
           <span v-if="!collapsed">账号安全</span>

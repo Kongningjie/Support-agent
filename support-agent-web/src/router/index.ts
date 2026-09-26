@@ -32,7 +32,25 @@ export const router = createRouter({
     {
       path: '/chat',
       name: 'chat',
-      component: () => import('@/views/shell/ChatShellView.vue'),
+      component: () => import('@/views/chat/ChatView.vue'),
+      meta: { requiresAuth: true },
+    },
+    {
+      path: '/conversations',
+      name: 'conversations',
+      component: () => import('@/views/conversation/ConversationListView.vue'),
+      meta: { requiresAuth: true },
+    },
+    {
+      path: '/conversations/:id',
+      name: 'conversation-details',
+      component: () => import('@/views/chat/ChatView.vue'),
+      meta: { requiresAuth: true },
+    },
+    {
+      path: '/memories',
+      name: 'memories',
+      component: () => import('@/views/memory/MemoryView.vue'),
       meta: { requiresAuth: true },
     },
     {

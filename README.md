@@ -1,6 +1,6 @@
 # Support Agent
 
-基于 Java 21、Spring Boot 4.1、AgentScope Java 和 DashScope 的企业内部技术支持 Agent。当前已完成一期阶段 0～5、二期阶段 6～9、三期阶段 10～14（含阶段 13 补强）、四期阶段 15～17 和前端阶段 F1，覆盖知识检索与工单闭环、上下文压缩、本地认证、会话生命周期、用户可控长期记忆、账号安全、LLM 输入与输出安全治理，以及前端认证与应用外壳。
+基于 Java 21、Spring Boot 4.1、AgentScope Java 和 DashScope 的企业内部技术支持 Agent。当前已完成一期阶段 0～5、二期阶段 6～9、三期阶段 10～14（含阶段 13 补强）、四期阶段 15～17 和前端阶段 F1～F2，覆盖知识检索与工单闭环、上下文压缩、本地认证、会话生命周期、用户可控长期记忆、账号安全、LLM 输入与输出安全治理，以及前端认证、聊天、会话和记忆治理。
 
 当前实现的完整事实基线见 [当前系统基线](docs/implementation-plan/10-current-system-baseline.md)，历史阶段计划只用于解释当时的范围和决策。[四期 LLM 安全方案](docs/implementation-plan/11-phase-4-llm-security-plan.md)的阶段 15～17 已完成规定离线与集成门禁；真实 DashScope 对抗验证仍需单独授权，不能把固定数据集结果表述为在线模型安全率。
 
@@ -57,7 +57,7 @@ npm ci
 npm run dev
 ```
 
-浏览器访问 `http://localhost:5173`。F1 只提供认证与应用外壳；聊天、会话、长期记忆、工单和管理员治理页面将在 F2～F4 分阶段实现。
+浏览器访问 `http://localhost:5173`。当前已提供认证、聊天、会话和长期记忆页面；工单与管理员治理页面将在 F3～F4 分阶段实现。
 
 `.env` 只供 Docker Compose 读取，Spring Boot 不会自动加载它。通过 IDEA 启动时，请在 `SupportAgentApplication` 的 Run Configuration 中配置 `DASHSCOPE_API_KEY` 和 `DASHSCOPE_HTTP_BASE_URL`。这些变量只对被启动的应用进程生效，因此 IDEA Terminal 中不一定可见。
 
