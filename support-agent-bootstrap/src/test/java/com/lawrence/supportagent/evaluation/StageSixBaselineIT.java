@@ -283,7 +283,7 @@ class StageSixBaselineIT {
         @Bean @Primary
         RetrievalService deterministicRetrievalService(OptimizationTelemetryPort telemetry) {
             RetrievalService service = mock(RetrievalService.class);
-            when(service.retrieve(anyString())).thenAnswer(invocation -> {
+            when(service.retrieve(anyString(), any())).thenAnswer(invocation -> {
                 telemetry.recordDuration(Operation.RETRIEVAL, 1, true);
                 RetrievalEvidence evidence = new RetrievalEvidence("capacity-chunk", "MANAGED_DOCUMENT",
                         1, 1, "MySQL 连接故障标准", "连接排查", "请检查 MySQL 连接配置。",

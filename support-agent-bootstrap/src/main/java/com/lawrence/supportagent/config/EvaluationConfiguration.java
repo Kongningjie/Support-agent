@@ -9,6 +9,7 @@ import com.lawrence.supportagent.evaluation.RetrievalEvaluationContext;
 import com.lawrence.supportagent.evaluation.WorkingTreeGitCommitResolver;
 import com.lawrence.supportagent.evaluation.RetrievalMetricsCalculator;
 import com.lawrence.supportagent.evaluation.TargetRetrievalEvaluationReportAdapter;
+import com.lawrence.supportagent.knowledgespace.KnowledgeSpaceAccessService;
 import com.lawrence.supportagent.retrieval.RetrievalParameters;
 import com.lawrence.supportagent.retrieval.RetrievalService;
 import com.lawrence.supportagent.sharedkernel.port.TimeProvider;
@@ -43,8 +44,10 @@ public class EvaluationConfiguration {
     public RetrievalEvaluationService retrievalEvaluationService(
             RetrievalEvaluationDatasetPort dataset, RetrievalEvaluationReportPort reports,
             RetrievalService retrieval, RetrievalMetricsCalculator metrics,
-            UuidGenerator ids, TimeProvider time, EvaluationRuntimeMetadataPort metadata) {
-        return new RetrievalEvaluationService(dataset, reports, retrieval, metrics, ids, time, metadata);
+            UuidGenerator ids, TimeProvider time, EvaluationRuntimeMetadataPort metadata,
+            KnowledgeSpaceAccessService spaceAccess) {
+        return new RetrievalEvaluationService(dataset, reports, retrieval, metrics, ids, time,
+                metadata, spaceAccess);
     }
 
     /** 创建包含提交、模型和冻结检索参数的报告元数据端口。 */

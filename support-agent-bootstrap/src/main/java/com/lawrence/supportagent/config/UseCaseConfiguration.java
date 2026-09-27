@@ -8,6 +8,8 @@ import com.lawrence.supportagent.asynctask.port.AsyncTaskRepository;
 import com.lawrence.supportagent.asynctask.port.AsyncTaskCompletionPort;
 import com.lawrence.supportagent.idempotency.IdempotentExecutor;
 import com.lawrence.supportagent.knowledge.port.ManagedDocumentRepository;
+import com.lawrence.supportagent.knowledgespace.KnowledgeSpaceAccessService;
+import com.lawrence.supportagent.knowledgespace.port.KnowledgeSpaceRepository;
 import com.lawrence.supportagent.resolvedcase.port.ResolvedCaseRepository;
 import com.lawrence.supportagent.resolvedcase.ResolvedCaseQueryUseCase;
 import com.lawrence.supportagent.resolvedcase.ResolvedCaseGenerationTaskHandler;
@@ -35,8 +37,10 @@ import org.springframework.context.annotation.Configuration;
 public class UseCaseConfiguration {
     /** 创建工单只读查询用例。 */
     @Bean
-    public TicketQueryUseCase ticketQueryUseCase(TicketRepository repository) {
-        return new TicketQueryUseCase(repository);
+    public TicketQueryUseCase ticketQueryUseCase(TicketRepository repository,
+                                                  KnowledgeSpaceRepository spaces,
+                                                  KnowledgeSpaceAccessService access) {
+        return new TicketQueryUseCase(repository, spaces, access);
     }
 
     /** 创建具有外部幂等保护的工单命令用例。 */
@@ -45,9 +49,10 @@ public class UseCaseConfiguration {
                                                       TicketQueryUseCase queryUseCase,
                                                       IdempotentExecutor executor,
                                                       TimeProvider timeProvider,
-                                                      AsyncTaskCreator taskCreator) {
+                                                      AsyncTaskCreator taskCreator,
+                                                      KnowledgeSpaceAccessService access) {
         return new TicketCommandUseCase(repository, queryUseCase, executor,
-                timeProvider, taskCreator);
+                timeProvider, taskCreator, access);
     }
 
     /** 创建显式消费会话建议的工单草稿用例。 */
@@ -57,9 +62,10 @@ public class UseCaseConfiguration {
                                                            TicketCommandUseCase commands,
                                                            TicketQueryUseCase queries,
                                                            TimeProvider timeProvider,
-                                                           ModelOutputSecurityService outputSecurity) {
+                                                           ModelOutputSecurityService outputSecurity,
+                                                           KnowledgeSpaceAccessService access) {
         return new SuggestedTicketUseCase(conversations, model, commands, queries,
-                timeProvider, outputSecurity);
+                timeProvider, outputSecurity, access);
     }
 
     /** 创建供后续业务事务内投递任务的统一入口。 */
@@ -92,16 +98,19 @@ public class UseCaseConfiguration {
                                               ResolvedCaseRepository caseRepository,
                                               IdempotentExecutor executor,
                                               OperatorProvider operatorProvider,
-                                              TimeProvider timeProvider) {
+                                              TimeProvider timeProvider,
+                                              KnowledgeSpaceAccessService access) {
         return new AsyncTaskUseCase(taskRepository, ticketRepository, documentRepository,
-                caseRepository, executor, operatorProvider, timeProvider);
+                caseRepository, executor, operatorProvider, timeProvider, access);
     }
 
     /** 创建已解决案例查询用例。 */
     @Bean
     public ResolvedCaseQueryUseCase resolvedCaseQueryUseCase(ResolvedCaseRepository cases,
-                                                              TicketRepository tickets) {
-        return new ResolvedCaseQueryUseCase(cases, tickets);
+                                                              TicketRepository tickets,
+                                                              KnowledgeSpaceRepository spaces,
+                                                              KnowledgeSpaceAccessService access) {
+        return new ResolvedCaseQueryUseCase(cases, tickets, spaces, access);
     }
 
     /** 注册已解决工单的异步案例草稿生成处理器。 */

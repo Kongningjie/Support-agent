@@ -17,6 +17,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -53,20 +54,25 @@ public class RetrievalService implements AutoCloseable {
     }
 
     /** 执行完整检索并保证单分支失败可降级、双分支失败明确报错。 */
-    public RetrievalResult retrieve(String query) {
+    public RetrievalResult retrieve(String query, RetrievalAccessContext accessContext) {
+        if (accessContext == null) {
+            throw new IllegalArgumentException("检索访问上下文不能为空");
+        }
+        Set<UUID> allowedSpaceIds = accessContext.allowedSpaceIds();
         long started = System.nanoTime();
         boolean succeeded = false;
         try {
             CompletableFuture<BranchResult> bm25Task = CompletableFuture.supplyAsync(
-                    () -> callBm25(query), branches);
+                    () -> callBm25(query, allowedSpaceIds), branches);
             CompletableFuture<BranchResult> vectorTask = CompletableFuture.supplyAsync(
-                    () -> callVector(query), branches);
+                    () -> callVector(query, allowedSpaceIds), branches);
             BranchResult bm25 = bm25Task.join();
             BranchResult vector = vectorTask.join();
             if (bm25.status == BranchStatus.FAILED && vector.status == BranchStatus.FAILED) {
                 return failed(started);
             }
-            List<RetrievalEvidence> fused = validSources(fuse(bm25.items, vector.items));
+            List<RetrievalEvidence> fused = validSources(fuse(bm25.items, vector.items),
+                    allowedSpaceIds);
             RerankOutcome reranked = rerank(query, fused);
             List<RetrievalEvidence> selected = selectReliable(reranked.items, reranked.status);
             RetrievalStatus status = selected.isEmpty() ? RetrievalStatus.NO_RELIABLE_KNOWLEDGE
@@ -80,19 +86,33 @@ public class RetrievalService implements AutoCloseable {
         }
     }
 
-    /** 按固定评测模式同时返回原始排名和应用生产可靠性规则后的最终判断。 */
-    public RetrievalRanking rank(String query, RetrievalMode mode) {
+    /** 使用服务端已授权上下文按固定评测模式返回原始排名和最终判断。 */
+    public RetrievalRanking rank(String query, RetrievalMode mode,
+                                 RetrievalAccessContext accessContext) {
+        if (accessContext == null) {
+            throw new IllegalArgumentException("评测空间上下文不能为空");
+        }
+        return rankInternal(query, mode, accessContext.allowedSpaceIds());
+    }
+
+    /** 使用已校验空间集合执行固定模式排名。 */
+    private RetrievalRanking rankInternal(String query, RetrievalMode mode,
+                                          Set<UUID> allowedSpaceIds) {
         if (query == null || query.isBlank() || mode == null) {
             throw new IllegalArgumentException("评测问题和检索模式不能为空");
         }
+        if (allowedSpaceIds == null || allowedSpaceIds.isEmpty()) {
+            throw new IllegalArgumentException("评测空间上下文不能为空");
+        }
         BranchResult bm25 = mode == RetrievalMode.VECTOR_ONLY
-                ? new BranchResult(BranchStatus.SKIPPED, List.of()) : callBm25(query);
+                ? new BranchResult(BranchStatus.SKIPPED, List.of()) : callBm25(query, allowedSpaceIds);
         BranchResult vector = mode == RetrievalMode.BM25_ONLY
-                ? new BranchResult(BranchStatus.SKIPPED, List.of()) : callVector(query);
+                ? new BranchResult(BranchStatus.SKIPPED, List.of()) : callVector(query, allowedSpaceIds);
         List<RetrievalEvidence> candidates = switch (mode) {
-            case BM25_ONLY -> validSources(bm25.items);
-            case VECTOR_ONLY -> validSources(vector.items);
-            case HYBRID, HYBRID_RERANK -> validSources(fuse(bm25.items, vector.items));
+            case BM25_ONLY -> validSources(bm25.items, allowedSpaceIds);
+            case VECTOR_ONLY -> validSources(vector.items, allowedSpaceIds);
+            case HYBRID, HYBRID_RERANK -> validSources(fuse(bm25.items, vector.items),
+                    allowedSpaceIds);
         };
         RerankOutcome reranked = mode == RetrievalMode.HYBRID_RERANK
                 ? rerank(query, candidates)
@@ -109,11 +129,17 @@ public class RetrievalService implements AutoCloseable {
                 bm25.status, vector.status, reranked.status);
     }
 
+    /** 使用显式 GLOBAL 上下文运行阶段 19 前锁定回归集。 */
+    public RetrievalRanking rank(String query, RetrievalMode mode) {
+        return rankInternal(query, mode, Set.of(
+                com.lawrence.supportagent.knowledgespace.KnowledgeSpace.GLOBAL_SPACE_ID));
+    }
+
     /** 安全执行 BM25 分支并把异常收敛为分支失败。 */
-    private BranchResult callBm25(String query) {
+    private BranchResult callBm25(String query, Set<UUID> allowedSpaceIds) {
         try {
             return new BranchResult(BranchStatus.SUCCEEDED,
-                    ranked(searchPort.searchBm25(query, parameters.bm25TopK()), true,
+                    ranked(searchPort.searchBm25(query, allowedSpaceIds, parameters.bm25TopK()), true,
                             parameters.bm25TopK()));
         } catch (RuntimeException exception) {
             return new BranchResult(BranchStatus.FAILED, List.of());
@@ -121,10 +147,11 @@ public class RetrievalService implements AutoCloseable {
     }
 
     /** 安全执行向量分支并把模型或搜索异常收敛为分支失败。 */
-    private BranchResult callVector(String query) {
+    private BranchResult callVector(String query, Set<UUID> allowedSpaceIds) {
         try {
             List<Double> vector = embeddingModel.embedQuery(query);
             return new BranchResult(BranchStatus.SUCCEEDED, ranked(searchPort.searchVector(vector,
+                    allowedSpaceIds,
                     parameters.vectorTopK(), parameters.vectorCandidates(),
                     parameters.vectorMinimumSimilarity()), false, parameters.vectorTopK()));
         } catch (RuntimeException exception) {
@@ -163,17 +190,20 @@ public class RetrievalService implements AutoCloseable {
         Set<String> matches = new HashSet<>(left.matchedQueries());
         matches.addAll(right.matchedQueries());
         return new RetrievalEvidence(left.chunkId(), left.sourceType(), left.sourceId(),
-                left.sourceVersion(), left.title(), left.headingPath(), left.content(),
+                left.sourceVersion(), left.spaceId(), left.title(), left.headingPath(), left.content(),
                 left.exactTerms(), Set.copyOf(matches), left.bm25Rank(), right.vectorRank(), 0, null);
     }
 
     /** 批量剔除 MySQL 中已归档、删除或版本失效的索引候选。 */
-    private List<RetrievalEvidence> validSources(List<RetrievalEvidence> candidates) {
+    private List<RetrievalEvidence> validSources(List<RetrievalEvidence> candidates,
+                                                 Set<UUID> allowedSpaceIds) {
         List<SourceVersion> requested = candidates.stream().map(value -> new SourceVersion(
-                value.sourceType(), value.sourceId(), value.sourceVersion())).distinct().toList();
-        Set<SourceVersion> valid = validityPort.findValid(requested);
+                value.sourceType(), value.sourceId(), value.sourceVersion(),
+                value.spaceId())).distinct().toList();
+        Set<SourceVersion> valid = validityPort.findValid(requested, allowedSpaceIds);
         return candidates.stream().filter(value -> valid.contains(new SourceVersion(
-                value.sourceType(), value.sourceId(), value.sourceVersion()))).toList();
+                value.sourceType(), value.sourceId(), value.sourceVersion(),
+                value.spaceId()))).toList();
     }
 
     /** 调用重排端口；任何未知、重复、缺失 ID 或非法分数使整次重排降级。 */
@@ -295,7 +325,7 @@ public class RetrievalService implements AutoCloseable {
     private RetrievalEvidence copy(RetrievalEvidence value, Integer bm25Rank, Integer vectorRank,
                                    double rrfScore, Double rerankScore) {
         return new RetrievalEvidence(value.chunkId(), value.sourceType(), value.sourceId(),
-                value.sourceVersion(), value.title(), value.headingPath(), value.content(),
+                value.sourceVersion(), value.spaceId(), value.title(), value.headingPath(), value.content(),
                 value.exactTerms(), value.matchedQueries(), bm25Rank, vectorRank, rrfScore, rerankScore);
     }
 

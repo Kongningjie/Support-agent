@@ -65,7 +65,8 @@ class StageSixQualityBaselineIT {
             index.indexChunks(corpus(mapper));
             EmbeddingModelPort embeddings = new DeterministicEmbeddingModel();
             RerankModelPort rerank = new DeterministicRerankModel();
-            try (RetrievalService retrieval = new RetrievalService(index, requested -> Set.copyOf(requested),
+            try (RetrievalService retrieval = new RetrievalService(index,
+                    (requested, allowed) -> Set.copyOf(requested),
                     embeddings, rerank, RetrievalParameters.stageSixBaseline())) {
                 ClasspathRetrievalEvaluationDatasetAdapter datasets =
                         new ClasspathRetrievalEvaluationDatasetAdapter(mapper);

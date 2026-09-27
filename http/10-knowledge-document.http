@@ -1,4 +1,5 @@
 @baseUrl = http://localhost:8080/api/v1
+@globalSpaceId = 00000000-0000-0000-0000-000000000001
 
 ### 直接文本创建知识草稿；响应 documentId 为字符串
 # @name createKnowledgeText
@@ -6,6 +7,7 @@ POST {{baseUrl}}/knowledge/documents/text
 Content-Type: application/json
 
 {
+  "spaceId": "{{globalSpaceId}}",
   "title": "MySQL 连接故障排查",
   "content": "# 连接检查\n先确认 ERROR_CONNECTION_REFUSED，再运行 `Test-NetConnection localhost -Port 3306`。",
   "idempotencyKey": "knowledge-create-text-local-001"
@@ -18,6 +20,10 @@ Content-Type: application/json
 POST {{baseUrl}}/knowledge/documents/files
 Content-Type: multipart/form-data; boundary=SupportAgentBoundary
 
+--SupportAgentBoundary
+Content-Disposition: form-data; name="spaceId"
+
+{{globalSpaceId}}
 --SupportAgentBoundary
 Content-Disposition: form-data; name="idempotencyKey"
 
@@ -78,4 +84,8 @@ Content-Type: application/json
 
 ### 仅允许删除从未发布的 DRAFT
 DELETE {{baseUrl}}/knowledge/documents/{{documentId}}?version={{documentVersion}}
+Accept: application/json
+
+### 管理员受控重建新物理索引；完整性核对通过后才原子切换业务别名
+POST {{baseUrl}}/admin/knowledge-index/rebuild
 Accept: application/json

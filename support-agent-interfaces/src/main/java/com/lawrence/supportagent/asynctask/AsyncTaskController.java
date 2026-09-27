@@ -1,5 +1,6 @@
 package com.lawrence.supportagent.asynctask;
 
+import com.lawrence.supportagent.auth.AuthenticatedUser;
 import com.lawrence.supportagent.sharedkernel.api.ApiResponseFactory;
 import com.lawrence.supportagent.sharedkernel.api.ApiResult;
 import com.lawrence.supportagent.sharedkernel.api.PageResult;
@@ -14,6 +15,7 @@ import java.time.Instant;
 import java.util.List;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -41,17 +43,19 @@ public class AsyncTaskController {
     @Operation(summary = "查询异步任务详情")
     @GetMapping("/{taskId}")
     public ApiResult<AsyncTaskResponse> get(
+                                             @AuthenticationPrincipal AuthenticatedUser actor,
                                              @Parameter(description = "正整数任务 ID 的字符串形式",
                                                      example = "42")
                                              @PathVariable String taskId,
                                              HttpServletRequest request) {
-        return responses.success(AsyncTaskResponse.from(useCase.get(parseId(taskId))), request);
+        return responses.success(AsyncTaskResponse.from(useCase.get(actor, parseId(taskId))), request);
     }
 
     /** 按受控过滤条件和固定排序查询一页异步任务。 */
     @Operation(summary = "分页查询异步任务")
     @GetMapping
     public ApiResult<PageResult<AsyncTaskResponse>> page(
+            @AuthenticationPrincipal AuthenticatedUser actor,
             @Parameter(description = "可空任务类型过滤条件", example = "KNOWLEDGE_INDEX")
             @RequestParam(required = false) AsyncTaskType taskType,
             @Parameter(description = "可空任务状态过滤条件", example = "DEAD")
@@ -66,7 +70,7 @@ public class AsyncTaskController {
             @RequestParam(defaultValue = "20") int size,
             HttpServletRequest request) {
         Long parsedAggregateId = aggregateId == null ? null : parseId(aggregateId);
-        AsyncTaskPage result = useCase.page(taskType, status, aggregateType,
+        AsyncTaskPage result = useCase.page(actor, taskType, status, aggregateType,
                 parsedAggregateId, page, size);
         List<AsyncTaskResponse> items = result.items().stream()
                 .map(AsyncTaskResponse::from).toList();
@@ -78,10 +82,11 @@ public class AsyncTaskController {
     @Operation(summary = "人工重试死亡任务")
     @PostMapping("/{taskId}/retry")
     public ResponseEntity<ApiResult<AsyncTaskResponse>> retry(
+            @AuthenticationPrincipal AuthenticatedUser actor,
             @Parameter(description = "待重试的死亡任务 ID", example = "42")
             @PathVariable String taskId, @Valid @RequestBody RetryTaskRequest body,
             HttpServletRequest request) {
-        AsyncTaskDetails created = useCase.retry(parseId(taskId), body.reason(), body.idempotencyKey());
+        AsyncTaskDetails created = useCase.retry(actor, parseId(taskId), body.reason(), body.idempotencyKey());
         return ResponseEntity.status(HttpStatus.CREATED)
                 .body(responses.success(AsyncTaskResponse.from(created), request));
     }

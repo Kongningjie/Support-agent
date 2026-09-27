@@ -4,6 +4,8 @@ import com.lawrence.supportagent.resolvedcase.ResolvedCase;
 import com.lawrence.supportagent.resolvedcase.ResolvedCaseStatus;
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
+import java.util.UUID;
 
 /** 定义已解决案例聚合的持久化边界。 */
 public interface ResolvedCaseRepository {
@@ -18,8 +20,21 @@ public interface ResolvedCaseRepository {
 
     /** 按状态、来源工单编号和关键词读取一页案例。 */
     List<ResolvedCase> findPage(ResolvedCaseStatus status, String sourceTicketNo,
-                                String keyword, int offset, int size);
+                                String keyword, Set<UUID> spaceIds,
+                                boolean publishedOnly, int offset, int size);
+
+    /** 兼容既有内部调用的全空间分页；新授权用例必须使用显式空间重载。 */
+    default List<ResolvedCase> findPage(ResolvedCaseStatus status, String sourceTicketNo,
+                                        String keyword, int offset, int size) {
+        return findPage(status, sourceTicketNo, keyword, Set.of(), false, offset, size);
+    }
 
     /** 统计与分页条件一致的案例数量。 */
-    long count(ResolvedCaseStatus status, String sourceTicketNo, String keyword);
+    long count(ResolvedCaseStatus status, String sourceTicketNo, String keyword,
+               Set<UUID> spaceIds, boolean publishedOnly);
+
+    /** 兼容既有内部调用的全空间计数；新授权用例必须使用显式空间重载。 */
+    default long count(ResolvedCaseStatus status, String sourceTicketNo, String keyword) {
+        return count(status, sourceTicketNo, keyword, Set.of(), false);
+    }
 }

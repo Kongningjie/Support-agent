@@ -38,6 +38,8 @@ public enum ErrorCode {
     KNOWLEDGE_SPACE_NOT_FOUND,
     /** 调用者可见空间但缺少 EDITOR 或 MANAGER 角色。 */
     KNOWLEDGE_SPACE_ROLE_REQUIRED,
+    /** 需要显式空间上下文的请求未提供空间 UUID。 */
+    KNOWLEDGE_SPACE_CONTEXT_REQUIRED,
     /** 已知空间已停用，禁止当前写操作。 */
     KNOWLEDGE_SPACE_DISABLED,
     /** 稳定空间代码已存在。 */
@@ -86,6 +88,8 @@ public enum ErrorCode {
     DASHSCOPE_NOT_CONFIGURED,
     /** 会话版本与服务端当前版本不一致。 */
     CHAT_VERSION_CONFLICT,
+    /** 请求选择的知识空间与既有会话绑定空间不一致。 */
+    CHAT_SPACE_MISMATCH,
     /** 指定的后续会话已经过期或不存在。 */
     CHAT_CONVERSATION_EXPIRED,
     /** 同一会话已有未过期的运行。 */

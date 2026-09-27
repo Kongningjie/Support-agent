@@ -70,7 +70,8 @@ public class AsyncTaskRunner {
         try {
             successMutation = handler.execute(context);
         } catch (AsyncTaskCancelledException exception) {
-            completionPort.cancel(task.id(), workerId, timeProvider.now(),
+            completionPort.cancel(task.id(), workerId, exception.errorCode(),
+                    exception.getMessage(), timeProvider.now(),
                     exception.businessMutation());
             return;
         } catch (AsyncTaskExecutionException exception) {

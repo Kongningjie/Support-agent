@@ -16,6 +16,6 @@ public interface AsyncTaskCompletionPort {
               AsyncTaskBusinessMutation finalFailureMutation);
 
     /** 在同一事务内执行失效业务动作并取消当前持锁任务。 */
-    void cancel(long taskId, String workerId, Instant now,
+    void cancel(long taskId, String workerId, String errorCode, String errorMessage, Instant now,
                 AsyncTaskBusinessMutation businessMutation);
 }

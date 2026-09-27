@@ -1,6 +1,7 @@
 @baseUrl = http://localhost:8080
 @accessToken = replace-with-login-access-token
 @conversationId = 22222222-2222-2222-2222-222222222222
+@globalSpaceId = 00000000-0000-0000-0000-000000000001
 
 ### 按最近访问时间倒序查询本人会话；page 从 1 开始，size 范围 1～100
 GET {{baseUrl}}/api/v1/conversations?page=1&size=20
@@ -16,6 +17,7 @@ Authorization: Bearer {{accessToken}}
 Content-Type: application/json
 
 {
+  "spaceId": "{{globalSpaceId}}",
   "expectedVersion": 1
 }
 

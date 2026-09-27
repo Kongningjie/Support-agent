@@ -8,6 +8,8 @@ import java.util.UUID;
  * 工单对外查询视图，不包含 MySQL 内部主键。
  *
  * @param ticketNo 稳定对外工单编号
+ * @param spaceId 工单归属的知识空间 UUID
+ * @param space 已授权读取的知识空间最小摘要
  * @param title 工单标题
  * @param problemDescription 问题现象与背景
  * @param attemptedActions 已尝试操作，可为空
@@ -28,13 +30,18 @@ public record TicketDetails(String ticketNo, UUID spaceId, KnowledgeSpaceSummary
                             Instant createdAt, Instant updatedAt, Instant resolvedAt,
                             Instant closedAt) {
     /** 从领域聚合创建不泄露内部主键和操作者信息的查询视图。 */
-    public static TicketDetails from(Ticket ticket) {
+    public static TicketDetails from(Ticket ticket, KnowledgeSpaceSummary space) {
         return new TicketDetails(ticket.ticketNo(), ticket.spaceId(),
-                KnowledgeSpaceSummary.global(ticket.spaceId()),
+                space,
                 ticket.title(), ticket.problemDescription(),
                 ticket.attemptedActions(), ticket.status(), ticket.rootCause(), ticket.solution(),
                 ticket.closeReason(), ticket.version(), ticket.createdAt(), ticket.updatedAt(),
                 ticket.resolvedAt(), ticket.closedAt());
+    }
+
+    /** 为内部 GLOBAL 路径保留兼容工厂。 */
+    public static TicketDetails from(Ticket ticket) {
+        return from(ticket, KnowledgeSpaceSummary.global(ticket.spaceId()));
     }
 
     /** 为既有测试构造保留 GLOBAL 空间兼容入口。 */

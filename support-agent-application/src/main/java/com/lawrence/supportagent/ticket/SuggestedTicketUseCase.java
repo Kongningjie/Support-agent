@@ -3,6 +3,7 @@ package com.lawrence.supportagent.ticket;
 import com.lawrence.supportagent.auth.AuthenticatedUser;
 import com.lawrence.supportagent.chat.port.ConversationStorePort;
 import com.lawrence.supportagent.chat.port.ConversationStorePort.SuggestionClaim;
+import com.lawrence.supportagent.knowledgespace.KnowledgeSpaceAccessService;
 import com.lawrence.supportagent.model.ChatModelPort;
 import com.lawrence.supportagent.model.ChatModelPort.TicketDraft;
 import com.lawrence.supportagent.model.ModelInvocationSecurity;
@@ -25,22 +26,32 @@ public class SuggestedTicketUseCase {
     private final TicketQueryUseCase queries;
     private final TimeProvider time;
     private final ModelOutputSecurityService outputSecurity;
+    private final KnowledgeSpaceAccessService spaceAccess;
 
     /** 注入建议存储、模型、工单命令与查询用例。 */
     public SuggestedTicketUseCase(ConversationStorePort conversations, ChatModelPort model,
                                   TicketCommandUseCase commands, TicketQueryUseCase queries,
                                   TimeProvider time) {
         this(conversations, model, commands, queries, time,
-                ModelOutputSecurityService.standard(UUID::randomUUID));
+                ModelOutputSecurityService.standard(UUID::randomUUID), null);
     }
 
     /** 注入阶段 16 统一输出安全网关和全部既有依赖。 */
     public SuggestedTicketUseCase(ConversationStorePort conversations, ChatModelPort model,
                                   TicketCommandUseCase commands, TicketQueryUseCase queries,
                                   TimeProvider time, ModelOutputSecurityService outputSecurity) {
+        this(conversations, model, commands, queries, time, outputSecurity, null);
+    }
+
+    /** 注入阶段 19 建议空间复核、统一输出安全网关和全部既有依赖。 */
+    public SuggestedTicketUseCase(ConversationStorePort conversations, ChatModelPort model,
+                                  TicketCommandUseCase commands, TicketQueryUseCase queries,
+                                  TimeProvider time, ModelOutputSecurityService outputSecurity,
+                                  KnowledgeSpaceAccessService spaceAccess) {
         this.conversations = conversations; this.model = model; this.commands = commands;
         this.queries = queries; this.time = time;
         this.outputSecurity = Objects.requireNonNull(outputSecurity, "模型输出安全服务不能为空");
+        this.spaceAccess = spaceAccess;
     }
 
     /** 原子取得建议、至多重试一次模型生成并返回首次创建的工单。 */
@@ -52,9 +63,13 @@ public class SuggestedTicketUseCase {
         SuggestionClaim claim = conversations.claimSuggestion(actor.userId(), conversationId,
                 suggestionId, time.now());
         if ("CONSUMED".equals(claim.status())) return queries.get(actor, claim.ticketNo());
+        if (spaceAccess != null) {
+            spaceAccess.requireActiveReadable(actor, claim.spaceId());
+        }
         TicketDraft draft = draft(claim.frozenContext());
-        TicketDetails ticket = commands.createSuggestedDraft(actor, conversationId, claim.sourceTurnId(),
-                draft.title(), draft.problemDescription(), draft.attemptedActions(), idempotencyKey);
+        TicketDetails ticket = commands.createSuggestedDraft(actor, claim.spaceId(), conversationId,
+                claim.sourceTurnId(), draft.title(), draft.problemDescription(),
+                draft.attemptedActions(), idempotencyKey);
         conversations.consumeSuggestion(actor.userId(), conversationId, suggestionId,
                 claim.claimId(), ticket.ticketNo(), time.now());
         return ticket;

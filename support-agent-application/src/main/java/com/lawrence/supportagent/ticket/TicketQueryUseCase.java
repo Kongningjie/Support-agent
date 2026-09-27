@@ -1,39 +1,58 @@
 package com.lawrence.supportagent.ticket;
 
 import com.lawrence.supportagent.auth.AuthenticatedUser;
+import com.lawrence.supportagent.knowledgespace.KnowledgeSpace;
+import com.lawrence.supportagent.knowledgespace.KnowledgeSpaceAccessService;
+import com.lawrence.supportagent.knowledgespace.KnowledgeSpaceSummary;
+import com.lawrence.supportagent.knowledgespace.port.KnowledgeSpaceRepository;
 import com.lawrence.supportagent.sharedkernel.error.ApplicationException;
 import com.lawrence.supportagent.sharedkernel.error.ErrorCode;
 import com.lawrence.supportagent.ticket.port.TicketRepository;
 import java.util.List;
+import java.util.Set;
+import java.util.UUID;
 import java.util.regex.Pattern;
 
 /** 提供 REST 与后续 Agent 工具共用的只读、脱敏工单查询边界。 */
 public class TicketQueryUseCase {
     private static final Pattern TICKET_NUMBER = Pattern.compile("T\\d{12}");
     private final TicketRepository repository;
+    private final KnowledgeSpaceRepository spaces;
+    private final KnowledgeSpaceAccessService access;
 
     /** 使用工单持久化端口创建查询用例。 */
-    public TicketQueryUseCase(TicketRepository repository) {
+    public TicketQueryUseCase(TicketRepository repository, KnowledgeSpaceRepository spaces,
+                              KnowledgeSpaceAccessService access) {
         this.repository = repository;
+        this.spaces = spaces;
+        this.access = access;
     }
 
     /** 按当前用户或管理员范围查询工单详情。 */
     public TicketDetails get(AuthenticatedUser actor, String ticketNo) {
-        return TicketDetails.from(requireTicket(actor, ticketNo));
+        Ticket value = requireTicket(actor, ticketNo);
+        requireTicketSpaceReadable(actor, value);
+        return details(value);
     }
 
     /** 按稳定排序、状态和关键词返回一页工单摘要。 */
     public TicketPage page(AuthenticatedUser actor, TicketStatus status, String keyword,
-                           int page, int size) {
+                           UUID spaceId, int page, int size) {
+        if (actor == null) {
+            throw new ApplicationException(ErrorCode.AUTH_UNAUTHORIZED,
+                    "认证信息无效或已经过期");
+        }
         if (page < 1 || size < 1 || size > 100 || page - 1 > Integer.MAX_VALUE / size) {
             throw new IllegalArgumentException("页码必须从 1 开始且每页数量为 1 至 100");
         }
         String normalizedKeyword = normalizeOptional(keyword);
         int offset = (page - 1) * size;
-        long total = repository.count(status, normalizedKeyword, actor.userId(), actor.administrator());
-        List<TicketSummary> items = repository.findPage(status, normalizedKeyword, actor.userId(),
+        Set<UUID> allowedSpaces = allowedSpaces(actor, spaceId);
+        long total = repository.count(status, normalizedKeyword, allowedSpaces,
+                actor.userId(), actor.administrator());
+        List<TicketSummary> items = repository.findPage(status, normalizedKeyword, allowedSpaces, actor.userId(),
                         actor.administrator(), offset, size)
-                .stream().map(TicketSummary::from).toList();
+                .stream().map(this::summary).toList();
         long pages = total == 0 ? 0 : (total - 1) / size + 1;
         return new TicketPage(items, page, size, total,
                 pages > Integer.MAX_VALUE ? Integer.MAX_VALUE : (int) pages);
@@ -41,7 +60,7 @@ public class TicketQueryUseCase {
 
     /** 按内部主键重查幂等操作首次关联的工单。 */
     public TicketDetails getByInternalId(long id) {
-        return TicketDetails.from(repository.findById(id).orElseThrow(this::notFound));
+        return details(repository.findById(id).orElseThrow(this::notFound));
     }
 
     /** 校验公开编号后按当前用户或管理员范围读取工单聚合。 */
@@ -54,6 +73,37 @@ public class TicketQueryUseCase {
         }
         return repository.findByTicketNoForAccess(ticketNo, actor.userId(), actor.administrator())
                 .orElseThrow(this::notFound);
+    }
+
+    /** 将工单投影为携带真实空间摘要的详情。 */
+    public TicketDetails details(Ticket value) {
+        return TicketDetails.from(value, spaceSummary(value.spaceId()));
+    }
+
+    /** 构造列表允许空间；显式筛选空间时必须先通过空间读取授权。 */
+    private Set<UUID> allowedSpaces(AuthenticatedUser actor, UUID requestedSpaceId) {
+        if (requestedSpaceId != null) {
+            access.requireReadable(actor, requestedSpaceId);
+            return Set.of(requestedSpaceId);
+        }
+        return actor.administrator() ? Set.of() : access.readableActiveSpaceIds(actor);
+    }
+
+    /** 对单个工单保留本人或管理员规则并附加空间可见性检查。 */
+    private void requireTicketSpaceReadable(AuthenticatedUser actor, Ticket ticket) {
+        if (!actor.administrator()) access.requireReadable(actor, ticket.spaceId());
+    }
+
+    /** 从工单生成带真实空间摘要的列表项。 */
+    private TicketSummary summary(Ticket value) {
+        return TicketSummary.from(value, spaceSummary(value.spaceId()));
+    }
+
+    /** 读取工单所属空间的最小摘要。 */
+    private KnowledgeSpaceSummary spaceSummary(UUID spaceId) {
+        KnowledgeSpace space = spaces.findBySpaceId(spaceId).orElseThrow(() ->
+                new IllegalStateException("工单所属知识空间不存在"));
+        return KnowledgeSpaceSummary.from(space);
     }
 
     /** 把可空关键词规整为空或去除首尾空白后的值。 */

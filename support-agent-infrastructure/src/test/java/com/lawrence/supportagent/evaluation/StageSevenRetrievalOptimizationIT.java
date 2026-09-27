@@ -202,7 +202,8 @@ class StageSevenRetrievalOptimizationIT {
         index.ensureReady();
         index.indexChunks(corpus);
         LinkedBlockingQueue<RetrievalEvaluationRun> reports = new LinkedBlockingQueue<>();
-        try (RetrievalService retrieval = new RetrievalService(index, requested -> Set.copyOf(requested),
+        try (RetrievalService retrieval = new RetrievalService(index,
+                (requested, allowed) -> Set.copyOf(requested),
                 new DeterministicEmbeddingModel(), new DeterministicRerankModel(), parameters);
              RetrievalEvaluationService service = new RetrievalEvaluationService(datasets,
                      reports::add, retrieval, new RetrievalMetricsCalculator(), UUID::randomUUID,

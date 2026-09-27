@@ -1,4 +1,5 @@
 @baseUrl = http://localhost:8080/api/v1
+@globalSpaceId = 00000000-0000-0000-0000-000000000001
 
 ### 手工创建草稿；重复发送相同请求会返回首次创建的工单
 # @name createDraft
@@ -6,6 +7,7 @@ POST {{baseUrl}}/tickets/drafts
 Content-Type: application/json
 
 {
+  "spaceId": "{{globalSpaceId}}",
   "title": "应用启动时报 MySQL 连接失败",
   "problemDescription": "启动后无法连接 localhost:3306，错误为 Connection refused",
   "attemptedActions": "已确认配置文件中的端口和用户名",
@@ -45,7 +47,7 @@ Content-Type: application/json
 > {% client.global.set("ticketVersion", response.body.data.version); %}
 
 ### 按状态和关键词分页查询
-GET {{baseUrl}}/tickets?status=OPEN&keyword=MySQL&page=1&size=20
+GET {{baseUrl}}/tickets?status=OPEN&keyword=MySQL&spaceId={{globalSpaceId}}&page=1&size=20
 Accept: application/json
 
 ### 使用人工确认的根因和有效方案解决开放工单，并创建 CASE_GENERATION 任务

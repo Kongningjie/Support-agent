@@ -123,6 +123,7 @@
     <update id="cancelOwned">
         UPDATE async_task
         SET status = 'CANCELLED', next_run_at = #{now}, locked_by = NULL, locked_until = NULL,
+            last_error_code = #{errorCode}, last_error_message = #{errorMessage},
             finished_at = #{now}, updated_at = #{now}
         WHERE id = #{id} AND status = 'RUNNING' AND locked_by = #{workerId}
           AND locked_until &gt; #{now}

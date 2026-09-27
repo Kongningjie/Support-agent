@@ -13,6 +13,8 @@ import java.nio.file.Path;
 import java.time.Instant;
 import java.util.Collections;
 import java.util.List;
+import java.util.Set;
+import java.util.UUID;
 import org.junit.jupiter.api.Test;
 import org.testcontainers.containers.GenericContainer;
 import org.testcontainers.containers.wait.strategy.Wait;
@@ -51,6 +53,37 @@ class ElasticsearchKnowledgeIndexAdapterIT {
 
             adapter.indexChunks(List.of(chunk));
 
+            UUID spaceA = UUID.randomUUID();
+            UUID spaceB = UUID.randomUUID();
+            IndexedKnowledgeChunk restrictedA = chunk(spaceA, 8L);
+            IndexedKnowledgeChunk restrictedB = chunk(spaceB, 9L);
+            adapter.indexChunks(List.of(restrictedA, restrictedB));
+            assertEquals(List.of(chunk.chunkId()), adapter.searchBm25("连接参数",
+                    Set.of(com.lawrence.supportagent.knowledgespace.KnowledgeSpace.GLOBAL_SPACE_ID),
+                    10).stream().map(value -> value.chunkId()).toList());
+            assertEquals(List.of(chunk.chunkId()), adapter.searchVector(
+                    Collections.nCopies(1024, 0.01D),
+                    Set.of(com.lawrence.supportagent.knowledgespace.KnowledgeSpace.GLOBAL_SPACE_ID),
+                    10, 20, 0.0).stream().map(value -> value.chunkId()).toList());
+            Set<UUID> allowedA = Set.of(
+                    com.lawrence.supportagent.knowledgespace.KnowledgeSpace.GLOBAL_SPACE_ID, spaceA);
+            Set<UUID> allowedB = Set.of(
+                    com.lawrence.supportagent.knowledgespace.KnowledgeSpace.GLOBAL_SPACE_ID, spaceB);
+            assertEquals(Set.of(chunk.chunkId(), restrictedA.chunkId()),
+                    adapter.searchBm25("连接参数", allowedA, 10).stream()
+                            .map(value -> value.chunkId()).collect(java.util.stream.Collectors.toSet()));
+            assertEquals(Set.of(chunk.chunkId(), restrictedB.chunkId()),
+                    adapter.searchBm25("连接参数", allowedB, 10).stream()
+                            .map(value -> value.chunkId()).collect(java.util.stream.Collectors.toSet()));
+            assertEquals(Set.of(chunk.chunkId(), restrictedA.chunkId()),
+                    adapter.searchVector(Collections.nCopies(1024, 0.01D), allowedA,
+                                    10, 20, 0.0).stream().map(value -> value.chunkId())
+                            .collect(java.util.stream.Collectors.toSet()));
+            assertEquals(Set.of(chunk.chunkId(), restrictedB.chunkId()),
+                    adapter.searchVector(Collections.nCopies(1024, 0.01D), allowedB,
+                                    10, 20, 0.0).stream().map(value -> value.chunkId())
+                            .collect(java.util.stream.Collectors.toSet()));
+
             assertTrue(adapter.verifyVersion("MANAGED_DOCUMENT", 7L, 2L,
                     List.of(chunk.contentHash())));
             assertTrue(adapter.sourceExists("MANAGED_DOCUMENT", 7L));
@@ -77,13 +110,27 @@ class ElasticsearchKnowledgeIndexAdapterIT {
                     adapter::ensureReady);
             assertEquals("KNOWLEDGE_ALIAS_CONFLICT", conflict.errorCode());
             assertFalse(conflict.retryable());
+
+            Request leaveSingleOldAlias = new Request("POST", "/_aliases");
+            leaveSingleOldAlias.setJsonEntity("""
+                    {"actions":[{"remove":{"index":"support_knowledge_v1",
+                    "alias":"support_knowledge_current"}}]}
+                    """);
+            client.performRequest(leaveSingleOldAlias);
+            adapter.ensureReady();
         }
     }
 
     /** 创建满足冻结映射的测试分块。 */
     private IndexedKnowledgeChunk chunk() {
-        return new IndexedKnowledgeChunk("MANAGED_DOCUMENT:7:2:0", "MANAGED_DOCUMENT",
-                7L, 2L, 0, "MySQL 排障", "MySQL 排障 > 连接", "检查连接参数。",
+        return chunk(com.lawrence.supportagent.knowledgespace.KnowledgeSpace.GLOBAL_SPACE_ID, 7L);
+    }
+
+    /** 创建属于指定空间和来源的测试分块，用于验证召回前空间过滤。 */
+    private IndexedKnowledgeChunk chunk(UUID spaceId, long sourceId) {
+        return new IndexedKnowledgeChunk("MANAGED_DOCUMENT:" + sourceId + ":2:0",
+                "MANAGED_DOCUMENT", sourceId, 2L, spaceId, 0,
+                "MySQL 排障", "MySQL 排障 > 连接", "检查连接参数。",
                 List.of(new ExactTerm(ExactTermType.ERROR_CODE, "CONNECTION_ERROR",
                         "CONNECTION_ERROR", 0, 16)), "hash-001",
                 Collections.nCopies(1024, 0.01D), Instant.parse("2026-09-07T01:00:00Z"),

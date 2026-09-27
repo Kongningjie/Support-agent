@@ -11,6 +11,8 @@ import com.lawrence.supportagent.asynctask.AsyncTaskType;
 import com.lawrence.supportagent.knowledge.port.KnowledgeIndexException;
 import com.lawrence.supportagent.knowledge.port.KnowledgeIndexPort;
 import com.lawrence.supportagent.knowledge.port.ManagedDocumentRepository;
+import com.lawrence.supportagent.knowledgespace.KnowledgeSpaceStatus;
+import com.lawrence.supportagent.knowledgespace.port.KnowledgeSpaceRepository;
 import com.lawrence.supportagent.model.EmbeddingModelPort;
 import com.lawrence.supportagent.model.ModelInvocationException;
 import com.lawrence.supportagent.sharedkernel.error.ApplicationException;
@@ -29,6 +31,7 @@ public class KnowledgeIndexTaskHandler implements AsyncTaskHandler {
     private final EmbeddingModelPort embeddingModel;
     private final KnowledgeIndexPort indexPort;
     private final TimeProvider timeProvider;
+    private final KnowledgeSpaceRepository spaces;
 
     /** 注入文档、内容策略、分块、模型、索引和时间端口。 */
     public KnowledgeIndexTaskHandler(ManagedDocumentRepository documentRepository,
@@ -36,13 +39,15 @@ public class KnowledgeIndexTaskHandler implements AsyncTaskHandler {
                                      DocumentChunker chunker,
                                      EmbeddingModelPort embeddingModel,
                                      KnowledgeIndexPort indexPort,
-                                     TimeProvider timeProvider) {
+                                     TimeProvider timeProvider,
+                                     KnowledgeSpaceRepository spaces) {
         this.documentRepository = documentRepository;
         this.contentPolicy = contentPolicy;
         this.chunker = chunker;
         this.embeddingModel = embeddingModel;
         this.indexPort = indexPort;
         this.timeProvider = timeProvider;
+        this.spaces = spaces;
     }
 
     /** {@inheritDoc} */
@@ -63,6 +68,7 @@ public class KnowledgeIndexTaskHandler implements AsyncTaskHandler {
     public AsyncTaskBusinessMutation execute(AsyncTaskExecutionContext context) {
         AsyncTask task = requireManagedDocumentTask(context.task());
         ManagedDocument document = currentIndexingDocument(task);
+        requireActiveSpace(task, document);
         try {
             contentPolicy.verifyNoSensitiveContent(document.rawContent());
             List<KnowledgeChunkDraft> drafts = chunker.chunk(document.title(),
@@ -94,6 +100,24 @@ public class KnowledgeIndexTaskHandler implements AsyncTaskHandler {
             throw new AsyncTaskExecutionException(
                     "KNOWLEDGE_VERSION_EXHAUSTED", "文档版本号已经耗尽", false);
         }
+    }
+
+    /** 重新读取来源真实空间；停用空间清理当前目标版本并以稳定原因取消。 */
+    private void requireActiveSpace(AsyncTask task, ManagedDocument document) {
+        boolean active = spaces.findBySpaceId(document.spaceId())
+                .filter(value -> value.status() == KnowledgeSpaceStatus.ACTIVE).isPresent();
+        if (active) {
+            return;
+        }
+        long targetVersion = Math.addExact(task.aggregateVersion(), 1);
+        try {
+            indexPort.deleteVersion(SOURCE_TYPE, task.aggregateId(), targetVersion);
+        } catch (KnowledgeIndexException exception) {
+            throw new AsyncTaskExecutionException("KNOWLEDGE_INDEX_CLEANUP_FAILED",
+                    "停用空间索引分块清理失败", true);
+        }
+        throw new AsyncTaskCancelledException("KNOWLEDGE_SPACE_DISABLED",
+                "知识空间已停用", AsyncTaskBusinessMutation.NONE);
     }
 
     /** {@inheritDoc} */
@@ -160,7 +184,7 @@ public class KnowledgeIndexTaskHandler implements AsyncTaskHandler {
             String chunkId = SOURCE_TYPE + ":" + document.id() + ":"
                     + publishedVersion + ":" + draft.chunkIndex();
             chunks.add(new IndexedKnowledgeChunk(chunkId, SOURCE_TYPE, document.id(),
-                    publishedVersion, draft.chunkIndex(), document.title(), draft.headingPath(),
+                    publishedVersion, document.spaceId(), draft.chunkIndex(), document.title(), draft.headingPath(),
                     draft.content(), draft.exactTerms(), draft.contentHash(), embeddings.get(index),
                     publicationTime, timeProvider.now(), DocumentChunker.VERSION,
                     ExactTermExtractor.VERSION));

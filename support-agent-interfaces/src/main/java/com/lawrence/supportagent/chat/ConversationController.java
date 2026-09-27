@@ -80,7 +80,7 @@ public class ConversationController {
             @Valid @RequestBody ResetConversationRequest body,
             HttpServletRequest request) {
         return responses.success(ConversationResponse.from(
-                useCase.reset(actor, conversationId, body.expectedVersion())), request);
+                useCase.reset(actor, conversationId, body.spaceId(), body.expectedVersion())), request);
     }
 
     /** 在版本一致且没有活动运行时原子删除本人会话。 */
@@ -98,9 +98,12 @@ public class ConversationController {
     }
 
     /**
+     * @param spaceId 重置后代际使用的空间；为空时保留当前空间
      * @param expectedVersion 客户端持有的当前会话版本
      */
     public record ResetConversationRequest(
+            @Schema(description = "重置后代际绑定的知识空间 UUID；为空时保留当前空间",
+                    nullable = true) UUID spaceId,
             @NotNull @PositiveOrZero
             @Schema(description = "客户端持有的非负会话版本", example = "3",
                     requiredMode = Schema.RequiredMode.REQUIRED)
@@ -108,6 +111,7 @@ public class ConversationController {
 
     /**
      * @param conversationId 公开会话 UUID
+     * @param spaceId 当前代际绑定的知识空间 UUID
      * @param status 当前状态，仅为 IDLE 或 RUNNING
      * @param version 已成功提交的轮次版本
      * @param generation 同一会话 ID 的重置代次
@@ -118,6 +122,7 @@ public class ConversationController {
     public record ConversationResponse(
             @Schema(description = "公开会话 UUID", example = "8e51b6d7-a9a9-4db1-b083-aec0fcfa3881")
             UUID conversationId,
+            @Schema(description = "当前代际绑定的知识空间 UUID") UUID spaceId,
             @Schema(description = "当前运行状态，仅为 IDLE 或 RUNNING", example = "IDLE")
             ConversationLifecycleStatus status,
             @Schema(description = "已成功提交的轮次版本，从 0 开始", example = "3")
@@ -132,7 +137,8 @@ public class ConversationController {
             Instant expiresAt) {
         /** 将应用层会话元数据转换为 HTTP 响应。 */
         public static ConversationResponse from(ConversationOverview value) {
-            return new ConversationResponse(value.conversationId(), value.status(), value.version(),
+            return new ConversationResponse(value.conversationId(), value.spaceId(),
+                    value.status(), value.version(),
                     value.generation(), value.summaryVersion(), value.lastAccessAt(), value.expiresAt());
         }
     }
@@ -182,6 +188,7 @@ public class ConversationController {
 
     /**
      * @param citationId 回答正文使用的临时引用标识
+     * @param spaceId 来源所属知识空间 UUID
      * @param documentId 来源文档或案例标识
      * @param documentTitle 来源标题
      * @param headingPath 来源标题路径
@@ -190,6 +197,7 @@ public class ConversationController {
      */
     public record CitationResponse(
             @Schema(description = "回答正文使用的临时引用标识", example = "S1") String citationId,
+            @Schema(description = "来源所属知识空间 UUID") UUID spaceId,
             @Schema(description = "来源文档或案例标识") String documentId,
             @Schema(description = "来源标题") String documentTitle,
             @Schema(description = "来源标题路径") String headingPath,
@@ -197,7 +205,7 @@ public class ConversationController {
             @Schema(description = "案例来源公开 ID；非案例来源为空", nullable = true) String sourceCaseId) {
         /** 将会话存储引用转换为 HTTP 响应。 */
         public static CitationResponse from(Citation value) {
-            return new CitationResponse(value.citationId(), value.documentId(), value.documentTitle(),
+            return new CitationResponse(value.citationId(), value.spaceId(), value.documentId(), value.documentTitle(),
                     value.headingPath(), value.sourceType(), value.sourceCaseId());
         }
     }

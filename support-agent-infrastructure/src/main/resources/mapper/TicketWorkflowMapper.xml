@@ -29,12 +29,15 @@
         SELECT <include refid="ticketColumns"/>
         FROM ticket
         <where>
-            <if test="allTickets == false">owner_user_id=#{ownerUserId}</if>
+            <if test="spaceIds != null and !spaceIds.isEmpty()">
+                space_id IN <foreach collection="spaceIds" item="spaceId" open="(" separator="," close=")">#{spaceId}</foreach>
+            </if>
+            <if test="allTickets == false"><if test="spaceIds != null and !spaceIds.isEmpty()">AND</if> owner_user_id=#{ownerUserId}</if>
             <if test="status != null">
-                <if test="allTickets == false">AND</if> status = #{status}
+                <if test="(spaceIds != null and !spaceIds.isEmpty()) or allTickets == false">AND</if> status = #{status}
             </if>
             <if test="keyword != null">
-                <if test="allTickets == false or status != null">AND</if>
+                <if test="(spaceIds != null and !spaceIds.isEmpty()) or allTickets == false or status != null">AND</if>
                 (title LIKE CONCAT('%', #{keyword}, '%')
                  OR problem_description LIKE CONCAT('%', #{keyword}, '%')
                  OR ticket_no = #{keyword})
@@ -48,12 +51,15 @@
         SELECT COUNT(*)
         FROM ticket
         <where>
-            <if test="allTickets == false">owner_user_id=#{ownerUserId}</if>
+            <if test="spaceIds != null and !spaceIds.isEmpty()">
+                space_id IN <foreach collection="spaceIds" item="spaceId" open="(" separator="," close=")">#{spaceId}</foreach>
+            </if>
+            <if test="allTickets == false"><if test="spaceIds != null and !spaceIds.isEmpty()">AND</if> owner_user_id=#{ownerUserId}</if>
             <if test="status != null">
-                <if test="allTickets == false">AND</if> status = #{status}
+                <if test="(spaceIds != null and !spaceIds.isEmpty()) or allTickets == false">AND</if> status = #{status}
             </if>
             <if test="keyword != null">
-                <if test="allTickets == false or status != null">AND</if>
+                <if test="(spaceIds != null and !spaceIds.isEmpty()) or allTickets == false or status != null">AND</if>
                 (title LIKE CONCAT('%', #{keyword}, '%')
                  OR problem_description LIKE CONCAT('%', #{keyword}, '%')
                  OR ticket_no = #{keyword})

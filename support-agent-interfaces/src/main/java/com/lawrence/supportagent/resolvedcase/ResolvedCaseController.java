@@ -1,5 +1,6 @@
 package com.lawrence.supportagent.resolvedcase;
 
+import com.lawrence.supportagent.auth.AuthenticatedUser;
 import com.lawrence.supportagent.knowledgespace.KnowledgeSpaceSummary;
 import com.lawrence.supportagent.sharedkernel.api.ApiResponseFactory;
 import com.lawrence.supportagent.sharedkernel.api.ApiResult;
@@ -16,6 +17,7 @@ import jakarta.validation.constraints.Size;
 import java.time.Instant;
 import java.util.UUID;
 import org.springframework.validation.annotation.Validated;
+import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -47,22 +49,26 @@ public class ResolvedCaseController {
     @Operation(summary = "查询已解决案例详情")
     @GetMapping("/{caseId}")
     public ApiResult<CaseResponse> get(
+            @AuthenticationPrincipal AuthenticatedUser actor,
             @Parameter(description = "案例内部 ID 的字符串形式", example = "1")
             @PathVariable long caseId, HttpServletRequest request) {
-        return responses.success(CaseResponse.from(queries.get(caseId)), request);
+        return responses.success(CaseResponse.from(queries.get(actor, caseId)), request);
     }
 
     /** 按状态、来源工单编号和关键词分页查询案例摘要。 */
     @Operation(summary = "分页查询已解决案例")
     @GetMapping
     public ApiResult<PageResult<CaseSummaryResponse>> page(
+            @AuthenticationPrincipal AuthenticatedUser actor,
             @RequestParam(required = false) ResolvedCaseStatus status,
             @RequestParam(required = false) String sourceTicketNo,
             @RequestParam(required = false) String keyword,
+            @RequestParam(required = false) UUID spaceId,
             @RequestParam(defaultValue = "1") int page,
             @RequestParam(defaultValue = "20") int size,
             HttpServletRequest request) {
-        ResolvedCasePage result = queries.page(status, sourceTicketNo, keyword, page, size);
+        ResolvedCasePage result = queries.page(actor, status, sourceTicketNo, keyword,
+                spaceId, page, size);
         return responses.success(new PageResult<>(result.items().stream()
                         .map(CaseSummaryResponse::from).toList(), result.page(), result.size(),
                 result.totalElements(), result.totalPages()), request);
@@ -72,9 +78,10 @@ public class ResolvedCaseController {
     @Operation(summary = "修改案例待审核内容")
     @PutMapping("/{caseId}/draft")
     public ApiResult<CaseResponse> revise(@PathVariable long caseId,
+                                          @AuthenticationPrincipal AuthenticatedUser actor,
                                           @Valid @RequestBody ReviseRequest body,
                                           HttpServletRequest request) {
-        return responses.success(CaseResponse.from(commands.revise(caseId, body.title(),
+        return responses.success(CaseResponse.from(commands.revise(actor, caseId, body.title(),
                 body.problem(), body.cause(), body.solution(), body.version())), request);
     }
 
@@ -82,9 +89,10 @@ public class ResolvedCaseController {
     @Operation(summary = "发布已解决案例")
     @PostMapping("/{caseId}/publish")
     public ApiResult<CaseResponse> publish(@PathVariable long caseId,
+                                           @AuthenticationPrincipal AuthenticatedUser actor,
                                            @Valid @RequestBody VersionedRequest body,
                                            HttpServletRequest request) {
-        return responses.success(CaseResponse.from(commands.publish(caseId, body.version(),
+        return responses.success(CaseResponse.from(commands.publish(actor, caseId, body.version(),
                 body.idempotencyKey())), request);
     }
 
@@ -92,9 +100,10 @@ public class ResolvedCaseController {
     @Operation(summary = "拒绝已解决案例")
     @PostMapping("/{caseId}/reject")
     public ApiResult<CaseResponse> reject(@PathVariable long caseId,
+                                          @AuthenticationPrincipal AuthenticatedUser actor,
                                           @Valid @RequestBody RejectRequest body,
                                           HttpServletRequest request) {
-        return responses.success(CaseResponse.from(commands.reject(caseId, body.rejectionReason(),
+        return responses.success(CaseResponse.from(commands.reject(actor, caseId, body.rejectionReason(),
                 body.version(), body.idempotencyKey())), request);
     }
 
@@ -102,9 +111,10 @@ public class ResolvedCaseController {
     @Operation(summary = "归档已解决案例")
     @PostMapping("/{caseId}/archive")
     public ApiResult<CaseResponse> archive(@PathVariable long caseId,
+                                           @AuthenticationPrincipal AuthenticatedUser actor,
                                            @Valid @RequestBody ArchiveRequest body,
                                            HttpServletRequest request) {
-        return responses.success(CaseResponse.from(commands.archive(caseId, body.archiveReason(),
+        return responses.success(CaseResponse.from(commands.archive(actor, caseId, body.archiveReason(),
                 body.version(), body.idempotencyKey())), request);
     }
 
@@ -139,7 +149,8 @@ public class ResolvedCaseController {
             @Schema(description = "案例内部 ID 的字符串形式", example = "1") String caseId,
             @Schema(description = "案例所属知识空间 UUID") UUID spaceId,
             @Schema(description = "案例所属知识空间的最小摘要") KnowledgeSpaceSummary space,
-            @Schema(description = "来源工单的稳定编号", example = "T000000000001") String sourceTicketNo,
+            @Schema(description = "来源工单稳定编号；READER 查看已发布案例时为空",
+                    example = "T000000000001", nullable = true) String sourceTicketNo,
             @Schema(description = "案例标题", example = "Spring Boot 连接 MySQL 端口错误") String title,
             @Schema(description = "案例生命周期状态", example = "DRAFT") ResolvedCaseStatus status,
             @Schema(description = "案例乐观锁和知识版本", example = "0") long version,
@@ -166,8 +177,10 @@ public class ResolvedCaseController {
             @Schema(description = "案例内部 ID 的字符串形式", example = "1") String caseId,
             @Schema(description = "案例所属知识空间 UUID") UUID spaceId,
             @Schema(description = "案例所属知识空间的最小摘要") KnowledgeSpaceSummary space,
-            @Schema(description = "来源工单稳定编号", example = "T000000000001") String sourceTicketNo,
-            @Schema(description = "来源工单标题") String sourceTicketTitle,
+            @Schema(description = "来源工单稳定编号；READER 查看已发布案例时为空",
+                    example = "T000000000001", nullable = true) String sourceTicketNo,
+            @Schema(description = "来源工单标题；READER 查看已发布案例时为空",
+                    nullable = true) String sourceTicketTitle,
             @Schema(description = "人工审核后的案例标题") String title,
             @Schema(description = "问题现象和适用背景") String problem,
             @Schema(description = "人工确认或审核修正后的根因") String cause,

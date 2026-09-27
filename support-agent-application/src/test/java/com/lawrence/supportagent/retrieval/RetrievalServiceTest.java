@@ -1,29 +1,89 @@
 package com.lawrence.supportagent.retrieval;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.lawrence.supportagent.model.EmbeddingModelPort;
 import com.lawrence.supportagent.model.RerankModelPort;
+import com.lawrence.supportagent.auth.AuthenticatedUser;
+import com.lawrence.supportagent.knowledgespace.KnowledgeSpace;
+import com.lawrence.supportagent.user.UserRole;
 import com.lawrence.supportagent.retrieval.port.KnowledgeSearchPort;
 import com.lawrence.supportagent.retrieval.port.KnowledgeSourceValidityPort;
 import java.util.List;
 import java.util.Set;
+import java.util.UUID;
+import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.Test;
 
 /** 验证双路召回、RRF、来源回查、重排和降级三态。 */
 class RetrievalServiceTest {
+    /** 检索上下文不得携带 GLOBAL 与活动空间之外的第三个空间。 */
+    @Test
+    void shouldRejectAccessContextWithAdditionalSpace() {
+        UUID activeSpaceId = UUID.randomUUID();
+        AuthenticatedUser actor = new AuthenticatedUser(UUID.randomUUID(), "test", UserRole.USER);
+
+        assertThatThrownBy(() -> new RetrievalAccessContext(actor, activeSpaceId,
+                Set.of(KnowledgeSpace.GLOBAL_SPACE_ID, activeSpaceId, UUID.randomUUID())))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("检索允许空间必须严格等于 GLOBAL 加活动空间");
+    }
+
+    /** BM25、向量和 MySQL 回查必须接收完全相同的最小允许空间集合。 */
+    @Test
+    void shouldUseSameMinimalSpaceSetForBothBranchesAndValidityCheck() {
+        UUID activeSpaceId = UUID.randomUUID();
+        Set<UUID> expected = Set.of(KnowledgeSpace.GLOBAL_SPACE_ID, activeSpaceId);
+        AtomicReference<Set<UUID>> bm25Spaces = new AtomicReference<>();
+        AtomicReference<Set<UUID>> vectorSpaces = new AtomicReference<>();
+        AtomicReference<Set<UUID>> validitySpaces = new AtomicReference<>();
+        RetrievalEvidence allowed = new RetrievalEvidence("allowed", "MANAGED_DOCUMENT", 1, 2,
+                activeSpaceId, "标题", "章节", "连接失败排查", List.of(), Set.of(),
+                null, null, 0, null);
+        KnowledgeSearchPort search = new KnowledgeSearchPort() {
+            /** {@inheritDoc} */
+            public List<RetrievalEvidence> searchBm25(String query, Set<UUID> spaces, int limit) {
+                bm25Spaces.set(spaces);
+                return List.of(allowed);
+            }
+
+            /** {@inheritDoc} */
+            public List<RetrievalEvidence> searchVector(List<Double> vector, Set<UUID> spaces,
+                                                         int limit, int candidates,
+                                                         double similarity) {
+                vectorSpaces.set(spaces);
+                return List.of(allowed);
+            }
+        };
+        KnowledgeSourceValidityPort validity = (sources, spaces) -> {
+            validitySpaces.set(spaces);
+            return Set.copyOf(sources);
+        };
+        AuthenticatedUser actor = new AuthenticatedUser(UUID.randomUUID(), "test", UserRole.USER);
+        try (RetrievalService service = new RetrievalService(search, validity, embedding(),
+                (query, documents) -> List.of(), parameters(0.50))) {
+            service.rank("连接失败", RetrievalMode.HYBRID,
+                    new RetrievalAccessContext(actor, activeSpaceId, expected));
+        }
+
+        assertThat(bm25Spaces.get()).isEqualTo(expected);
+        assertThat(vectorSpaces.get()).isEqualTo(expected);
+        assertThat(validitySpaces.get()).isEqualTo(expected);
+    }
+
     /** 双路命中且重排超过阈值时返回可靠知识。 */
     @Test
     void shouldReturnGroundedEvidenceAfterHybridFusion() {
         RetrievalEvidence candidate = evidence("chunk-1", Set.of("title_or_heading"));
         KnowledgeSearchPort search = search(List.of(candidate), List.of(candidate));
-        KnowledgeSourceValidityPort validity = sources -> Set.copyOf(sources);
+        KnowledgeSourceValidityPort validity = (sources, allowed) -> Set.copyOf(sources);
         EmbeddingModelPort embedding = embedding();
         RerankModelPort rerank = (query, documents) -> documents.stream()
                 .map(item -> new RerankModelPort.RerankScore(item.chunkId(), 0.91)).toList();
         try (RetrievalService service = new RetrievalService(search, validity, embedding,
                 rerank, parameters(0.50))) {
-            RetrievalResult result = service.retrieve("连接失败");
+            RetrievalResult result = service.retrieve("连接失败", context());
             assertThat(result.status()).isEqualTo(RetrievalStatus.GROUNDED);
             assertThat(result.evidence()).extracting(RetrievalEvidence::chunkId).containsExactly("chunk-1");
         }
@@ -37,7 +97,7 @@ class RetrievalServiceTest {
                 new RerankModelPort.RerankScore("chunk-1", 0.20));
         try (RetrievalService service = new RetrievalService(
                 search(List.of(candidate), List.of(candidate)),
-                sources -> Set.copyOf(sources), embedding(), rerank, parameters(0.50))) {
+                (sources, allowed) -> Set.copyOf(sources), embedding(), rerank, parameters(0.50))) {
             RetrievalRanking ranking = service.rank("不相关问题", RetrievalMode.HYBRID_RERANK);
 
             assertThat(ranking.candidates()).extracting(RetrievalEvidence::chunkId)
@@ -53,9 +113,9 @@ class RetrievalServiceTest {
     @Test
     void shouldDistinguishTechnicalFailureFromNoKnowledge() {
         KnowledgeSearchPort search = searchFailure();
-        try (RetrievalService service = new RetrievalService(search, sources -> Set.of(), embeddingFailure(),
+        try (RetrievalService service = new RetrievalService(search, (sources, allowed) -> Set.of(), embeddingFailure(),
                 (query, documents) -> List.of(), parameters(0.50))) {
-            RetrievalResult result = service.retrieve("连接失败");
+            RetrievalResult result = service.retrieve("连接失败", context());
             assertThat(result.status()).isEqualTo(RetrievalStatus.RETRIEVAL_FAILED);
             assertThat(result.rerankStatus()).isEqualTo(BranchStatus.SKIPPED);
         }
@@ -68,7 +128,7 @@ class RetrievalServiceTest {
         RetrievalEvidence managedDocument = evidence("document", "MANAGED_DOCUMENT", 1);
         KnowledgeSearchPort search = search(List.of(resolvedCase, managedDocument),
                 List.of(resolvedCase, managedDocument));
-        try (RetrievalService service = new RetrievalService(search, sources -> Set.copyOf(sources),
+        try (RetrievalService service = new RetrievalService(search, (sources, allowed) -> Set.copyOf(sources),
                 embedding(), (query, documents) -> List.of(), parameters(0.50))) {
             RetrievalRanking ranking = service.rank("连接失败", RetrievalMode.HYBRID);
 
@@ -84,7 +144,7 @@ class RetrievalServiceTest {
         RetrievalEvidence managedDocument = evidence("document", "MANAGED_DOCUMENT", 1);
         KnowledgeSearchPort search = search(List.of(managedDocument, resolvedCase),
                 List.of(resolvedCase, managedDocument));
-        try (RetrievalService service = new RetrievalService(search, sources -> Set.copyOf(sources),
+        try (RetrievalService service = new RetrievalService(search, (sources, allowed) -> Set.copyOf(sources),
                 embedding(), (query, documents) -> List.of(), parameters(0.50))) {
             RetrievalRanking ranking = service.rank("连接失败", RetrievalMode.HYBRID);
 
@@ -107,16 +167,16 @@ class RetrievalServiceTest {
     /** 创建返回固定候选的搜索端口。 */
     private KnowledgeSearchPort search(List<RetrievalEvidence> bm25, List<RetrievalEvidence> vector) {
         return new KnowledgeSearchPort() {
-            /** {@inheritDoc} */ public List<RetrievalEvidence> searchBm25(String query, int limit) { return bm25; }
-            /** {@inheritDoc} */ public List<RetrievalEvidence> searchVector(List<Double> value, int limit,
+            /** {@inheritDoc} */ public List<RetrievalEvidence> searchBm25(String query, Set<UUID> spaces, int limit) { return bm25; }
+            /** {@inheritDoc} */ public List<RetrievalEvidence> searchVector(List<Double> value, Set<UUID> spaces, int limit,
                     int candidates, double similarity) { return vector; }
         };
     }
     /** 创建两个分支均失败的搜索端口。 */
     private KnowledgeSearchPort searchFailure() {
         return new KnowledgeSearchPort() {
-            /** {@inheritDoc} */ public List<RetrievalEvidence> searchBm25(String query, int limit) { throw new IllegalStateException(); }
-            /** {@inheritDoc} */ public List<RetrievalEvidence> searchVector(List<Double> value, int limit,
+            /** {@inheritDoc} */ public List<RetrievalEvidence> searchBm25(String query, Set<UUID> spaces, int limit) { throw new IllegalStateException(); }
+            /** {@inheritDoc} */ public List<RetrievalEvidence> searchVector(List<Double> value, Set<UUID> spaces, int limit,
                     int candidates, double similarity) { throw new IllegalStateException(); }
         };
     }
@@ -138,5 +198,12 @@ class RetrievalServiceTest {
     /** 创建只覆盖可靠性门槛、其余保持阶段七冻结值的检索参数。 */
     private RetrievalParameters parameters(double threshold) {
         return RetrievalParameters.baseline().withGroundedThreshold(threshold);
+    }
+
+    /** 创建只允许 GLOBAL 的显式锁定评测访问上下文。 */
+    private RetrievalAccessContext context() {
+        AuthenticatedUser actor = new AuthenticatedUser(UUID.randomUUID(), "test", UserRole.ADMIN);
+        return new RetrievalAccessContext(actor, KnowledgeSpace.GLOBAL_SPACE_ID,
+                Set.of(KnowledgeSpace.GLOBAL_SPACE_ID));
     }
 }

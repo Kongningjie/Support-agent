@@ -1,4 +1,5 @@
 @baseUrl = http://localhost:8080/api/v1
+@globalSpaceId = 00000000-0000-0000-0000-000000000001
 
 ### 启动完整混合检索加重排序评测；仅 dev/test Profile 注册
 # @name startEvaluation
@@ -6,6 +7,7 @@ POST {{baseUrl}}/retrieval-evaluations
 Content-Type: application/json
 
 {
+  "spaceId": "{{globalSpaceId}}",
   "mode": "HYBRID_RERANK",
   "caseIds": []
 }
@@ -21,6 +23,7 @@ POST {{baseUrl}}/retrieval-evaluations
 Content-Type: application/json
 
 {
+  "spaceId": "{{globalSpaceId}}",
   "mode": "BM25_ONLY",
   "caseIds": ["EXACT-001", "EXACT-002", "EXACT-003"]
 }

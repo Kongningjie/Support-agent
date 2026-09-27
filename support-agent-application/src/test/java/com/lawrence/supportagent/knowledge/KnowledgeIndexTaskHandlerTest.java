@@ -13,11 +13,16 @@ import com.lawrence.supportagent.asynctask.AsyncTask;
 import com.lawrence.supportagent.asynctask.AsyncTaskBusinessMutation;
 import com.lawrence.supportagent.asynctask.AsyncTaskExecutionContext;
 import com.lawrence.supportagent.asynctask.AsyncTaskExecutionException;
+import com.lawrence.supportagent.asynctask.AsyncTaskCancelledException;
 import com.lawrence.supportagent.asynctask.AsyncTaskStatus;
 import com.lawrence.supportagent.asynctask.AsyncTaskType;
 import com.lawrence.supportagent.knowledge.port.KnowledgeIndexPort;
 import com.lawrence.supportagent.knowledge.port.ManagedDocumentRepository;
 import com.lawrence.supportagent.model.EmbeddingModelPort;
+import com.lawrence.supportagent.knowledgespace.KnowledgeSpace;
+import com.lawrence.supportagent.knowledgespace.KnowledgeSpaceStatus;
+import com.lawrence.supportagent.knowledgespace.KnowledgeSpaceVisibility;
+import com.lawrence.supportagent.knowledgespace.port.KnowledgeSpaceRepository;
 import java.time.Instant;
 import java.util.Collections;
 import java.util.List;
@@ -75,12 +80,53 @@ class KnowledgeIndexTaskHandlerTest {
         assertEquals(2, document.get().version());
     }
 
+    /** 空间停用后必须清理目标版本并用稳定原因码取消，且不得调用 Embedding。 */
+    @Test
+    void shouldCancelAndCleanTargetVersionWhenSpaceIsDisabled() {
+        java.util.UUID disabledSpaceId = java.util.UUID.randomUUID();
+        AtomicReference<ManagedDocument> document = new AtomicReference<>(
+                ManagedDocument.draft(disabledSpaceId, "排障", DocumentInputType.DIRECT_TEXT,
+                        null, "text/plain", "检查 ERROR_CONNECTION。",
+                        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                        "tester", NOW.minusSeconds(2)).startIndexing(
+                        "tester", NOW.minusSeconds(1)));
+        EmbeddingModelPort embedding = mock(EmbeddingModelPort.class);
+        KnowledgeIndexPort indexPort = mock(KnowledgeIndexPort.class);
+        KnowledgeSpaceRepository spaces = mock(KnowledgeSpaceRepository.class);
+        KnowledgeSpace disabled = new KnowledgeSpace(1L, disabledSpaceId,
+                "PAYMENT", "支付知识", null, KnowledgeSpaceVisibility.RESTRICTED,
+                KnowledgeSpaceStatus.DISABLED, false, 1, "system", NOW, "system", NOW);
+        when(spaces.findBySpaceId(disabledSpaceId))
+                .thenReturn(Optional.of(disabled));
+        KnowledgeIndexTaskHandler handler = new KnowledgeIndexTaskHandler(repository(document),
+                new DocumentContentPolicy(), new DocumentChunker(new ExactTermExtractor()),
+                embedding, indexPort, () -> NOW, spaces);
+
+        AsyncTaskCancelledException failure = assertThrows(AsyncTaskCancelledException.class,
+                () -> handler.execute(context(task())));
+
+        assertEquals("KNOWLEDGE_SPACE_DISABLED", failure.errorCode());
+        org.mockito.Mockito.verify(indexPort).deleteVersion("MANAGED_DOCUMENT", 7L, 2L);
+        org.mockito.Mockito.verifyNoInteractions(embedding);
+    }
+
     /** 创建使用真实策略和冻结时间的 Handler。 */
     private KnowledgeIndexTaskHandler handler(ManagedDocumentRepository repository,
                                                EmbeddingModelPort embedding,
                                                KnowledgeIndexPort indexPort) {
         return new KnowledgeIndexTaskHandler(repository, new DocumentContentPolicy(),
-                new DocumentChunker(new ExactTermExtractor()), embedding, indexPort, () -> NOW);
+                new DocumentChunker(new ExactTermExtractor()), embedding, indexPort, () -> NOW,
+                activeSpaces());
+    }
+
+    /** 创建包含活动 GLOBAL 空间的测试仓储。 */
+    private KnowledgeSpaceRepository activeSpaces() {
+        KnowledgeSpaceRepository spaces = mock(KnowledgeSpaceRepository.class);
+        KnowledgeSpace global = new KnowledgeSpace(1L, KnowledgeSpace.GLOBAL_SPACE_ID,
+                "GLOBAL", "企业公共知识", null, KnowledgeSpaceVisibility.ENTERPRISE,
+                KnowledgeSpaceStatus.ACTIVE, true, 0, "system", NOW, "system", NOW);
+        when(spaces.findBySpaceId(KnowledgeSpace.GLOBAL_SPACE_ID)).thenReturn(Optional.of(global));
+        return spaces;
     }
 
     /** 创建可原地观察业务终态动作的仓储 Mock。 */

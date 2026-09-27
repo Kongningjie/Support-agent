@@ -3,7 +3,10 @@ package com.lawrence.supportagent.evaluation;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import com.lawrence.supportagent.retrieval.BranchStatus;
@@ -13,6 +16,11 @@ import com.lawrence.supportagent.retrieval.RetrievalMode;
 import com.lawrence.supportagent.retrieval.RetrievalRanking;
 import com.lawrence.supportagent.retrieval.RetrievalService;
 import com.lawrence.supportagent.retrieval.RetrievalStatus;
+import com.lawrence.supportagent.retrieval.RetrievalAccessContext;
+import com.lawrence.supportagent.auth.AuthenticatedUser;
+import com.lawrence.supportagent.knowledgespace.KnowledgeSpace;
+import com.lawrence.supportagent.knowledgespace.KnowledgeSpaceAccessService;
+import com.lawrence.supportagent.user.UserRole;
 import java.time.Instant;
 import java.util.List;
 import java.util.Set;
@@ -30,7 +38,7 @@ class RetrievalEvaluationServiceTest {
     @Test
     void shouldGenerateReportsForAllFourModes() throws InterruptedException {
         RetrievalService retrieval = mock(RetrievalService.class);
-        when(retrieval.rank(anyString(), any())).thenAnswer(invocation -> {
+        when(retrieval.rank(anyString(), any(), any(RetrievalAccessContext.class))).thenAnswer(invocation -> {
             String query = invocation.getArgument(0);
             RetrievalMode mode = invocation.getArgument(1);
             return query.equals("未知问题") ? rejectedRanking(mode, evidence())
@@ -47,11 +55,20 @@ class RetrievalEvaluationServiceTest {
         RetrievalEvaluationDatasetSnapshot snapshot = new RetrievalEvaluationDatasetSnapshot(
                 EvaluationDatasetKind.LOCKED_REGRESSION, "test-v1", "abc", cases,
                 java.util.Map.of("MANAGED_DOCUMENT\u0000故障标准", "MANAGED_DOCUMENT:1"));
+        UUID activeSpaceId = UUID.randomUUID();
+        AuthenticatedUser actor = new AuthenticatedUser(UUID.randomUUID(), "admin", UserRole.ADMIN);
+        KnowledgeSpaceAccessService access = mock(KnowledgeSpaceAccessService.class);
+        when(access.retrievalContext(actor, activeSpaceId)).thenReturn(new RetrievalAccessContext(
+                actor, activeSpaceId, Set.of(KnowledgeSpace.GLOBAL_SPACE_ID, activeSpaceId)));
         try (RetrievalEvaluationService service = new RetrievalEvaluationService(ignored -> snapshot,
                 reports::add, retrieval, new RetrievalMetricsCalculator(),
-                () -> new UUID(0, sequence.incrementAndGet()), () -> NOW)) {
+                () -> new UUID(0, sequence.incrementAndGet()), () -> NOW,
+                value -> new RetrievalEvaluationContext("1.1", value.kind(), value.version(),
+                        value.contentSha256(), "test", java.util.Map.of(), java.util.Map.of()),
+                access)) {
             for (RetrievalMode mode : RetrievalMode.values()) {
-                service.start(mode, List.of());
+                service.start(actor, activeSpaceId, EvaluationDatasetKind.LOCKED_REGRESSION,
+                        mode, List.of());
                 RetrievalEvaluationRun report = reports.poll(5, TimeUnit.SECONDS);
 
                 assertThat(report).isNotNull();
@@ -62,6 +79,9 @@ class RetrievalEvaluationServiceTest {
                 assertThat(report.diagnostics().falseGroundedCount()).isZero();
                 assertThat(report.diagnostics().falseNoHitCount()).isZero();
             }
+            verify(retrieval, times(8)).rank(anyString(), any(), eq(
+                    new RetrievalAccessContext(actor, activeSpaceId,
+                            Set.of(KnowledgeSpace.GLOBAL_SPACE_ID, activeSpaceId))));
         }
     }
 

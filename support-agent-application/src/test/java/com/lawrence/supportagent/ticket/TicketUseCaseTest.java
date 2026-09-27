@@ -13,6 +13,11 @@ import com.lawrence.supportagent.auth.AuthenticatedUser;
 import com.lawrence.supportagent.asynctask.AsyncTaskCreator;
 import com.lawrence.supportagent.idempotency.IdempotentExecutor;
 import com.lawrence.supportagent.idempotency.IdempotentResource;
+import com.lawrence.supportagent.knowledgespace.KnowledgeSpace;
+import com.lawrence.supportagent.knowledgespace.KnowledgeSpaceAccessService;
+import com.lawrence.supportagent.knowledgespace.KnowledgeSpaceStatus;
+import com.lawrence.supportagent.knowledgespace.KnowledgeSpaceVisibility;
+import com.lawrence.supportagent.knowledgespace.port.KnowledgeSpaceRepository;
 import com.lawrence.supportagent.sharedkernel.error.ApplicationException;
 import com.lawrence.supportagent.sharedkernel.error.ErrorCode;
 import com.lawrence.supportagent.ticket.port.TicketRepository;
@@ -61,17 +66,25 @@ class TicketUseCaseTest {
                 .thenAnswer(invocation -> Optional.ofNullable(stored.get()));
         when(repository.findByTicketNoForAccess("T000000000001", ACTOR.userId(), false))
                 .thenAnswer(invocation -> Optional.ofNullable(stored.get()));
-        queries = new TicketQueryUseCase(repository);
+        KnowledgeSpaceRepository spaces = mock(KnowledgeSpaceRepository.class);
+        KnowledgeSpace global = new KnowledgeSpace(1L, KnowledgeSpace.GLOBAL_SPACE_ID,
+                "GLOBAL", "企业公共知识", null, KnowledgeSpaceVisibility.ENTERPRISE,
+                KnowledgeSpaceStatus.ACTIVE, true, 0, "system", NOW, "system", NOW);
+        when(spaces.findBySpaceId(KnowledgeSpace.GLOBAL_SPACE_ID)).thenReturn(Optional.of(global));
+        KnowledgeSpaceAccessService access = mock(KnowledgeSpaceAccessService.class);
+        when(access.requireActiveReadable(any(), any())).thenReturn(global);
+        when(access.requireReadable(any(), any())).thenReturn(global);
+        queries = new TicketQueryUseCase(repository, spaces, access);
         taskCreator = mock(AsyncTaskCreator.class);
         commands = new TicketCommandUseCase(repository, queries, new MemoryIdempotentExecutor(),
-                () -> NOW, taskCreator);
+                () -> NOW, taskCreator, access);
     }
 
     /** 验证草稿编号格式及同 Key 同请求复用首次工单。 */
     @Test
     void shouldCreateAndReplayDraft() {
-        TicketDetails first = commands.createDraft(ACTOR, "启动失败", "无法连接数据库", null, "create-1");
-        TicketDetails replay = commands.createDraft(ACTOR, "启动失败", "无法连接数据库", null, "create-1");
+        TicketDetails first = commands.createDraft(ACTOR, null, "启动失败", "无法连接数据库", null, "create-1");
+        TicketDetails replay = commands.createDraft(ACTOR, null, "启动失败", "无法连接数据库", null, "create-1");
 
         assertEquals("T000000000001", first.ticketNo());
         assertEquals(first.ticketNo(), replay.ticketNo());
@@ -81,17 +94,17 @@ class TicketUseCaseTest {
     /** 验证同一幂等 Key 携带不同请求时返回稳定冲突。 */
     @Test
     void shouldRejectReusedIdempotencyKeyWithDifferentRequest() {
-        commands.createDraft(ACTOR, "启动失败", "无法连接数据库", null, "create-1");
+        commands.createDraft(ACTOR, null, "启动失败", "无法连接数据库", null, "create-1");
 
         ApplicationException exception = assertThrows(ApplicationException.class,
-                () -> commands.createDraft(ACTOR, "另一个问题", "无法连接数据库", null, "create-1"));
+                () -> commands.createDraft(ACTOR, null, "另一个问题", "无法连接数据库", null, "create-1"));
         assertEquals(ErrorCode.COMMON_IDEMPOTENCY_KEY_REUSED, exception.errorCode());
     }
 
     /** 验证解决工单时保存人工结论并以解决后版本创建案例任务。 */
     @Test
     void shouldResolveOpenTicketAndCreateCaseTask() {
-        TicketDetails draft = commands.createDraft(ACTOR, "启动失败", "无法连接数据库", null, "create-1");
+        TicketDetails draft = commands.createDraft(ACTOR, null, "启动失败", "无法连接数据库", null, "create-1");
         TicketDetails open = commands.submit(ACTOR, draft.ticketNo(), draft.version(), "submit-1");
 
         TicketDetails resolved = commands.resolve(ACTOR, open.ticketNo(), "端口配置错误",
@@ -111,7 +124,7 @@ class TicketUseCaseTest {
     /** 验证草稿修改、提交、关闭及版本冲突使用稳定业务错误。 */
     @Test
     void shouldEnforceTicketStateAndVersion() {
-        TicketDetails draft = commands.createDraft(ACTOR, "启动失败", "无法连接数据库", null, "create-1");
+        TicketDetails draft = commands.createDraft(ACTOR, null, "启动失败", "无法连接数据库", null, "create-1");
         TicketDetails revised = commands.reviseDraft(ACTOR, draft.ticketNo(), "启动异常",
                 "数据库拒绝连接", "检查了端口", draft.version());
         TicketDetails open = commands.submit(ACTOR, revised.ticketNo(), revised.version(), "submit-1");
@@ -127,7 +140,7 @@ class TicketUseCaseTest {
 
     /** 为测试中的新建聚合补入模拟数据库生成的内部主键。 */
     private Ticket withId(Ticket value, long id) {
-        return new Ticket(id, value.ticketNo(), value.conversationId(), value.sourceTurnId(), value.ownerUserId(),
+        return new Ticket(id, value.spaceId(), value.ticketNo(), value.conversationId(), value.sourceTurnId(), value.ownerUserId(),
                 value.title(), value.problemDescription(), value.attemptedActions(), value.status(),
                 value.rootCause(), value.solution(), value.closeReason(), value.version(),
                 value.createdBy(), value.createdAt(), value.updatedBy(), value.updatedAt(),

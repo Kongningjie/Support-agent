@@ -8,18 +8,22 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
 import com.lawrence.supportagent.asynctask.port.AsyncTaskRepository;
+import com.lawrence.supportagent.auth.AuthenticatedUser;
 import com.lawrence.supportagent.idempotency.IdempotentExecutor;
 import com.lawrence.supportagent.idempotency.IdempotencyCommand;
 import com.lawrence.supportagent.idempotency.IdempotentResource;
 import com.lawrence.supportagent.knowledge.port.ManagedDocumentRepository;
+import com.lawrence.supportagent.knowledgespace.KnowledgeSpaceAccessService;
 import com.lawrence.supportagent.resolvedcase.port.ResolvedCaseRepository;
 import com.lawrence.supportagent.sharedkernel.OperatorId;
 import com.lawrence.supportagent.sharedkernel.error.ApplicationException;
 import com.lawrence.supportagent.sharedkernel.error.ErrorCode;
 import com.lawrence.supportagent.ticket.Ticket;
 import com.lawrence.supportagent.ticket.port.TicketRepository;
+import com.lawrence.supportagent.user.UserRole;
 import java.time.Instant;
 import java.util.Optional;
+import java.util.UUID;
 import java.util.function.LongFunction;
 import java.util.function.Supplier;
 import org.junit.jupiter.api.BeforeEach;
@@ -28,6 +32,8 @@ import org.junit.jupiter.api.Test;
 /** 验证死亡任务人工重试时的原任务保留及关联业务版本门禁。 */
 class AsyncTaskUseCaseTest {
     private static final Instant NOW = Instant.parse("2026-09-04T01:00:00Z");
+    private static final AuthenticatedUser ADMIN = new AuthenticatedUser(
+            UUID.randomUUID(), "admin", UserRole.ADMIN);
     private AsyncTaskRepository taskRepository;
     private TicketRepository ticketRepository;
     private AsyncTaskUseCase useCase;
@@ -47,7 +53,8 @@ class AsyncTaskUseCaseTest {
         };
         useCase = new AsyncTaskUseCase(taskRepository, ticketRepository,
                 mock(ManagedDocumentRepository.class), mock(ResolvedCaseRepository.class),
-                executor, () -> new OperatorId("dev-operator"), () -> NOW);
+                executor, () -> new OperatorId("dev-operator"), () -> NOW,
+                mock(KnowledgeSpaceAccessService.class));
     }
 
     /** 验证已解决工单同版本的死亡任务会生成独立待执行任务。 */
@@ -59,7 +66,7 @@ class AsyncTaskUseCaseTest {
         when(ticketRepository.findById(resolved.id())).thenReturn(Optional.of(resolved));
         when(taskRepository.save(any())).thenAnswer(invocation -> withId(invocation.getArgument(0), 11L));
 
-        AsyncTaskDetails retried = useCase.retry(10L, "依赖已经恢复", "retry-1");
+        AsyncTaskDetails retried = useCase.retry(ADMIN, 10L, "依赖已经恢复", "retry-1");
 
         assertEquals("11", retried.taskId());
         assertEquals("10", retried.retryOfTaskId());
@@ -77,9 +84,21 @@ class AsyncTaskUseCaseTest {
         when(ticketRepository.findById(resolved.id())).thenReturn(Optional.of(resolved));
 
         ApplicationException exception = assertThrows(ApplicationException.class,
-                () -> useCase.retry(10L, "版本不匹配", "retry-2"));
+                () -> useCase.retry(ADMIN, 10L, "版本不匹配", "retry-2"));
 
         assertEquals(ErrorCode.ASYNC_TASK_NOT_RETRYABLE, exception.errorCode());
+    }
+
+    /** 案例生成任务包含原始工单事实，非平台管理员不得通过详情接口发现。 */
+    @Test
+    void shouldHideCaseGenerationTaskFromNonAdministrator() {
+        AuthenticatedUser user = new AuthenticatedUser(UUID.randomUUID(), "user", UserRole.USER);
+        when(taskRepository.findById(10L)).thenReturn(Optional.of(deadTask(20L, 2L)));
+
+        ApplicationException exception = assertThrows(ApplicationException.class,
+                () -> useCase.get(user, 10L));
+
+        assertEquals(ErrorCode.ASYNC_TASK_NOT_FOUND, exception.errorCode());
     }
 
     /** 创建带主键、编号并处于 RESOLVED 状态的测试工单。 */

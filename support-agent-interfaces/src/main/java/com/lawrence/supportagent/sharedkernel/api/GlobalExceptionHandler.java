@@ -65,7 +65,8 @@ public class GlobalExceptionHandler {
     /** 根据公开错误语义选择 HTTP 状态，避免所有应用异常被误报为冲突。 */
     private HttpStatus statusOf(ApplicationException exception) {
         return switch (exception.errorCode()) {
-            case COMMON_VALIDATION_FAILED, KNOWLEDGE_SENSITIVE_CONTENT,
+            case COMMON_VALIDATION_FAILED, KNOWLEDGE_SPACE_CONTEXT_REQUIRED,
+                    KNOWLEDGE_SENSITIVE_CONTENT,
                     MEMORY_SENSITIVE_CONTENT -> HttpStatus.BAD_REQUEST;
             case CHAT_PROMPT_INJECTION_BLOCKED -> HttpStatus.UNPROCESSABLE_ENTITY;
             case AUTH_INVALID_CREDENTIALS, AUTH_UNAUTHORIZED -> HttpStatus.UNAUTHORIZED;
@@ -80,7 +81,7 @@ public class GlobalExceptionHandler {
                     COMMON_IDEMPOTENCY_KEY_REUSED, TICKET_STATUS_CONFLICT,
                     TICKET_VERSION_CONFLICT, KNOWLEDGE_DUPLICATE_CONTENT,
                     KNOWLEDGE_STATUS_CONFLICT, KNOWLEDGE_VERSION_CONFLICT,
-                    ASYNC_TASK_NOT_RETRYABLE, CHAT_VERSION_CONFLICT,
+                    ASYNC_TASK_NOT_RETRYABLE, CHAT_VERSION_CONFLICT, CHAT_SPACE_MISMATCH,
                     CHAT_CONVERSATION_BUSY, CHAT_MESSAGE_ID_REUSED,
                     TICKET_SUGGESTION_IN_PROGRESS, AUTH_USERNAME_CONFLICT,
                     AUTH_USER_VERSION_CONFLICT, AUTH_PASSWORD_REUSED, MEMORY_VERSION_CONFLICT,

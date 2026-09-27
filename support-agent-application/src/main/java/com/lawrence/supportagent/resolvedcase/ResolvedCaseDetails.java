@@ -9,6 +9,8 @@ import java.util.UUID;
  * 提供给接口层的案例详情及来源工单摘要。
  *
  * @param caseId 案例内部主键
+ * @param spaceId 案例归属的知识空间 UUID
+ * @param space 已授权读取的知识空间最小摘要
  * @param sourceTicketNo 来源工单稳定编号
  * @param sourceTicketTitle 来源工单原始标题
  * @param title AI 整理后可由人工修改的案例标题
@@ -33,13 +35,21 @@ public record ResolvedCaseDetails(long caseId, UUID spaceId, KnowledgeSpaceSumma
                                   String archiveReason, Instant createdAt, Instant updatedAt,
                                   Instant publishedAt, Instant archivedAt) {
     /** 从案例和来源工单创建不暴露内部工单主键的详情。 */
-    public static ResolvedCaseDetails from(ResolvedCase value, Ticket ticket) {
+    public static ResolvedCaseDetails from(ResolvedCase value, Ticket ticket,
+                                           KnowledgeSpaceSummary space,
+                                           boolean includeSourceTicket) {
         return new ResolvedCaseDetails(value.id(), value.spaceId(),
-                KnowledgeSpaceSummary.global(value.spaceId()),
-                ticket.ticketNo(), ticket.title(),
+                space,
+                includeSourceTicket ? ticket.ticketNo() : null,
+                includeSourceTicket ? ticket.title() : null,
                 value.title(), value.problem(), value.cause(), value.solution(), value.status(),
                 value.version(), value.publishFailureReason(), value.rejectionReason(),
                 value.archiveReason(), value.createdAt(), value.updatedAt(),
                 value.publishedAt(), value.archivedAt());
+    }
+
+    /** 为内部 GLOBAL 路径保留兼容工厂。 */
+    public static ResolvedCaseDetails from(ResolvedCase value, Ticket ticket) {
+        return from(value, ticket, KnowledgeSpaceSummary.global(value.spaceId()), true);
     }
 }

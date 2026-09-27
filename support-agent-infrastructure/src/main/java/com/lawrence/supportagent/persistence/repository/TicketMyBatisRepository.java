@@ -13,6 +13,7 @@ import java.util.List;
 import java.util.Optional;
 import java.nio.ByteBuffer;
 import java.util.UUID;
+import java.util.Set;
 import org.springframework.stereotype.Repository;
 
 /** 使用 MyBatis XML 持久化工单聚合。 */
@@ -73,18 +74,25 @@ public class TicketMyBatisRepository implements TicketRepository {
 
     /** {@inheritDoc} */
     @Override
-    public List<Ticket> findPage(TicketStatus status, String keyword, UUID ownerUserId,
+    public List<Ticket> findPage(TicketStatus status, String keyword, Set<UUID> spaceIds,
+                                 UUID ownerUserId,
                                  boolean allTickets, int offset, int size) {
         return workflowMapper.findPage(status == null ? null : status.name(), keyword,
-                        toBytes(ownerUserId), allTickets, offset, size)
+                        bytes(spaceIds), toBytes(ownerUserId), allTickets, offset, size)
                 .stream().map(AggregateRecordMapper::toDomain).toList();
     }
 
     /** {@inheritDoc} */
     @Override
-    public long count(TicketStatus status, String keyword, UUID ownerUserId, boolean allTickets) {
+    public long count(TicketStatus status, String keyword, Set<UUID> spaceIds,
+                      UUID ownerUserId, boolean allTickets) {
         return workflowMapper.count(status == null ? null : status.name(), keyword,
-                toBytes(ownerUserId), allTickets);
+                bytes(spaceIds), toBytes(ownerUserId), allTickets);
+    }
+
+    /** 把空间 UUID 集合编码为 MySQL BINARY(16) 参数列表。 */
+    private List<byte[]> bytes(Set<UUID> values) {
+        return values == null ? List.of() : values.stream().map(this::toBytes).toList();
     }
 
     /** 把可空 UUID 编码为 MySQL BINARY(16)。 */

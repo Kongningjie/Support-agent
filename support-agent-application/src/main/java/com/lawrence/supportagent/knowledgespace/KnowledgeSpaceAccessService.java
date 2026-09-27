@@ -6,9 +6,13 @@ import com.lawrence.supportagent.knowledgespace.port.KnowledgeSpaceRepository;
 import com.lawrence.supportagent.knowledgespace.port.SpaceMembershipRepository;
 import com.lawrence.supportagent.sharedkernel.error.ApplicationException;
 import com.lawrence.supportagent.sharedkernel.error.ErrorCode;
+import com.lawrence.supportagent.retrieval.RetrievalAccessContext;
 import com.lawrence.supportagent.user.UserAccount;
 import com.lawrence.supportagent.user.UserStatus;
+import java.util.LinkedHashSet;
+import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 
 /** 统一执行账号、空间可见性、成员状态和角色的应用层访问判定。 */
@@ -63,6 +67,34 @@ public class KnowledgeSpaceAccessService {
                     "当前操作需要更高的空间角色");
         }
         return space;
+    }
+
+    /** 要求空间处于活动状态且调用者具有读取权限。 */
+    public KnowledgeSpace requireActiveReadable(AuthenticatedUser actor, UUID spaceId) {
+        KnowledgeSpace space = requireReadable(actor, spaceId);
+        if (space.status() != KnowledgeSpaceStatus.ACTIVE) {
+            throw new ApplicationException(ErrorCode.KNOWLEDGE_SPACE_DISABLED, "知识空间已停用");
+        }
+        return space;
+    }
+
+    /** 构造普通问答固定使用的 GLOBAL 与当前活动空间访问上下文。 */
+    public RetrievalAccessContext retrievalContext(AuthenticatedUser actor, UUID activeSpaceId) {
+        KnowledgeSpace active = requireActiveReadable(actor, activeSpaceId);
+        Set<UUID> allowed = new LinkedHashSet<>();
+        allowed.add(KnowledgeSpace.GLOBAL_SPACE_ID);
+        allowed.add(active.spaceId());
+        return new RetrievalAccessContext(actor, active.spaceId(), allowed);
+    }
+
+    /** 返回当前调用者可读的全部活动空间 UUID，仅用于资源列表授权过滤。 */
+    public Set<UUID> readableActiveSpaceIds(AuthenticatedUser actor) {
+        requireActiveActor(actor);
+        List<KnowledgeSpace> readable = actor.administrator()
+                ? spaces.findAdminPage(KnowledgeSpaceStatus.ACTIVE, null, null, 0, 10_000)
+                : spaces.findReadable(actor.userId(), 0, 10_000);
+        return readable.stream().map(KnowledgeSpace::spaceId)
+                .collect(java.util.stream.Collectors.toUnmodifiableSet());
     }
 
     /** 要求调用者具有指定角色，但允许活动成员读取已停用空间的治理历史。 */

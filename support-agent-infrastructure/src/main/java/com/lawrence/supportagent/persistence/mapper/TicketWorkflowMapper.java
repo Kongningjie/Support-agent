@@ -21,11 +21,13 @@ public interface TicketWorkflowMapper {
 
     /** 按状态、关键词及固定排序读取一页工单。 */
     List<TicketDO> findPage(@Param("status") String status, @Param("keyword") String keyword,
+                            @Param("spaceIds") List<byte[]> spaceIds,
                             @Param("ownerUserId") byte[] ownerUserId,
                             @Param("allTickets") boolean allTickets,
                             @Param("offset") int offset, @Param("size") int size);
 
     /** 统计与分页相同过滤条件下的工单数量。 */
     long count(@Param("status") String status, @Param("keyword") String keyword,
-               @Param("ownerUserId") byte[] ownerUserId, @Param("allTickets") boolean allTickets);
+               @Param("spaceIds") List<byte[]> spaceIds, @Param("ownerUserId") byte[] ownerUserId,
+               @Param("allTickets") boolean allTickets);
 }

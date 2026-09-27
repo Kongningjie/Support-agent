@@ -25,6 +25,8 @@ import com.lawrence.supportagent.knowledge.ElasticsearchKnowledgeIndexAdapter;
 import com.lawrence.supportagent.knowledge.ExactTermExtractor;
 import com.lawrence.supportagent.knowledge.MySqlKnowledgeSourceValidityAdapter;
 import com.lawrence.supportagent.knowledge.port.ManagedDocumentRepository;
+import com.lawrence.supportagent.knowledgespace.KnowledgeSpaceAccessService;
+import com.lawrence.supportagent.knowledgespace.port.KnowledgeSpaceRepository;
 import com.lawrence.supportagent.model.ChatModelPort;
 import com.lawrence.supportagent.model.ConversationSummaryPort;
 import com.lawrence.supportagent.model.DashScopeRerankModelAdapter;
@@ -239,8 +241,9 @@ public class ChatConfiguration {
     }
     /** 创建会话列表、详情、重置和删除的生命周期用例。 */
     @Bean public ConversationLifecycleUseCase conversationLifecycleUseCase(
-            ConversationStorePort store, TimeProvider time) {
-        return new ConversationLifecycleUseCase(store, time);
+            ConversationStorePort store, TimeProvider time,
+            KnowledgeSpaceAccessService access) {
+        return new ConversationLifecycleUseCase(store, time, access);
     }
     /** 创建 MySQL Agent 安全审计适配器。 */
     @Bean public AgentAuditPort agentAuditPort(AgentAuditMapper mapper, ObjectMapper json) {
@@ -248,8 +251,9 @@ public class ChatConfiguration {
     }
     /** 创建 MySQL 知识来源有效性回查端口。 */
     @Bean public KnowledgeSourceValidityPort knowledgeSourceValidityPort(
-            ManagedDocumentRepository documents, ResolvedCaseRepository cases) {
-        return new MySqlKnowledgeSourceValidityAdapter(documents, cases);
+            ManagedDocumentRepository documents, ResolvedCaseRepository cases,
+            KnowledgeSpaceRepository spaces) {
+        return new MySqlKnowledgeSourceValidityAdapter(documents, cases, spaces);
     }
     /** 使用配置文件中的完整字段创建不可变检索参数快照。 */
     @Bean public RetrievalParameters retrievalParameters(
@@ -312,13 +316,14 @@ public class ChatConfiguration {
                                          OptimizationTelemetryPort telemetry,
                                          PromptSecurityPolicy promptSecurity,
                                          ModelOutputSecurityService outputSecurity,
+                                         KnowledgeSpaceAccessService spaceAccess,
                                          @Value("${support-agent.conversation.suggestion-ttl:24h}")
                                          Duration suggestionTtl) {
         var config = properties.dashscope();
         return new ChatUseCase(intents, retrieval, model, tickets, conversations, audits, validator,
                 ids, time, config.chatModel(), config.embeddingModel(), config.rerankModel(),
                 parameters.groundedThreshold(), telemetry, suggestionTtl, contextService,
-                memoryCandidates, promptSecurity, outputSecurity);
+                memoryCandidates, promptSecurity, outputSecurity, spaceAccess);
     }
 
     /** 将启动模块配置转换为模型适配层不可变生成参数。 */

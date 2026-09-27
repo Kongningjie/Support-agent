@@ -16,6 +16,8 @@ import com.lawrence.supportagent.knowledge.IndexedKnowledgeChunk;
 import com.lawrence.supportagent.knowledge.KnowledgeChunkDraft;
 import com.lawrence.supportagent.knowledge.port.KnowledgeIndexException;
 import com.lawrence.supportagent.knowledge.port.KnowledgeIndexPort;
+import com.lawrence.supportagent.knowledgespace.KnowledgeSpaceStatus;
+import com.lawrence.supportagent.knowledgespace.port.KnowledgeSpaceRepository;
 import com.lawrence.supportagent.model.EmbeddingModelPort;
 import com.lawrence.supportagent.model.ModelInvocationException;
 import com.lawrence.supportagent.resolvedcase.port.ResolvedCaseRepository;
@@ -33,19 +35,22 @@ public class ResolvedCaseIndexTaskHandler implements AsyncTaskHandler {
     private final EmbeddingModelPort embeddings;
     private final KnowledgeIndexPort index;
     private final TimeProvider time;
+    private final KnowledgeSpaceRepository spaces;
 
     /** 注入案例、内容策略、分块、向量、索引和时间端口。 */
     public ResolvedCaseIndexTaskHandler(ResolvedCaseRepository cases,
                                         DocumentContentPolicy policy,
                                         DocumentChunker chunker,
                                         EmbeddingModelPort embeddings,
-                                        KnowledgeIndexPort index, TimeProvider time) {
+                                        KnowledgeIndexPort index, TimeProvider time,
+                                        KnowledgeSpaceRepository spaces) {
         this.cases = cases;
         this.policy = policy;
         this.chunker = chunker;
         this.embeddings = embeddings;
         this.index = index;
         this.time = time;
+        this.spaces = spaces;
     }
 
     /** {@inheritDoc} */
@@ -62,6 +67,7 @@ public class ResolvedCaseIndexTaskHandler implements AsyncTaskHandler {
     public AsyncTaskBusinessMutation execute(AsyncTaskExecutionContext context) {
         AsyncTask task = context.task();
         ResolvedCase value = current(task, ResolvedCaseStatus.PUBLISHING);
+        requireActiveSpace(task, value);
         String content = content(value);
         long publishedVersion;
         try {
@@ -89,6 +95,24 @@ public class ResolvedCaseIndexTaskHandler implements AsyncTaskHandler {
             if (exception instanceof AsyncTaskExecutionException failure) throw failure;
             throw new AsyncTaskExecutionException("CASE_INDEX_FAILED", "案例知识索引失败", false);
         }
+    }
+
+    /** 重新读取案例真实空间；空间停用时清理目标版本并取消任务。 */
+    private void requireActiveSpace(AsyncTask task, ResolvedCase value) {
+        boolean active = spaces.findBySpaceId(value.spaceId())
+                .filter(space -> space.status() == KnowledgeSpaceStatus.ACTIVE).isPresent();
+        if (active) {
+            return;
+        }
+        long targetVersion = Math.addExact(task.aggregateVersion(), 1);
+        try {
+            index.deleteVersion(SOURCE_TYPE, task.aggregateId(), targetVersion);
+        } catch (KnowledgeIndexException exception) {
+            throw new AsyncTaskExecutionException("KNOWLEDGE_INDEX_CLEANUP_FAILED",
+                    "停用空间案例分块清理失败", true);
+        }
+        throw new AsyncTaskCancelledException("KNOWLEDGE_SPACE_DISABLED",
+                "知识空间已停用", AsyncTaskBusinessMutation.NONE);
     }
 
     /** {@inheritDoc} */
@@ -145,7 +169,7 @@ public class ResolvedCaseIndexTaskHandler implements AsyncTaskHandler {
             KnowledgeChunkDraft draft = drafts.get(position);
             result.add(new IndexedKnowledgeChunk(SOURCE_TYPE + ":" + value.id() + ":"
                     + version + ":" + draft.chunkIndex(), SOURCE_TYPE, value.id(), version,
-                    draft.chunkIndex(), value.title(), draft.headingPath(), draft.content(),
+                    value.spaceId(), draft.chunkIndex(), value.title(), draft.headingPath(), draft.content(),
                     draft.exactTerms(), draft.contentHash(), vectors.get(position), publishedAt,
                     time.now(), DocumentChunker.VERSION, ExactTermExtractor.VERSION));
         }

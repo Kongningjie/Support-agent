@@ -3,6 +3,7 @@ package com.lawrence.supportagent.retrieval;
 import com.lawrence.supportagent.knowledge.ExactTerm;
 import java.util.List;
 import java.util.Set;
+import java.util.UUID;
 
 /**
  * 表示经检索和来源回查后可交给回答模型的单个证据分块。
@@ -11,6 +12,7 @@ import java.util.Set;
  * @param sourceType 来源类型
  * @param sourceId 来源内部 ID，对外序列化为字符串
  * @param sourceVersion 来源发布版本
+ * @param spaceId 证据来源归属的知识空间 UUID
  * @param title 来源标题
  * @param headingPath 标题路径
  * @param content 分块正文
@@ -22,7 +24,19 @@ import java.util.Set;
  * @param rerankScore 重排分数，可为空
  */
 public record RetrievalEvidence(String chunkId, String sourceType, long sourceId,
-                                long sourceVersion, String title, String headingPath,
+                                long sourceVersion, UUID spaceId, String title, String headingPath,
                                 String content, List<ExactTerm> exactTerms,
                                 Set<String> matchedQueries, Integer bm25Rank,
-                                Integer vectorRank, double rrfScore, Double rerankScore) { }
+                                Integer vectorRank, double rrfScore, Double rerankScore) {
+    /** 为既有锁定 GLOBAL 测试数据保留源代码兼容构造器。 */
+    public RetrievalEvidence(String chunkId, String sourceType, long sourceId,
+                             long sourceVersion, String title, String headingPath,
+                             String content, List<ExactTerm> exactTerms,
+                             Set<String> matchedQueries, Integer bm25Rank,
+                             Integer vectorRank, double rrfScore, Double rerankScore) {
+        this(chunkId, sourceType, sourceId, sourceVersion,
+                com.lawrence.supportagent.knowledgespace.KnowledgeSpace.GLOBAL_SPACE_ID,
+                title, headingPath, content, exactTerms, matchedQueries, bm25Rank,
+                vectorRank, rrfScore, rerankScore);
+    }
+}

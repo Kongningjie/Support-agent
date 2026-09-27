@@ -1,6 +1,9 @@
 package com.lawrence.supportagent.evaluation;
 
+import com.lawrence.supportagent.auth.AuthenticatedUser;
+import com.lawrence.supportagent.knowledgespace.KnowledgeSpaceAccessService;
 import com.lawrence.supportagent.retrieval.RetrievalEvidence;
+import com.lawrence.supportagent.retrieval.RetrievalAccessContext;
 import com.lawrence.supportagent.retrieval.RetrievalMode;
 import com.lawrence.supportagent.retrieval.RetrievalRanking;
 import com.lawrence.supportagent.retrieval.RetrievalService;
@@ -27,6 +30,7 @@ public class RetrievalEvaluationService implements AutoCloseable {
     private final UuidGenerator ids;
     private final TimeProvider time;
     private final EvaluationRuntimeMetadataPort runtimeMetadata;
+    private final KnowledgeSpaceAccessService spaceAccess;
     private final ConcurrentHashMap<UUID, RetrievalEvaluationRun> runs = new ConcurrentHashMap<>();
     private final ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor();
 
@@ -39,7 +43,7 @@ public class RetrievalEvaluationService implements AutoCloseable {
         this(dataset, reports, retrieval, metrics, ids, time, snapshot ->
                 new RetrievalEvaluationContext("1.1", snapshot.kind(), snapshot.version(),
                         snapshot.contentSha256(), "unknown", java.util.Map.of(),
-                        java.util.Map.of()));
+                        java.util.Map.of()), null);
     }
 
     /** 注入数据集、报告、检索、指标、时钟及可复现运行元数据端口。 */
@@ -49,6 +53,17 @@ public class RetrievalEvaluationService implements AutoCloseable {
                                       RetrievalMetricsCalculator metrics,
                                       UuidGenerator ids, TimeProvider time,
                                       EvaluationRuntimeMetadataPort runtimeMetadata) {
+        this(dataset, reports, retrieval, metrics, ids, time, runtimeMetadata, null);
+    }
+
+    /** 注入数据集、检索依赖、运行元数据和显式空间访问判定。 */
+    public RetrievalEvaluationService(RetrievalEvaluationDatasetPort dataset,
+                                      RetrievalEvaluationReportPort reports,
+                                      RetrievalService retrieval,
+                                      RetrievalMetricsCalculator metrics,
+                                      UuidGenerator ids, TimeProvider time,
+                                      EvaluationRuntimeMetadataPort runtimeMetadata,
+                                      KnowledgeSpaceAccessService spaceAccess) {
         this.dataset = dataset;
         this.reports = reports;
         this.retrieval = retrieval;
@@ -56,6 +71,7 @@ public class RetrievalEvaluationService implements AutoCloseable {
         this.ids = ids;
         this.time = time;
         this.runtimeMetadata = runtimeMetadata;
+        this.spaceAccess = spaceAccess;
     }
 
     /** 启动指定模式和可选用例子集的后台评测。 */
@@ -66,6 +82,29 @@ public class RetrievalEvaluationService implements AutoCloseable {
     /** 启动指定数据集、检索模式和可选用例子集的后台评测。 */
     public RetrievalEvaluationRun start(EvaluationDatasetKind kind, RetrievalMode mode,
                                         List<String> requestedCaseIds) {
+        return startInternal(kind, mode, requestedCaseIds,
+                null);
+    }
+
+    /** 使用已认证主体和显式测试空间启动评测，允许集合固定为 GLOBAL 加活动空间。 */
+    public RetrievalEvaluationRun start(AuthenticatedUser actor, UUID activeSpaceId,
+                                        EvaluationDatasetKind kind, RetrievalMode mode,
+                                        List<String> requestedCaseIds) {
+        if (spaceAccess == null) {
+            throw new IllegalStateException("检索评测空间访问服务未配置");
+        }
+        if (activeSpaceId == null) {
+            throw new ApplicationException(ErrorCode.KNOWLEDGE_SPACE_CONTEXT_REQUIRED,
+                    "检索评测必须显式指定测试空间");
+        }
+        RetrievalAccessContext accessContext = spaceAccess.retrievalContext(actor, activeSpaceId);
+        return startInternal(kind, mode, requestedCaseIds, accessContext);
+    }
+
+    /** 校验参数并创建携带固定空间集合的后台评测运行。 */
+    private RetrievalEvaluationRun startInternal(EvaluationDatasetKind kind, RetrievalMode mode,
+                                                 List<String> requestedCaseIds,
+                                                 RetrievalAccessContext accessContext) {
         if (mode == null) throw new IllegalArgumentException("检索评测模式不能为空");
         if (kind == null) throw new IllegalArgumentException("评测数据集用途不能为空");
         RetrievalEvaluationDatasetSnapshot snapshot = dataset.load(kind);
@@ -76,7 +115,7 @@ public class RetrievalEvaluationService implements AutoCloseable {
                 RetrievalEvaluationRun.Status.PENDING, 0, selected.size(), null, null, List.of(),
                 null, time.now(), null, context, LatencySummary.from(List.of()));
         runs.put(runId, pending);
-        executor.submit(() -> execute(runId, mode, selected, snapshot));
+        executor.submit(() -> execute(runId, mode, selected, snapshot, accessContext));
         return pending;
     }
 
@@ -91,14 +130,17 @@ public class RetrievalEvaluationService implements AutoCloseable {
 
     /** 顺序执行用例并持续更新进度，完成后生成只读报告。 */
     private void execute(UUID runId, RetrievalMode mode, List<RetrievalEvaluationCase> cases,
-                         RetrievalEvaluationDatasetSnapshot snapshot) {
+                         RetrievalEvaluationDatasetSnapshot snapshot,
+                         RetrievalAccessContext accessContext) {
         List<RetrievalEvaluationCaseResult> results = new ArrayList<>();
         update(runId, mode, RetrievalEvaluationRun.Status.RUNNING, 0, cases.size(),
                 null, null, results, null, null);
         try {
             for (RetrievalEvaluationCase testCase : cases) {
                 long started = System.nanoTime();
-                RetrievalRanking ranking = retrieval.rank(testCase.query(), mode);
+                RetrievalRanking ranking = accessContext == null
+                        ? retrieval.rank(testCase.query(), mode)
+                        : retrieval.rank(testCase.query(), mode, accessContext);
                 results.add(evaluate(testCase, ranking, elapsed(started), snapshot));
                 update(runId, mode, RetrievalEvaluationRun.Status.RUNNING, results.size(),
                         cases.size(), null, null, results, null, null);

@@ -11,6 +11,9 @@ import com.lawrence.supportagent.sharedkernel.error.ApplicationException;
 import com.lawrence.supportagent.sharedkernel.error.ErrorCode;
 import java.util.List;
 import java.util.Optional;
+import java.nio.ByteBuffer;
+import java.util.Set;
+import java.util.UUID;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.stereotype.Repository;
 
@@ -56,21 +59,39 @@ public class ManagedDocumentMyBatisRepository implements ManagedDocumentReposito
     /** {@inheritDoc} */
     @Override
     public List<ManagedDocument> findPage(ManagedDocumentStatus status, String keyword,
+                                          Set<UUID> spaceIds, boolean publishedOnly,
                                           int offset, int size) {
         String statusName = status == null ? null : status.name();
-        return workflowMapper.findPage(statusName, keyword, offset, size).stream()
+        return workflowMapper.findPage(statusName, keyword, bytes(spaceIds), publishedOnly,
+                        offset, size).stream()
                 .map(AggregateRecordMapper::toDomain).toList();
     }
 
     /** {@inheritDoc} */
     @Override
-    public long count(ManagedDocumentStatus status, String keyword) {
-        return workflowMapper.count(status == null ? null : status.name(), keyword);
+    public long count(ManagedDocumentStatus status, String keyword,
+                      Set<UUID> spaceIds, boolean publishedOnly) {
+        return workflowMapper.count(status == null ? null : status.name(), keyword,
+                bytes(spaceIds), publishedOnly);
     }
 
     /** {@inheritDoc} */
     @Override
-    public boolean existsActiveContentHash(String contentHash, Long excludedDocumentId) {
-        return workflowMapper.countActiveHash(contentHash, excludedDocumentId) > 0;
+    public boolean existsActiveContentHash(UUID spaceId, String contentHash,
+                                           Long excludedDocumentId) {
+        return workflowMapper.countActiveHash(toBytes(spaceId), contentHash,
+                excludedDocumentId) > 0;
+    }
+
+    /** 把空间 UUID 集合编码为 MySQL BINARY(16) 参数列表。 */
+    private List<byte[]> bytes(Set<UUID> values) {
+        return values == null ? List.of() : values.stream().map(this::toBytes).toList();
+    }
+
+    /** 把 UUID 编码为 MySQL BINARY(16)。 */
+    private byte[] toBytes(UUID value) {
+        if (value == null) throw new IllegalArgumentException("空间标识不能为空");
+        return ByteBuffer.allocate(16).putLong(value.getMostSignificantBits())
+                .putLong(value.getLeastSignificantBits()).array();
     }
 }

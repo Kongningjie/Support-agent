@@ -24,7 +24,8 @@ public class RedisConversationStoreAdapter implements ConversationStorePort {
     private static final Duration DEFAULT_RUN_LEASE = Duration.ofMinutes(3);
     private static final Duration DEFAULT_SUGGESTION_LEASE = Duration.ofMinutes(3);
     private static final String PREFIX = "support-agent:chat:";
-    private static final int LIFECYCLE_FIELD_COUNT = 8;
+    private static final String GLOBAL_SPACE_ID = "00000000-0000-0000-0000-000000000001";
+    private static final int LIFECYCLE_FIELD_COUNT = 9;
     private final StringRedisTemplate redis;
     private final ObjectMapper mapper;
     private final Duration conversationTtl;
@@ -54,18 +55,26 @@ public class RedisConversationStoreAdapter implements ConversationStorePort {
     /** {@inheritDoc} */
     @Override
     public BeginResult begin(UUID ownerUserId, UUID conversationId, UUID clientMessageId, String message,
-                             Long expectedVersion, UUID runId, Instant now) {
-        if (ownerUserId == null) throw new IllegalArgumentException("会话所有者不能为空");
+                             UUID requestedSpaceId, Long expectedVersion, UUID runId, Instant now) {
+        if (ownerUserId == null || requestedSpaceId == null) {
+            throw new IllegalArgumentException("会话所有者和知识空间不能为空");
+        }
         UUID actualConversationId = conversationId == null ? UUID.randomUUID() : conversationId;
         String script = """
                 local exists=redis.call('EXISTS',KEYS[1])
                 if exists==0 then
                   if ARGV[4]~='-' then return {'EXPIRED'} end
                   redis.call('HSET',KEYS[1],'version','0','generation','0','summaryVersion','0',
-                    'lastSequence','0','ownerUserId',ARGV[1],'createdAt',ARGV[5],'lastAccessAt',ARGV[5],'status','IDLE')
-                elseif redis.call('HGET',KEYS[1],'ownerUserId')~=ARGV[1] then return {'OWNER'}
-                elseif ARGV[4]=='-' or (redis.call('HGET',KEYS[1],'version') or '0')~=ARGV[4] then
-                  return {'VERSION',redis.call('HGET',KEYS[1],'version') or '0'}
+                    'lastSequence','0','ownerUserId',ARGV[1],'spaceId',ARGV[11],
+                    'createdAt',ARGV[5],'lastAccessAt',ARGV[5],'status','IDLE')
+                else
+                  if redis.call('HGET',KEYS[1],'ownerUserId')~=ARGV[1] then return {'OWNER'} end
+                  local storedSpace=redis.call('HGET',KEYS[1],'spaceId')
+                  if not storedSpace then storedSpace='00000000-0000-0000-0000-000000000001'; redis.call('HSET',KEYS[1],'spaceId',storedSpace) end
+                  if storedSpace~=ARGV[11] then return {'SPACE_MISMATCH'} end
+                  if ARGV[4]=='-' or (redis.call('HGET',KEYS[1],'version') or '0')~=ARGV[4] then
+                    return {'VERSION',redis.call('HGET',KEYS[1],'version') or '0'}
+                  end
                 end
                 local generation=redis.call('HGET',KEYS[1],'generation') or '0'
                 local messageKey=ARGV[9]..generation..':'..ARGV[8]
@@ -76,7 +85,7 @@ public class RedisConversationStoreAdapter implements ConversationStorePort {
                   redis.call('ZADD',KEYS[2],ARGV[5],ARGV[10])
                   redis.call('EXPIRE',KEYS[1],ARGV[7]); redis.call('EXPIRE',messageKey,ARGV[7])
                   redis.call('EXPIRE',KEYS[2],ARGV[7]); redis.call('EXPIRE',KEYS[3],ARGV[7]); redis.call('EXPIRE',KEYS[4],ARGV[7])
-                  return {'REPLAY',redis.call('HGET',KEYS[1],'version') or '0',redis.call('HGET',messageKey,'result')}
+                  return {'REPLAY',redis.call('HGET',KEYS[1],'version') or '0',redis.call('HGET',messageKey,'result'),redis.call('HGET',KEYS[1],'spaceId')}
                 end
                 local active=redis.call('HGET',KEYS[1],'activeRunId')
                 local lease=tonumber(redis.call('HGET',KEYS[1],'runLeaseUntil') or '0')
@@ -89,14 +98,15 @@ public class RedisConversationStoreAdapter implements ConversationStorePort {
                 redis.call('ZADD',KEYS[2],ARGV[5],ARGV[10])
                 redis.call('EXPIRE',KEYS[1],ARGV[7]); redis.call('EXPIRE',messageKey,ARGV[7])
                 redis.call('EXPIRE',KEYS[2],ARGV[7]); redis.call('EXPIRE',KEYS[3],ARGV[7]); redis.call('EXPIRE',KEYS[4],ARGV[7])
-                return {'ACQUIRED',redis.call('HGET',KEYS[1],'version'),interrupted}
+                return {'ACQUIRED',redis.call('HGET',KEYS[1],'version'),interrupted,redis.call('HGET',KEYS[1],'spaceId')}
                 """;
         List<?> result = executeList(script, List.of(conversationKey(actualConversationId),
                         userIndexKey(ownerUserId), turnsKey(actualConversationId), auxiliaryKey(actualConversationId)),
                 ownerUserId.toString(), runId.toString(), sha256(message.trim()),
                 expectedVersion == null ? "-" : expectedVersion.toString(), Long.toString(now.toEpochMilli()),
                 Long.toString(now.plus(runLease).toEpochMilli()), Long.toString(conversationTtl.toSeconds()),
-                clientMessageId.toString(), messageKeyPrefix(actualConversationId), actualConversationId.toString());
+                clientMessageId.toString(), messageKeyPrefix(actualConversationId), actualConversationId.toString(),
+                requestedSpaceId.toString());
         return beginResult(actualConversationId, result);
     }
 
@@ -104,16 +114,20 @@ public class RedisConversationStoreAdapter implements ConversationStorePort {
     private BeginResult beginResult(UUID conversationId, List<?> result) {
         String status = string(result, 0);
         if ("MESSAGE_REUSED".equals(status)) throw error(ErrorCode.CHAT_MESSAGE_ID_REUSED, "clientMessageId 已用于其他消息");
+        if ("SPACE_MISMATCH".equals(status)) throw error(ErrorCode.CHAT_SPACE_MISMATCH,
+                "请求空间与会话当前代际不一致");
         if ("OWNER".equals(status) || "EXPIRED".equals(status)) throw notFound();
         if ("VERSION".equals(status)) throw versionConflict();
         if ("BUSY".equals(status)) throw busy();
         if ("REPLAY".equals(status)) {
             return new BeginResult(BeginStatus.REPLAY, conversationId,
-                    Long.parseLong(string(result, 1)), read(string(result, 2), CompletedTurn.class), null);
+                    Long.parseLong(string(result, 1)), UUID.fromString(string(result, 3)),
+                    read(string(result, 2), CompletedTurn.class), null);
         }
         UUID interrupted = string(result, 2).isBlank() ? null : UUID.fromString(string(result, 2));
         return new BeginResult(BeginStatus.ACQUIRED, conversationId,
-                Long.parseLong(string(result, 1)), null, interrupted);
+                Long.parseLong(string(result, 1)), UUID.fromString(string(result, 3)),
+                null, interrupted);
     }
 
     /** {@inheritDoc} */
@@ -168,7 +182,8 @@ public class RedisConversationStoreAdapter implements ConversationStorePort {
                 redis.call('SADD',KEYS[4],messageKey)
                 if ARGV[7]=='1' then
                   local suggestionKey=ARGV[14]..generation..':'..ARGV[12]
-                  redis.call('HSET',suggestionKey,'status','AVAILABLE','context',ARGV[8],'sourceTurnId',ARGV[9])
+                  redis.call('HSET',suggestionKey,'status','AVAILABLE','context',ARGV[8],
+                    'sourceTurnId',ARGV[9],'spaceId',redis.call('HGET',KEYS[1],'spaceId'))
                   redis.call('SADD',KEYS[4],suggestionKey); redis.call('EXPIRE',suggestionKey,ARGV[16])
                 end
                 redis.call('ZADD',KEYS[2],ARGV[5],ARGV[15])
@@ -220,12 +235,14 @@ public class RedisConversationStoreAdapter implements ConversationStorePort {
                 local generation=redis.call('HGET',KEYS[1],'generation') or '0'
                 local suggestionKey=ARGV[6]..generation..':'..ARGV[5]
                 if redis.call('EXISTS',suggestionKey)==0 then return {'NOT_FOUND'} end
+                local space=redis.call('HGET',suggestionKey,'spaceId')
+                if not space then space=redis.call('HGET',KEYS[1],'spaceId') or '00000000-0000-0000-0000-000000000001'; redis.call('HSET',KEYS[1],'spaceId',space); redis.call('HSET',suggestionKey,'spaceId',space) end
                 local status=redis.call('HGET',suggestionKey,'status')
-                if status=='CONSUMED' then return {'CONSUMED','','',redis.call('HGET',suggestionKey,'sourceTurnId'),redis.call('HGET',suggestionKey,'ticketNo')} end
+                if status=='CONSUMED' then return {'CONSUMED','',space,'',redis.call('HGET',suggestionKey,'sourceTurnId'),redis.call('HGET',suggestionKey,'ticketNo')} end
                 local lease=tonumber(redis.call('HGET',suggestionKey,'leaseUntil') or '0')
                 if status=='PROCESSING' and lease>tonumber(ARGV[2]) then return {'PROCESSING'} end
                 redis.call('HSET',suggestionKey,'status','PROCESSING','claimId',ARGV[3],'leaseUntil',ARGV[4])
-                return {'CLAIMED',ARGV[3],redis.call('HGET',suggestionKey,'context'),redis.call('HGET',suggestionKey,'sourceTurnId'),''}
+                return {'CLAIMED',ARGV[3],space,redis.call('HGET',suggestionKey,'context'),redis.call('HGET',suggestionKey,'sourceTurnId'),''}
                 """;
         List<?> result = executeList(script, List.of(conversationKey(conversationId)), ownerUserId.toString(),
                 Long.toString(now.toEpochMilli()), claimId.toString(), Long.toString(now.plus(suggestionLease).toEpochMilli()),
@@ -234,7 +251,8 @@ public class RedisConversationStoreAdapter implements ConversationStorePort {
         if ("NOT_FOUND".equals(status)) throw error(ErrorCode.TICKET_SUGGESTION_NOT_FOUND, "工单建议不存在或已过期");
         if ("PROCESSING".equals(status)) throw error(ErrorCode.TICKET_SUGGESTION_IN_PROGRESS, "工单建议正在处理中");
         return new SuggestionClaim(status, string(result, 1).isBlank() ? null : UUID.fromString(string(result, 1)),
-                string(result, 2), UUID.fromString(string(result, 3)), string(result, 4));
+                UUID.fromString(string(result, 2)), string(result, 3),
+                UUID.fromString(string(result, 4)), string(result, 5));
     }
 
     /** {@inheritDoc} */
@@ -285,7 +303,8 @@ public class RedisConversationStoreAdapter implements ConversationStorePort {
     public MemorySnapshot memorySnapshot(UUID ownerUserId, UUID conversationId) {
         String script = """
                 if redis.call('EXISTS',KEYS[1])==0 or redis.call('HGET',KEYS[1],'ownerUserId')~=ARGV[1] then return {'EXPIRED'} end
-                local result={redis.call('HGET',KEYS[1],'version') or '0',
+                local space=redis.call('HGET',KEYS[1],'spaceId'); if not space then space='00000000-0000-0000-0000-000000000001'; redis.call('HSET',KEYS[1],'spaceId',space) end
+                local result={space,redis.call('HGET',KEYS[1],'version') or '0',
                   redis.call('HGET',KEYS[1],'generation') or '0',redis.call('HGET',KEYS[1],'summaryVersion') or '0',
                   redis.call('HGET',KEYS[1],'summary') or ''}
                 local turns=redis.call('LRANGE',KEYS[2],0,-1)
@@ -296,11 +315,12 @@ public class RedisConversationStoreAdapter implements ConversationStorePort {
                 List.of(conversationKey(conversationId), turnsKey(conversationId)), ownerUserId.toString());
         if ("EXPIRED".equals(string(values, 0))) throw notFound();
         List<CompletedTurn> turns = new ArrayList<>();
-        for (int index = 4; index < values.size(); index++) turns.add(read(string(values, index), CompletedTurn.class));
-        String summaryJson = string(values, 3);
+        for (int index = 5; index < values.size(); index++) turns.add(read(string(values, index), CompletedTurn.class));
+        String summaryJson = string(values, 4);
         ConversationSummary summary = summaryJson.isBlank() ? null : read(summaryJson, ConversationSummary.class);
-        return new MemorySnapshot(conversationId, Long.parseLong(string(values, 0)),
-                Long.parseLong(string(values, 1)), Long.parseLong(string(values, 2)), summary, turns);
+        return new MemorySnapshot(conversationId, UUID.fromString(string(values, 0)),
+                Long.parseLong(string(values, 1)), Long.parseLong(string(values, 2)),
+                Long.parseLong(string(values, 3)), summary, turns);
     }
 
     /** {@inheritDoc} */
@@ -353,12 +373,13 @@ public class RedisConversationStoreAdapter implements ConversationStorePort {
                 local page=redis.call('ZREVRANGE',KEYS[1],tonumber(ARGV[2]),tonumber(ARGV[2])+tonumber(ARGV[3])-1)
                 for _,id in ipairs(page) do
                   local key=ARGV[5]..'{'..id..'}'; local owner=redis.call('HGET',key,'ownerUserId')
+                  local space=redis.call('HGET',key,'spaceId'); if not space then space='00000000-0000-0000-0000-000000000001'; redis.call('HSET',key,'spaceId',space) end
                   local lease=tonumber(redis.call('HGET',key,'runLeaseUntil') or '0')
                   local active=redis.call('HGET',key,'activeRunId'); local status='IDLE'
                   if active and lease>tonumber(ARGV[4]) then status='RUNNING' end
                   local accessed=redis.call('HGET',key,'lastAccessAt') or redis.call('HGET',key,'createdAt') or ARGV[4]
                   local ttl=redis.call('PTTL',key); local expires=tonumber(ARGV[4]); if ttl>0 then expires=expires+ttl end
-                  table.insert(result,id); table.insert(result,owner); table.insert(result,status)
+                  table.insert(result,id); table.insert(result,owner); table.insert(result,space); table.insert(result,status)
                   table.insert(result,redis.call('HGET',key,'version') or '0')
                   table.insert(result,redis.call('HGET',key,'generation') or '0')
                   table.insert(result,redis.call('HGET',key,'summaryVersion') or '0')
@@ -384,16 +405,20 @@ public class RedisConversationStoreAdapter implements ConversationStorePort {
                 if redis.call('EXISTS',KEYS[1])==0 then return {'NOT_FOUND'} end
                 local owner=redis.call('HGET',KEYS[1],'ownerUserId')
                 if not owner or (owner~=ARGV[1] and ARGV[2]~='1') then return {'NOT_FOUND'} end
+                local space=redis.call('HGET',KEYS[1],'spaceId'); if not space then space='00000000-0000-0000-0000-000000000001'; redis.call('HSET',KEYS[1],'spaceId',space) end
                 local lease=tonumber(redis.call('HGET',KEYS[1],'runLeaseUntil') or '0')
                 local active=redis.call('HGET',KEYS[1],'activeRunId'); local status='IDLE'
                 if active and lease>tonumber(ARGV[3]) then status='RUNNING' end
                 local accessed=redis.call('HGET',KEYS[1],'lastAccessAt') or redis.call('HGET',KEYS[1],'createdAt') or ARGV[3]
                 local ttl=redis.call('PTTL',KEYS[1]); local expires=tonumber(ARGV[3]); if ttl>0 then expires=expires+ttl end
-                local result={'OK',owner,status,redis.call('HGET',KEYS[1],'version') or '0',
+                local result={'OK',owner,space,status,redis.call('HGET',KEYS[1],'version') or '0',
                   redis.call('HGET',KEYS[1],'generation') or '0',redis.call('HGET',KEYS[1],'summaryVersion') or '0',
                   accessed,tostring(expires)}
-                local turns=redis.call('LRANGE',KEYS[2],-tonumber(ARGV[4]),-1)
-                for _,turn in ipairs(turns) do table.insert(result,turn) end
+                local recent=tonumber(ARGV[4])
+                if recent>0 then
+                  local turns=redis.call('LRANGE',KEYS[2],-recent,-1)
+                  for _,turn in ipairs(turns) do table.insert(result,turn) end
+                end
                 return result
                 """;
         List<?> values = executeList(script, List.of(conversationKey(conversationId), turnsKey(conversationId)),
@@ -401,13 +426,15 @@ public class RedisConversationStoreAdapter implements ConversationStorePort {
                 Integer.toString(recentTurnLimit));
         if ("NOT_FOUND".equals(string(values, 0))) throw notFound();
         List<CompletedTurn> turns = new ArrayList<>();
-        for (int index = 8; index < values.size(); index++) turns.add(read(string(values, index), CompletedTurn.class));
+        for (int index = 9; index < values.size(); index++) turns.add(read(string(values, index), CompletedTurn.class));
         return lifecycle(conversationId, values, 1, turns);
     }
 
     /** {@inheritDoc} */
     @Override
-    public LifecycleSnapshot reset(UUID ownerUserId, UUID conversationId, long expectedVersion, Instant now) {
+    public LifecycleSnapshot reset(UUID ownerUserId, UUID conversationId, UUID newSpaceId,
+                                   long expectedVersion, Instant now) {
+        if (newSpaceId == null) throw new IllegalArgumentException("重置后的知识空间不能为空");
         String script = """
                 if redis.call('EXISTS',KEYS[1])==0 or redis.call('HGET',KEYS[1],'ownerUserId')~=ARGV[1] then return {'NOT_FOUND'} end
                 if (redis.call('HGET',KEYS[1],'version') or '0')~=ARGV[2] then return {'VERSION'} end
@@ -418,16 +445,16 @@ public class RedisConversationStoreAdapter implements ConversationStorePort {
                 redis.call('DEL',KEYS[3],KEYS[4])
                 local generation=tonumber(redis.call('HGET',KEYS[1],'generation') or '0')+1
                 redis.call('HSET',KEYS[1],'version','0','generation',tostring(generation),'summaryVersion','0',
-                  'lastSequence','0','status','IDLE','lastAccessAt',ARGV[3])
+                  'lastSequence','0','spaceId',ARGV[6],'status','IDLE','lastAccessAt',ARGV[3])
                 redis.call('HDEL',KEYS[1],'summary','summaryCoveredThroughVersion','agentState','activeRunId','runLeaseUntil','activeMessageKey')
                 redis.call('ZADD',KEYS[2],ARGV[3],ARGV[5]); redis.call('EXPIRE',KEYS[1],ARGV[4]); redis.call('EXPIRE',KEYS[2],ARGV[4])
                 local expires=tonumber(ARGV[3])+tonumber(ARGV[4])*1000
-                return {'OK',ARGV[1],'IDLE','0',tostring(generation),'0',ARGV[3],tostring(expires)}
+                return {'OK',ARGV[1],ARGV[6],'IDLE','0',tostring(generation),'0',ARGV[3],tostring(expires)}
                 """;
         List<?> values = executeList(script, List.of(conversationKey(conversationId), userIndexKey(ownerUserId),
                         turnsKey(conversationId), auxiliaryKey(conversationId)), ownerUserId.toString(),
                 Long.toString(expectedVersion), Long.toString(now.toEpochMilli()),
-                Long.toString(conversationTtl.toSeconds()), conversationId.toString());
+                Long.toString(conversationTtl.toSeconds()), conversationId.toString(), newSpaceId.toString());
         lifecycleWriteResult(values);
         return lifecycle(conversationId, values, 1, List.of());
     }
@@ -473,10 +500,11 @@ public class RedisConversationStoreAdapter implements ConversationStorePort {
     /** 从不包含会话 ID 的连续字段构造生命周期快照。 */
     private LifecycleSnapshot lifecycle(UUID conversationId, List<?> values, int start, List<CompletedTurn> turns) {
         return new LifecycleSnapshot(conversationId, UUID.fromString(string(values, start)),
-                ConversationLifecycleStatus.valueOf(string(values, start + 1)),
-                Long.parseLong(string(values, start + 2)), Long.parseLong(string(values, start + 3)),
-                Long.parseLong(string(values, start + 4)), instant(string(values, start + 5)),
-                instant(string(values, start + 6)), turns);
+                UUID.fromString(string(values, start + 1)),
+                ConversationLifecycleStatus.valueOf(string(values, start + 2)),
+                Long.parseLong(string(values, start + 3)), Long.parseLong(string(values, start + 4)),
+                Long.parseLong(string(values, start + 5)), instant(string(values, start + 6)),
+                instant(string(values, start + 7)), turns);
     }
 
     /** 把 Redis 毫秒时间戳转换为 UTC 时间。 */

@@ -16,6 +16,7 @@ import com.lawrence.supportagent.chat.port.ConversationStorePort.BeginResult;
 import com.lawrence.supportagent.chat.port.ConversationStorePort.BeginStatus;
 import com.lawrence.supportagent.knowledge.DocumentContentPolicy;
 import com.lawrence.supportagent.knowledge.ExactTermExtractor;
+import com.lawrence.supportagent.knowledgespace.KnowledgeSpace;
 import com.lawrence.supportagent.model.ChatModelPort;
 import com.lawrence.supportagent.model.ChatModelPort.ModelAnswer;
 import com.lawrence.supportagent.model.ModelInvocationSecurity;
@@ -115,8 +116,9 @@ class ChatUseCaseOutputSecurityTest {
     /** 创建已取得运行租约的测试存储。 */
     private ConversationStorePort preparedStore() {
         ConversationStorePort store = mock(ConversationStorePort.class);
-        when(store.begin(any(), any(), any(), any(), any(), any(), any())).thenReturn(
-                new BeginResult(BeginStatus.ACQUIRED, UUID.randomUUID(), 0, null, null));
+        when(store.begin(any(), any(), any(), any(), any(), any(), any(), any())).thenReturn(
+                new BeginResult(BeginStatus.ACQUIRED, UUID.randomUUID(), 0,
+                        KnowledgeSpace.GLOBAL_SPACE_ID, null, null));
         when(store.recentContext(any(), any(), anyInt(), anyInt())).thenReturn(List.of());
         AtomicLong sequence = new AtomicLong();
         when(store.nextSequence(any(), any(), any())).thenAnswer(ignored -> sequence.incrementAndGet());

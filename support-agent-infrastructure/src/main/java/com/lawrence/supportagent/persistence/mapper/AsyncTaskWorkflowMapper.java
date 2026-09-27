@@ -54,5 +54,7 @@ public interface AsyncTaskWorkflowMapper {
 
     /** 仅允许当前持锁 Worker 取消运行中任务。 */
     int cancelOwned(@Param("id") long id, @Param("workerId") String workerId,
+                    @Param("errorCode") String errorCode,
+                    @Param("errorMessage") String errorMessage,
                     @Param("now") Instant now);
 }

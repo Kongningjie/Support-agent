@@ -14,6 +14,10 @@ import com.lawrence.supportagent.knowledge.DocumentChunker;
 import com.lawrence.supportagent.knowledge.DocumentContentPolicy;
 import com.lawrence.supportagent.knowledge.port.KnowledgeIndexPort;
 import com.lawrence.supportagent.model.EmbeddingModelPort;
+import com.lawrence.supportagent.knowledgespace.KnowledgeSpace;
+import com.lawrence.supportagent.knowledgespace.KnowledgeSpaceStatus;
+import com.lawrence.supportagent.knowledgespace.KnowledgeSpaceVisibility;
+import com.lawrence.supportagent.knowledgespace.port.KnowledgeSpaceRepository;
 import com.lawrence.supportagent.resolvedcase.port.ResolvedCaseRepository;
 import java.time.Instant;
 import java.util.Optional;
@@ -30,9 +34,15 @@ class ResolvedCaseIndexTaskHandlerTest {
         ResolvedCaseRepository cases = mock(ResolvedCaseRepository.class);
         ResolvedCase publishing = draft().startPublishing("reviewer", NOW);
         when(cases.findById(1)).thenReturn(Optional.of(publishing));
+        KnowledgeSpaceRepository spaces = mock(KnowledgeSpaceRepository.class);
+        KnowledgeSpace global = new KnowledgeSpace(1L, KnowledgeSpace.GLOBAL_SPACE_ID,
+                "GLOBAL", "企业公共知识", null, KnowledgeSpaceVisibility.ENTERPRISE,
+                KnowledgeSpaceStatus.ACTIVE, true, 0, "system", NOW, "system", NOW);
+        when(spaces.findBySpaceId(KnowledgeSpace.GLOBAL_SPACE_ID)).thenReturn(Optional.of(global));
         ResolvedCaseIndexTaskHandler handler = new ResolvedCaseIndexTaskHandler(cases,
                 mock(DocumentContentPolicy.class), mock(DocumentChunker.class),
-                mock(EmbeddingModelPort.class), mock(KnowledgeIndexPort.class), () -> NOW);
+                mock(EmbeddingModelPort.class), mock(KnowledgeIndexPort.class), () -> NOW,
+                spaces);
         AsyncTask task = AsyncTask.pending(AsyncTaskType.KNOWLEDGE_INDEX,
                 AggregateType.RESOLVED_CASE, 1, publishing.version(),
                 "case-index:1:1", "reviewer", NOW);

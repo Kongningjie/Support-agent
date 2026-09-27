@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.lawrence.supportagent.chat.port.ConversationStorePort.CompletedTurn;
+import com.lawrence.supportagent.knowledgespace.KnowledgeSpace;
 import com.lawrence.supportagent.retrieval.RetrievalStatus;
 import com.lawrence.supportagent.sharedkernel.error.ApplicationException;
 import com.lawrence.supportagent.sharedkernel.error.ErrorCode;
@@ -36,6 +37,58 @@ class RedisConversationStoreAdapterIT {
     private RedisConversationStoreAdapter store;
     private LettuceConnectionFactory connectionFactory;
     private StringRedisTemplate redisTemplate;
+
+    /** 同一代际提供不同空间必须稳定拒绝，且不得取得新的运行租约。 */
+    @Test
+    void shouldRejectSpaceChangeWithinSameGeneration() {
+        UUID originalSpace = UUID.randomUUID();
+        UUID otherSpace = UUID.randomUUID();
+        UUID runId = UUID.randomUUID();
+        var begin = store.begin(OWNER_ID, null, UUID.randomUUID(), "问题", originalSpace,
+                null, runId, Instant.now());
+        store.fail(OWNER_ID, begin.conversationId(), runId, Instant.now());
+
+        assertThatThrownBy(() -> store.begin(OWNER_ID, begin.conversationId(), UUID.randomUUID(),
+                "继续", otherSpace, 0L, UUID.randomUUID(), Instant.now()))
+                .isInstanceOfSatisfying(ApplicationException.class, exception ->
+                        assertThat(exception.errorCode()).isEqualTo(ErrorCode.CHAT_SPACE_MISMATCH));
+    }
+
+    /** 历史无空间字段会话首次读取必须原子回填 GLOBAL，而不是推断业务空间。 */
+    @Test
+    void shouldBackfillGlobalForHistoricalConversationWithoutSpaceField() {
+        var begin = store.begin(OWNER_ID, null, UUID.randomUUID(), "历史问题",
+                KnowledgeSpace.GLOBAL_SPACE_ID, null, UUID.randomUUID(), Instant.now());
+        String key = "support-agent:chat:conversation:{" + begin.conversationId() + "}";
+        redisTemplate.opsForHash().delete(key, "spaceId");
+
+        var details = store.lifecycleDetails(OWNER_ID, false, begin.conversationId(),
+                20, Instant.now());
+
+        assertThat(details.spaceId()).isEqualTo(KnowledgeSpace.GLOBAL_SPACE_ID);
+        assertThat(redisTemplate.opsForHash().get(key, "spaceId"))
+                .isEqualTo(KnowledgeSpace.GLOBAL_SPACE_ID.toString());
+    }
+
+    /** 重置开启新代际时允许显式换空间，并清除旧代际动态状态。 */
+    @Test
+    void shouldBindNewSpaceWhenResetStartsNewGeneration() {
+        UUID originalSpace = UUID.randomUUID();
+        UUID newSpace = UUID.randomUUID();
+        UUID runId = UUID.randomUUID();
+        var begin = store.begin(OWNER_ID, null, UUID.randomUUID(), "问题", originalSpace,
+                null, runId, Instant.now());
+        store.fail(OWNER_ID, begin.conversationId(), runId, Instant.now());
+
+        var reset = store.reset(OWNER_ID, begin.conversationId(), newSpace, 0,
+                Instant.now().plusSeconds(1));
+
+        assertThat(reset.generation()).isEqualTo(1);
+        assertThat(reset.spaceId()).isEqualTo(newSpace);
+        assertThat(store.begin(OWNER_ID, begin.conversationId(), UUID.randomUUID(), "新问题",
+                newSpace, 0L, UUID.randomUUID(), Instant.now().plusSeconds(2)).spaceId())
+                .isEqualTo(newSpace);
+    }
 
     /** 为每个测试创建连接并清空独立容器数据。 */
     @BeforeEach
@@ -197,6 +250,19 @@ class RedisConversationStoreAdapterIT {
         var details = store.lifecycleDetails(anotherUser, true, conversationId, 20, now);
         assertThat(details.ownerUserId()).isEqualTo(OWNER_ID);
         assertThat(details.turns()).hasSize(1);
+    }
+
+    /** 仅解析会话空间时传入零条限制，不得把完整历史轮次读取到应用层。 */
+    @Test
+    void shouldReturnNoTurnsWhenRecentTurnLimitIsZero() {
+        Instant now = Instant.parse("2026-09-20T08:00:00Z");
+        UUID conversationId = completeConversation(OWNER_ID, now, null).conversationId();
+
+        var metadata = store.lifecycleDetails(OWNER_ID, false, conversationId, 0,
+                now.plusSeconds(1));
+
+        assertThat(metadata.turns()).isEmpty();
+        assertThat(metadata.spaceId()).isEqualTo(KnowledgeSpace.GLOBAL_SPACE_ID);
     }
 
     /** 重置必须递增代次、清空旧摘要和动态键，并阻止重置前摘要任务回写。 */

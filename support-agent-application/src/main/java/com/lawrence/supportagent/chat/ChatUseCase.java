@@ -10,9 +10,12 @@ import com.lawrence.supportagent.model.ChatModelPort.ModelAnswer;
 import com.lawrence.supportagent.model.ModelInvocationSecurity;
 import com.lawrence.supportagent.model.ModelInvocationException;
 import com.lawrence.supportagent.memory.UserMemoryCandidateService;
+import com.lawrence.supportagent.knowledgespace.KnowledgeSpace;
+import com.lawrence.supportagent.knowledgespace.KnowledgeSpaceAccessService;
 import com.lawrence.supportagent.observability.OptimizationTelemetryPort;
 import com.lawrence.supportagent.observability.OptimizationTelemetryPort.Operation;
 import com.lawrence.supportagent.retrieval.RetrievalEvidence;
+import com.lawrence.supportagent.retrieval.RetrievalAccessContext;
 import com.lawrence.supportagent.retrieval.RetrievalResult;
 import com.lawrence.supportagent.retrieval.RetrievalStatus;
 import com.lawrence.supportagent.retrieval.RetrievalService;
@@ -37,6 +40,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicBoolean;
 
@@ -71,6 +75,7 @@ public class ChatUseCase {
     private final UserMemoryCandidateService memoryCandidates;
     private final PromptSecurityPolicy promptSecurity;
     private final ModelOutputSecurityService outputSecurity;
+    private final KnowledgeSpaceAccessService spaceAccess;
 
     /** 创建不向 Agent 下放检索路由或写权限的聊天用例。 */
     public ChatUseCase(IntentRecognitionService intents, RetrievalService retrieval,
@@ -169,6 +174,25 @@ public class ChatUseCase {
                        UserMemoryCandidateService memoryCandidates,
                        PromptSecurityPolicy promptSecurity,
                        ModelOutputSecurityService outputSecurity) {
+        this(intents, retrieval, chatModel, tickets, conversations, audits, validator, ids, time,
+                chatModelName, embeddingModelName, rerankModelName, groundedThreshold,
+                telemetry, suggestionTtl, contextService, memoryCandidates, promptSecurity,
+                outputSecurity, null);
+    }
+
+    /** 创建带阶段 19 会话空间授权和全部既有聊天能力的用例。 */
+    public ChatUseCase(IntentRecognitionService intents, RetrievalService retrieval,
+                       ChatModelPort chatModel, TicketQueryUseCase tickets,
+                       ConversationStorePort conversations, AgentAuditPort audits,
+                       AnswerValidator validator, UuidGenerator ids, TimeProvider time,
+                       String chatModelName, String embeddingModelName,
+                       String rerankModelName, double groundedThreshold,
+                       OptimizationTelemetryPort telemetry, Duration suggestionTtl,
+                       ConversationContextService contextService,
+                       UserMemoryCandidateService memoryCandidates,
+                       PromptSecurityPolicy promptSecurity,
+                       ModelOutputSecurityService outputSecurity,
+                       KnowledgeSpaceAccessService spaceAccess) {
         if (suggestionTtl == null || suggestionTtl.isZero() || suggestionTtl.isNegative()) {
             throw new IllegalArgumentException("工单建议有效期必须大于 0");
         }
@@ -190,6 +214,7 @@ public class ChatUseCase {
         this.memoryCandidates = memoryCandidates;
         this.promptSecurity = Objects.requireNonNull(promptSecurity, "Prompt 安全策略不能为空");
         this.outputSecurity = Objects.requireNonNull(outputSecurity, "模型输出安全服务不能为空");
+        this.spaceAccess = spaceAccess;
     }
 
     /**
@@ -206,10 +231,35 @@ public class ChatUseCase {
             throw new ApplicationException(ErrorCode.CHAT_PROMPT_INJECTION_BLOCKED,
                     "请求包含无法安全处理的指令");
         }
+        UUID activeSpaceId = resolveActiveSpace(request);
+        RetrievalAccessContext accessContext = spaceAccess == null
+                ? new RetrievalAccessContext(request.actor(), activeSpaceId,
+                activeSpaceId.equals(KnowledgeSpace.GLOBAL_SPACE_ID)
+                        ? Set.of(KnowledgeSpace.GLOBAL_SPACE_ID)
+                        : Set.of(KnowledgeSpace.GLOBAL_SPACE_ID, activeSpaceId))
+                : spaceAccess.retrievalContext(request.actor(), activeSpaceId);
+        ChatRequest normalized = new ChatRequest(request.actor(), activeSpaceId,
+                request.conversationId(), request.clientMessageId(), request.message(),
+                request.expectedConversationVersion());
         UUID runId = ids.generate();
-        BeginResult begin = conversations.begin(request.actor().userId(), request.conversationId(), request.clientMessageId(),
-                request.message(), request.expectedConversationVersion(), runId, time.now());
-        return new PreparedChat(request, runId, begin);
+        BeginResult begin = conversations.begin(request.actor().userId(), request.conversationId(),
+                request.clientMessageId(), request.message(), activeSpaceId,
+                request.expectedConversationVersion(), runId, time.now());
+        return new PreparedChat(normalized, runId, begin, accessContext);
+    }
+
+    /** 解析新会话或既有会话的活动空间，并在历史兼容窗口使用 GLOBAL。 */
+    private UUID resolveActiveSpace(ChatRequest request) {
+        if (request.conversationId() == null) {
+            return request.spaceId() == null ? KnowledgeSpace.GLOBAL_SPACE_ID : request.spaceId();
+        }
+        UUID storedSpaceId = conversations.lifecycleDetails(request.actor().userId(), false,
+                request.conversationId(), 0, time.now()).spaceId();
+        if (request.spaceId() != null && !request.spaceId().equals(storedSpaceId)) {
+            throw new ApplicationException(ErrorCode.CHAT_SPACE_MISMATCH,
+                    "请求空间与会话当前代际不一致");
+        }
+        return storedSpaceId;
     }
 
     /** 执行一次完整聊天运行，失败时不写半轮会话。 */
@@ -250,8 +300,8 @@ public class ChatUseCase {
             List<String> context = modelContext(ownerUserId, begin.conversationId(), List.of(request.message()));
             IntentDecision decision = intents.recognize(request.message(), context);
             audits.recordIntent(runId, decision);
-            Outcome outcome = route(request.actor(), begin.conversationId(), runId, request.message(), context,
-                    decision, sink);
+            Outcome outcome = route(request.actor(), prepared.accessContext(), begin.conversationId(),
+                    runId, request.message(), context, decision, sink);
             CompletedTurn pending = new CompletedTurn(ids.generate(), request.clientMessageId(), runId,
                     request.message().trim(), decision.standaloneQuery(), decision.intent(), outcome.answer,
                     outcome.retrievalStatus, outcome.citations, outcome.suggestionId,
@@ -305,13 +355,15 @@ public class ChatUseCase {
 
     /** 按应用层确定的意图执行唯一允许的分支。 */
     private Outcome route(com.lawrence.supportagent.auth.AuthenticatedUser actor,
+                          RetrievalAccessContext accessContext,
                           UUID conversationId, UUID runId, String message, List<String> context,
                           IntentDecision decision, ChatEventSink sink) {
         return switch (decision.intent()) {
             case OUT_OF_SCOPE -> fixed(OUT_OF_SCOPE, "OUT_OF_SCOPE");
             case GREETING -> greeting(actor.userId(), conversationId, runId, message, context);
             case TICKET_QUERY -> ticket(actor, conversationId, runId, message, context, decision);
-            case SUPPORT_QUERY -> support(actor.userId(), conversationId, runId, message, context, decision, sink);
+            case SUPPORT_QUERY -> support(actor.userId(), accessContext, conversationId, runId,
+                    message, context, decision, sink);
         };
     }
 
@@ -385,11 +437,13 @@ public class ChatUseCase {
     }
 
     /** 执行完整 RAG，并严格区分无知识与检索技术故障。 */
-    private Outcome support(UUID ownerUserId, UUID conversationId, UUID runId,
+    private Outcome support(UUID ownerUserId, RetrievalAccessContext accessContext,
+                            UUID conversationId, UUID runId,
                             String message, List<String> context,
                             IntentDecision decision, ChatEventSink sink) {
         emit(ownerUserId, sink, conversationId, runId, "retrieval.started", Map.of("mode", "HYBRID"));
-        RetrievalResult result = secureRetrieval(retrieval.retrieve(decision.standaloneQuery()));
+        RetrievalResult result = secureRetrieval(retrieval.retrieve(
+                decision.standaloneQuery(), accessContext));
         audits.recordRetrieval(runId, decision.standaloneQuery(), result, groundedThreshold, time.now());
         Map<String, Object> completed = new LinkedHashMap<>();
         completed.put("status", result.status().name());
@@ -406,7 +460,7 @@ public class ChatUseCase {
             return new Outcome(NO_KNOWLEDGE, "no-knowledge-v1", "NO_RELIABLE_KNOWLEDGE",
                     RetrievalStatus.NO_RELIABLE_KNOWLEDGE, List.of(), ids.generate(), null);
         }
-        List<Citation> citations = citations(result.evidence());
+        List<Citation> citations = citations(result.evidence(), accessContext.allowedSpaceIds());
         List<String> answerContext = modelContext(ownerUserId, conversationId, fixedSections(message, result.evidence()));
         int regenerations = 0;
         List<String> feedback = List.of();
@@ -590,11 +644,17 @@ public class ChatUseCase {
     }
 
     /** 为最终证据按顺序分配 S1 开始的临时引用。 */
-    private List<Citation> citations(List<RetrievalEvidence> evidence) {
+    private List<Citation> citations(List<RetrievalEvidence> evidence,
+                                     Set<UUID> allowedSpaceIds) {
         List<Citation> values = new ArrayList<>();
         for (int index = 0; index < evidence.size(); index++) {
             RetrievalEvidence item = evidence.get(index);
-            values.add(new Citation("S" + (index + 1), Long.toString(item.sourceId()), item.title(),
+            if (item.spaceId() == null || !allowedSpaceIds.contains(item.spaceId())) {
+                throw new ApplicationException(ErrorCode.RETRIEVAL_FAILED,
+                        "检索证据空间校验失败");
+            }
+            values.add(new Citation("S" + (index + 1), item.spaceId(),
+                    Long.toString(item.sourceId()), item.title(),
                     item.headingPath(), item.sourceType(), "RESOLVED_CASE".equals(item.sourceType())
                     ? Long.toString(item.sourceId()) : null));
         }
@@ -707,6 +767,7 @@ public class ChatUseCase {
     private Map<String, Object> citationData(Citation citation) {
         Map<String, Object> value = new LinkedHashMap<>();
         value.put("citationId", citation.citationId());
+        value.put("spaceId", citation.spaceId().toString());
         value.put("documentId", citation.documentId());
         value.put("documentTitle", citation.documentTitle());
         value.put("headingPath", citation.headingPath());
@@ -726,5 +787,6 @@ public class ChatUseCase {
                            UUID suggestionId, String agentState) { }
 
     /** 保存同步校验后交给异步 SSE 执行阶段的不可变上下文。 */
-    public record PreparedChat(ChatRequest request, UUID runId, BeginResult begin) { }
+    public record PreparedChat(ChatRequest request, UUID runId, BeginResult begin,
+                               RetrievalAccessContext accessContext) { }
 }

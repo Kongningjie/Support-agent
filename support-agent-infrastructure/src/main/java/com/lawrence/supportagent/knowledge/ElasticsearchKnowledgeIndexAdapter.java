@@ -6,6 +6,7 @@ import co.elastic.clients.transport.rest5_client.low_level.ResponseException;
 import co.elastic.clients.transport.rest5_client.low_level.Rest5Client;
 import com.lawrence.supportagent.knowledge.port.KnowledgeIndexException;
 import com.lawrence.supportagent.knowledge.port.KnowledgeIndexPort;
+import com.lawrence.supportagent.knowledge.port.KnowledgeIndexRebuildPort;
 import com.lawrence.supportagent.knowledge.ExactTerm;
 import com.lawrence.supportagent.knowledge.ExactTermExtractor;
 import com.lawrence.supportagent.knowledge.ExactTermType;
@@ -22,15 +23,21 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.UUID;
 import org.apache.hc.core5.http.ContentType;
 import org.apache.hc.core5.http.io.entity.EntityUtils;
 import org.apache.hc.core5.http.io.entity.StringEntity;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import tools.jackson.core.JacksonException;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
 
 /** 使用 Elasticsearch REST5 客户端维护版本化知识索引和固定业务别名。 */
-public class ElasticsearchKnowledgeIndexAdapter implements KnowledgeIndexPort, KnowledgeSearchPort {
+public class ElasticsearchKnowledgeIndexAdapter implements KnowledgeIndexPort, KnowledgeIndexRebuildPort,
+        KnowledgeSearchPort {
+    private static final Logger LOGGER = LoggerFactory.getLogger(
+            ElasticsearchKnowledgeIndexAdapter.class);
     private static final String ICU_ANALYZER = "support_icu";
     private static final double CJK_AUXILIARY_WEIGHT = 0.5;
     private final Rest5Client client;
@@ -66,7 +73,9 @@ public class ElasticsearchKnowledgeIndexAdapter implements KnowledgeIndexPort, K
 
     /** {@inheritDoc} */
     @Override
-    public List<RetrievalEvidence> searchBm25(String query, int limit) {
+    public List<RetrievalEvidence> searchBm25(String query, Set<UUID> allowedSpaceIds,
+                                              int limit) {
+        Map<String, Object> spaceFilter = spaceFilter(allowedSpaceIds);
         List<Object> should = new ArrayList<>();
         should.add(Map.of("multi_match", Map.of("query", query, "type", "best_fields",
                 "fields", weightedTextFields(),
@@ -86,13 +95,16 @@ public class ElasticsearchKnowledgeIndexAdapter implements KnowledgeIndexPort, K
         }
         Map<String, Object> body = Map.of("size", limit, "track_total_hits", false,
                 "_source", true, "query", Map.of("bool", Map.of(
+                        "filter", List.of(spaceFilter),
                         "should", should, "minimum_should_match", 1)));
-        return parseSearch(perform("POST", "/" + aliasName + "/_search", body, true));
+        return parseSearch(perform("POST", "/" + aliasName + "/_search", body, true),
+                allowedSpaceIds);
     }
 
     /** {@inheritDoc} */
     @Override
-    public List<RetrievalEvidence> searchVector(List<Double> vector, int limit,
+    public List<RetrievalEvidence> searchVector(List<Double> vector,
+                                                Set<UUID> allowedSpaceIds, int limit,
                                                 int numberOfCandidates,
                                                 double minimumSimilarity) {
         if (vector == null || vector.size() != 1024
@@ -101,21 +113,42 @@ public class ElasticsearchKnowledgeIndexAdapter implements KnowledgeIndexPort, K
         }
         Map<String, Object> knn = Map.of("field", "embedding", "query_vector", vector,
                 "k", limit, "num_candidates", numberOfCandidates,
-                "similarity", minimumSimilarity);
+                "similarity", minimumSimilarity, "filter", spaceFilter(allowedSpaceIds));
         return parseSearch(perform("POST", "/" + aliasName + "/_search",
-                Map.of("size", limit, "_source", true, "knn", knn), true));
+                Map.of("size", limit, "_source", true, "knn", knn), true),
+                allowedSpaceIds);
     }
 
     /** 把 Elasticsearch 命中转换为与客户端 SDK 无关的候选证据。 */
-    private List<RetrievalEvidence> parseSearch(JsonNode response) {
+    private List<RetrievalEvidence> parseSearch(JsonNode response,
+                                                Set<UUID> allowedSpaceIds) {
         JsonNode hits = response.path("hits").path("hits");
         if (!hits.isArray()) {
             throw failure("KNOWLEDGE_SEARCH_RESPONSE_INVALID",
                     "Elasticsearch 检索响应结构不合法", false, null);
         }
         List<RetrievalEvidence> values = new ArrayList<>();
+        int missingSpace = 0;
+        int malformedSpace = 0;
+        int outsideScope = 0;
         for (JsonNode hit : hits) {
             JsonNode source = hit.path("_source");
+            JsonNode spaceNode = source.path("spaceId");
+            if (!spaceNode.isString()) {
+                missingSpace++;
+                continue;
+            }
+            UUID spaceId;
+            try {
+                spaceId = UUID.fromString(spaceNode.stringValue());
+            } catch (IllegalArgumentException exception) {
+                malformedSpace++;
+                continue;
+            }
+            if (!allowedSpaceIds.contains(spaceId)) {
+                outsideScope++;
+                continue;
+            }
             List<ExactTerm> terms = new ArrayList<>();
             for (JsonNode term : source.path("exactTerms")) {
                 terms.add(new ExactTerm(ExactTermType.valueOf(term.path("type").stringValue()),
@@ -127,11 +160,29 @@ public class ElasticsearchKnowledgeIndexAdapter implements KnowledgeIndexPort, K
             hit.path("matched_queries").forEach(value -> matches.add(value.stringValue()));
             values.add(new RetrievalEvidence(source.path("chunkId").stringValue(),
                     source.path("sourceType").stringValue(), source.path("sourceId").asLong(),
-                    source.path("sourceVersion").asLong(), source.path("title").stringValue(),
+                    source.path("sourceVersion").asLong(), spaceId,
+                    source.path("title").stringValue(),
                     source.path("headingPath").stringValue(), source.path("content").stringValue(),
                     List.copyOf(terms), Set.copyOf(matches), null, null, 0, null));
         }
+        recordRejectedHits(missingSpace, malformedSpace, outsideScope);
         return List.copyOf(values);
+    }
+
+    /** 仅按固定原因和数量记录被失败关闭的索引命中，不输出空间或知识内容。 */
+    private void recordRejectedHits(int missingSpace, int malformedSpace, int outsideScope) {
+        if (missingSpace > 0) {
+            LOGGER.warn("Elasticsearch knowledge hits rejected: reason=SPACE_MISSING count={}",
+                    missingSpace);
+        }
+        if (malformedSpace > 0) {
+            LOGGER.warn("Elasticsearch knowledge hits rejected: reason=SPACE_MALFORMED count={}",
+                    malformedSpace);
+        }
+        if (outsideScope > 0) {
+            LOGGER.warn("Elasticsearch knowledge hits rejected: reason=SPACE_OUTSIDE_SCOPE count={}",
+                    outsideScope);
+        }
     }
 
     /** {@inheritDoc} */
@@ -157,22 +208,35 @@ public class ElasticsearchKnowledgeIndexAdapter implements KnowledgeIndexPort, K
                     Map.of("add", Map.of("index", indexName, "alias", aliasName)))), false);
             return;
         }
-        if (aliases.size() != 1 || !aliases.has(indexName)) {
+        if (aliases.size() != 1) {
             throw failure("KNOWLEDGE_ALIAS_CONFLICT",
-                    "Elasticsearch 业务别名已指向其他物理索引", false, null);
+                    "Elasticsearch 业务别名同时指向多个物理索引", false, null);
         }
+        // 单独指向旧索引是受控全量重建前的迁移态；检索会因旧分块缺少 spaceId 而失败关闭。
+        // 目标索引只有在 rebuild 完整性校验通过后才由 activateTarget 原子接管别名。
     }
 
     /** {@inheritDoc} */
     @Override
     public void indexChunks(List<IndexedKnowledgeChunk> chunks) {
+        indexChunks(aliasName, chunks);
+    }
+
+    /** {@inheritDoc} */
+    @Override
+    public void indexTargetChunks(List<IndexedKnowledgeChunk> chunks) {
+        indexChunks(indexName, chunks);
+    }
+
+    /** 使用 Bulk API 写入指定索引，并逐项校验结果。 */
+    private void indexChunks(String target, List<IndexedKnowledgeChunk> chunks) {
         if (chunks == null || chunks.isEmpty()) {
             throw new IllegalArgumentException("待索引分块不能为空");
         }
         StringBuilder body = new StringBuilder();
         for (IndexedKnowledgeChunk chunk : chunks) {
             appendJsonLine(body, Map.of("index", Map.of(
-                    "_index", aliasName, "_id", chunk.chunkId())));
+                    "_index", target, "_id", chunk.chunkId())));
             appendJsonLine(body, chunkDocument(chunk));
         }
         Request request = request("POST", "/_bulk?refresh=wait_for");
@@ -191,17 +255,96 @@ public class ElasticsearchKnowledgeIndexAdapter implements KnowledgeIndexPort, K
     @Override
     public boolean verifyVersion(String sourceType, long sourceId, long sourceVersion,
                                  List<String> expectedContentHashes) {
+        return verifyVersion(aliasName, sourceType, sourceId, sourceVersion, null,
+                expectedContentHashes);
+    }
+
+    /** {@inheritDoc} */
+    @Override
+    public boolean verifyTargetVersion(String sourceType, long sourceId, long sourceVersion,
+                                       UUID spaceId, List<String> expectedContentHashes) {
+        return verifyVersion(indexName, sourceType, sourceId, sourceVersion, spaceId,
+                expectedContentHashes);
+    }
+
+    /** 校验指定索引内的来源版本，可选同时核对所有分块空间。 */
+    private boolean verifyVersion(String target, String sourceType, long sourceId,
+                                  long sourceVersion, UUID expectedSpaceId,
+                                  List<String> expectedContentHashes) {
         Map<String, Object> query = versionQuery(sourceType, sourceId, sourceVersion);
         Map<String, Object> body = Map.of("size", expectedContentHashes.size() + 1,
-                "track_total_hits", true, "_source", List.of("contentHash"), "query", query);
-        JsonNode response = perform("POST", "/" + aliasName + "/_search", body, true);
+                "track_total_hits", true, "_source", List.of("contentHash", "spaceId"), "query", query);
+        JsonNode response = perform("POST", "/" + target + "/_search", body, true);
         JsonNode hits = response.path("hits").path("hits");
         if (!hits.isArray() || hits.size() != expectedContentHashes.size()) {
             return false;
         }
         List<String> actual = new ArrayList<>();
-        hits.forEach(hit -> actual.add(hit.path("_source").path("contentHash").stringValue()));
+        for (JsonNode hit : hits) {
+            JsonNode source = hit.path("_source");
+            if (expectedSpaceId != null && !expectedSpaceId.toString().equals(
+                    source.path("spaceId").stringValue())) {
+                return false;
+            }
+            actual.add(source.path("contentHash").stringValue());
+        }
         return multiset(actual).equals(multiset(expectedContentHashes));
+    }
+
+    /** {@inheritDoc} */
+    @Override
+    public void prepareTarget() {
+        JsonNode aliases = getOptional("/_alias/" + aliasName);
+        if (aliases != null && aliases.has(indexName)) {
+            throw failure("KNOWLEDGE_REBUILD_TARGET_ACTIVE",
+                    "目标物理索引当前正在提供检索，不能原地重建", false, null);
+        }
+        if (getOptional("/" + indexName) != null) {
+            perform("DELETE", "/" + indexName, null, false);
+        }
+        perform("PUT", "/" + indexName, indexDefinition(), false);
+    }
+
+    /** {@inheritDoc} */
+    @Override
+    public long countTargetChunks() {
+        JsonNode response = perform("POST", "/" + indexName + "/_count",
+                Map.of("query", Map.of("match_all", Map.of())), true);
+        return response.path("count").asLong(-1);
+    }
+
+    /** {@inheritDoc} */
+    @Override
+    public boolean targetSpacesAreKnown(Set<UUID> knownSpaceIds) {
+        if (knownSpaceIds == null || knownSpaceIds.isEmpty()) {
+            return false;
+        }
+        List<String> known = knownSpaceIds.stream().map(UUID::toString).toList();
+        Map<String, Object> invalid = Map.of("bool", Map.of("should", List.of(
+                Map.of("bool", Map.of("must_not", List.of(Map.of("exists", Map.of("field", "spaceId"))))),
+                Map.of("bool", Map.of("must_not", List.of(Map.of("terms", Map.of("spaceId", known)))))),
+                "minimum_should_match", 1));
+        JsonNode response = perform("POST", "/" + indexName + "/_count",
+                Map.of("query", invalid), true);
+        return response.path("count").asLong(-1) == 0;
+    }
+
+    /** {@inheritDoc} */
+    @Override
+    public void activateTarget() {
+        JsonNode aliases = getOptional("/_alias/" + aliasName);
+        List<Object> actions = new ArrayList<>();
+        if (aliases != null) {
+            aliases.properties().forEach(entry -> actions.add(
+                    Map.of("remove", Map.of("index", entry.getKey(), "alias", aliasName))));
+        }
+        actions.add(Map.of("add", Map.of("index", indexName, "alias", aliasName)));
+        perform("POST", "/_aliases", Map.of("actions", actions), false);
+        JsonNode switched = getOptional("/_alias/" + aliasName);
+        if (switched == null || switched.size() != 1 || !switched.has(indexName)) {
+            throw failure("KNOWLEDGE_ALIAS_SWITCH_FAILED",
+                    "Elasticsearch 业务别名切换校验失败", true, null);
+        }
     }
 
     /** {@inheritDoc} */
@@ -232,6 +375,7 @@ public class ElasticsearchKnowledgeIndexAdapter implements KnowledgeIndexPort, K
         properties.put("sourceType", Map.of("type", "keyword"));
         properties.put("sourceId", Map.of("type", "long"));
         properties.put("sourceVersion", Map.of("type", "long"));
+        properties.put("spaceId", Map.of("type", "keyword"));
         properties.put("chunkIndex", Map.of("type", "integer"));
         properties.put("title", textField());
         properties.put("headingPath", textField());
@@ -266,6 +410,7 @@ public class ElasticsearchKnowledgeIndexAdapter implements KnowledgeIndexPort, K
                 && stringEquals(mapping.path("content").path("analyzer"), "support_icu")
                 && cjkMappingMatches(mapping)
                 && stringEquals(mapping.path("exactTerms").path("type"), "nested")
+                && stringEquals(mapping.path("spaceId").path("type"), "keyword")
                 && mapping.path("embedding").path("dims").asInt() == 1024;
         if (!valid) {
             throw failure("KNOWLEDGE_INDEX_MAPPING_MISMATCH",
@@ -338,6 +483,8 @@ public class ElasticsearchKnowledgeIndexAdapter implements KnowledgeIndexPort, K
         value.put("sourceType", chunk.sourceType());
         value.put("sourceId", chunk.sourceId());
         value.put("sourceVersion", chunk.sourceVersion());
+        if (chunk.spaceId() == null) throw new IllegalArgumentException("索引分块空间不能为空");
+        value.put("spaceId", chunk.spaceId().toString());
         value.put("chunkIndex", chunk.chunkIndex());
         value.put("title", chunk.title());
         value.put("headingPath", chunk.headingPath());
@@ -368,6 +515,15 @@ public class ElasticsearchKnowledgeIndexAdapter implements KnowledgeIndexPort, K
     private List<Object> sourceFilters(String sourceType, long sourceId) {
         return List.of(Map.of("term", Map.of("sourceType", sourceType)),
                 Map.of("term", Map.of("sourceId", sourceId)));
+    }
+
+    /** 构造 BM25 与向量召回共同使用的空间 terms 过滤器。 */
+    private Map<String, Object> spaceFilter(Set<UUID> allowedSpaceIds) {
+        if (allowedSpaceIds == null || allowedSpaceIds.isEmpty()) {
+            throw new IllegalArgumentException("检索允许空间不能为空");
+        }
+        List<String> values = allowedSpaceIds.stream().map(UUID::toString).sorted().toList();
+        return Map.of("terms", Map.of("spaceId", values));
     }
 
     /** 执行删除查询并等待刷新，同时拒绝版本冲突或执行超时。 */

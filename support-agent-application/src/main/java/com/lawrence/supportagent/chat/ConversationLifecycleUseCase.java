@@ -4,6 +4,7 @@ import com.lawrence.supportagent.auth.AuthenticatedUser;
 import com.lawrence.supportagent.chat.port.ConversationStorePort;
 import com.lawrence.supportagent.chat.port.ConversationStorePort.CompletedTurn;
 import com.lawrence.supportagent.chat.port.ConversationStorePort.LifecycleSnapshot;
+import com.lawrence.supportagent.knowledgespace.KnowledgeSpaceAccessService;
 import com.lawrence.supportagent.sharedkernel.port.TimeProvider;
 import java.util.List;
 import java.util.UUID;
@@ -14,11 +15,14 @@ public class ConversationLifecycleUseCase {
     private static final int RECENT_DETAIL_TURNS = 20;
     private final ConversationStorePort conversations;
     private final TimeProvider time;
+    private final KnowledgeSpaceAccessService spaceAccess;
 
     /** 注入会话存储端口和统一时间端口。 */
-    public ConversationLifecycleUseCase(ConversationStorePort conversations, TimeProvider time) {
+    public ConversationLifecycleUseCase(ConversationStorePort conversations, TimeProvider time,
+                                        KnowledgeSpaceAccessService spaceAccess) {
         this.conversations = conversations;
         this.time = time;
+        this.spaceAccess = spaceAccess;
     }
 
     /** 查询当前认证用户自己的会话，并按最近访问时间倒序分页。 */
@@ -50,10 +54,16 @@ public class ConversationLifecycleUseCase {
     }
 
     /** 仅允许所有者在版本一致且没有活动运行时重置会话。 */
-    public ConversationOverview reset(AuthenticatedUser actor, UUID conversationId, long expectedVersion) {
+    public ConversationOverview reset(AuthenticatedUser actor, UUID conversationId,
+                                      UUID requestedSpaceId, long expectedVersion) {
         requireActor(actor);
         validateWrite(conversationId, expectedVersion);
-        return overview(conversations.reset(actor.userId(), conversationId, expectedVersion, time.now()));
+        LifecycleSnapshot current = conversations.lifecycleDetails(actor.userId(), false,
+                conversationId, 0, time.now());
+        UUID nextSpaceId = requestedSpaceId == null ? current.spaceId() : requestedSpaceId;
+        spaceAccess.requireActiveReadable(actor, nextSpaceId);
+        return overview(conversations.reset(actor.userId(), conversationId, nextSpaceId,
+                expectedVersion, time.now()));
     }
 
     /** 仅允许所有者在版本一致且没有活动运行时永久删除 Redis 会话。 */
@@ -65,7 +75,8 @@ public class ConversationLifecycleUseCase {
 
     /** 把存储快照投影为不包含所有者和内部状态的公开元数据。 */
     private ConversationOverview overview(LifecycleSnapshot snapshot) {
-        return new ConversationOverview(snapshot.conversationId(), snapshot.status(), snapshot.version(),
+        return new ConversationOverview(snapshot.conversationId(), snapshot.spaceId(),
+                snapshot.status(), snapshot.version(),
                 snapshot.generation(), snapshot.summaryVersion(), snapshot.lastAccessAt(), snapshot.expiresAt());
     }
 

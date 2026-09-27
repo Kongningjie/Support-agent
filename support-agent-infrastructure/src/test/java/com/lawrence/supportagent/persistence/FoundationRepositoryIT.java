@@ -4,6 +4,9 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
 import com.lawrence.supportagent.asynctask.AggregateType;
 import com.lawrence.supportagent.asynctask.AsyncTask;
@@ -25,6 +28,7 @@ import com.lawrence.supportagent.knowledge.port.ManagedDocumentRepository;
 import com.lawrence.supportagent.knowledgespace.KnowledgeSpace;
 import com.lawrence.supportagent.knowledgespace.KnowledgeSpaceStatus;
 import com.lawrence.supportagent.knowledgespace.KnowledgeSpaceVisibility;
+import com.lawrence.supportagent.knowledgespace.KnowledgeSpaceAccessService;
 import com.lawrence.supportagent.knowledgespace.SpaceMembership;
 import com.lawrence.supportagent.knowledgespace.SpaceRole;
 import com.lawrence.supportagent.knowledgespace.port.KnowledgeSpaceRepository;
@@ -460,18 +464,20 @@ class FoundationRepositoryIT {
     /** 验证工单创建结果可重放，且同一幂等键不能承载不同请求。 */
     @Test
     void shouldReplayIdempotentTicketCreationAndRejectChangedRequest() {
-        TicketQueryUseCase queryUseCase = new TicketQueryUseCase(ticketRepository);
+        KnowledgeSpaceAccessService access = ticketSpaceAccess();
+        TicketQueryUseCase queryUseCase = new TicketQueryUseCase(ticketRepository,
+                knowledgeSpaceRepository, access);
         TicketCommandUseCase commandUseCase = new TicketCommandUseCase(ticketRepository,
                 queryUseCase, idempotentExecutor, Instant::now,
-                new AsyncTaskCreator(taskRepository, Instant::now));
+                new AsyncTaskCreator(taskRepository, Instant::now), access);
         String key = "integration-ticket-" + UUID.randomUUID();
 
-        TicketDetails first = commandUseCase.createDraft(ACTOR, "幂等工单", "相同请求只创建一次",
+        TicketDetails first = commandUseCase.createDraft(ACTOR, null, "幂等工单", "相同请求只创建一次",
                 null, key);
-        TicketDetails replayed = commandUseCase.createDraft(ACTOR, "幂等工单", "相同请求只创建一次",
+        TicketDetails replayed = commandUseCase.createDraft(ACTOR, null, "幂等工单", "相同请求只创建一次",
                 null, key);
         ApplicationException conflict = assertThrows(ApplicationException.class,
-                () -> commandUseCase.createDraft(ACTOR, "变更标题", "相同请求只创建一次", null, key));
+                () -> commandUseCase.createDraft(ACTOR, null, "变更标题", "相同请求只创建一次", null, key));
 
         assertEquals(first.ticketNo(), replayed.ticketNo());
         assertEquals(ErrorCode.COMMON_IDEMPOTENCY_KEY_REUSED, conflict.errorCode());
@@ -481,12 +487,14 @@ class FoundationRepositoryIT {
     /** 验证解决工单和案例生成任务在同一幂等事务中持久化。 */
     @Test
     void shouldResolveTicketAndInsertCaseGenerationTaskAtomically() {
-        TicketQueryUseCase queryUseCase = new TicketQueryUseCase(ticketRepository);
+        KnowledgeSpaceAccessService access = ticketSpaceAccess();
+        TicketQueryUseCase queryUseCase = new TicketQueryUseCase(ticketRepository,
+                knowledgeSpaceRepository, access);
         TicketCommandUseCase commandUseCase = new TicketCommandUseCase(ticketRepository,
                 queryUseCase, idempotentExecutor, Instant::now,
-                new AsyncTaskCreator(taskRepository, Instant::now));
+                new AsyncTaskCreator(taskRepository, Instant::now), access);
         String suffix = UUID.randomUUID().toString();
-        TicketDetails draft = commandUseCase.createDraft(ACTOR, "待解决工单", "连接失败", null,
+        TicketDetails draft = commandUseCase.createDraft(ACTOR, null, "待解决工单", "连接失败", null,
                 "create-resolve-" + suffix);
         TicketDetails open = commandUseCase.submit(ACTOR, draft.ticketNo(), draft.version(),
                 "submit-resolve-" + suffix);
@@ -502,7 +510,9 @@ class FoundationRepositoryIT {
     /** 验证案例任务插入失败时解决状态随同一业务事务回滚。 */
     @Test
     void shouldRollbackTicketResolutionWhenCaseTaskInsertFails() {
-        TicketQueryUseCase queryUseCase = new TicketQueryUseCase(ticketRepository);
+        KnowledgeSpaceAccessService access = ticketSpaceAccess();
+        TicketQueryUseCase queryUseCase = new TicketQueryUseCase(ticketRepository,
+                knowledgeSpaceRepository, access);
         AsyncTaskCreator failingCreator = new AsyncTaskCreator(taskRepository, Instant::now) {
             /** 模拟数据库无法插入案例生成任务。 */
             @Override
@@ -513,9 +523,9 @@ class FoundationRepositoryIT {
             }
         };
         TicketCommandUseCase commandUseCase = new TicketCommandUseCase(ticketRepository,
-                queryUseCase, idempotentExecutor, Instant::now, failingCreator);
+                queryUseCase, idempotentExecutor, Instant::now, failingCreator, access);
         String suffix = UUID.randomUUID().toString();
-        TicketDetails draft = commandUseCase.createDraft(ACTOR, "事务回滚工单", "连接失败", null,
+        TicketDetails draft = commandUseCase.createDraft(ACTOR, null, "事务回滚工单", "连接失败", null,
                 "create-rollback-" + suffix);
         TicketDetails open = commandUseCase.submit(ACTOR, draft.ticketNo(), draft.version(),
                 "submit-rollback-" + suffix);
@@ -529,6 +539,16 @@ class FoundationRepositoryIT {
                 ticketRepository.findByTicketNo(open.ticketNo()).orElseThrow().status());
         assertEquals(tasksBefore, taskRepository.count(AsyncTaskType.CASE_GENERATION,
                 AsyncTaskStatus.PENDING, AggregateType.TICKET, null));
+    }
+
+    /** 创建只放行活动 GLOBAL 的工单持久化集成测试授权替身。 */
+    private KnowledgeSpaceAccessService ticketSpaceAccess() {
+        KnowledgeSpaceAccessService access = mock(KnowledgeSpaceAccessService.class);
+        KnowledgeSpace global = knowledgeSpaceRepository.findBySpaceId(
+                KnowledgeSpace.GLOBAL_SPACE_ID).orElseThrow();
+        when(access.requireActiveReadable(any(), any())).thenReturn(global);
+        when(access.requireReadable(any(), any())).thenReturn(global);
+        return access;
     }
 
     /** 验证首次请求执行期间，并发相同请求快速返回执行中而不重复执行业务。 */

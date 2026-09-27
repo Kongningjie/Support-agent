@@ -9,6 +9,7 @@ import com.lawrence.supportagent.idempotency.IdempotentExecutor;
 import com.lawrence.supportagent.idempotency.IdempotentResource;
 import com.lawrence.supportagent.idempotency.RequestFingerprint;
 import com.lawrence.supportagent.knowledgespace.KnowledgeSpace;
+import com.lawrence.supportagent.knowledgespace.KnowledgeSpaceAccessService;
 import com.lawrence.supportagent.sharedkernel.error.ApplicationException;
 import com.lawrence.supportagent.sharedkernel.error.ErrorCode;
 import com.lawrence.supportagent.sharedkernel.port.TimeProvider;
@@ -26,58 +27,68 @@ public class TicketCommandUseCase {
     private final IdempotentExecutor idempotentExecutor;
     private final TimeProvider timeProvider;
     private final AsyncTaskCreator taskCreator;
+    private final KnowledgeSpaceAccessService spaceAccess;
 
     /** 注入工单持久化、查询、幂等、操作者和时间端口。 */
     public TicketCommandUseCase(TicketRepository repository, TicketQueryUseCase queryUseCase,
                                 IdempotentExecutor idempotentExecutor, TimeProvider timeProvider,
-                                AsyncTaskCreator taskCreator) {
+                                AsyncTaskCreator taskCreator,
+                                KnowledgeSpaceAccessService spaceAccess) {
         this.repository = repository;
         this.queryUseCase = queryUseCase;
         this.idempotentExecutor = idempotentExecutor;
         this.timeProvider = timeProvider;
         this.taskCreator = taskCreator;
+        this.spaceAccess = spaceAccess;
     }
 
     /** 手工创建工单草稿，并由内部主键确定性生成对外编号。 */
-    public TicketDetails createDraft(AuthenticatedUser actor, String title, String problemDescription,
+    public TicketDetails createDraft(AuthenticatedUser actor, UUID requestedSpaceId,
+                                     String title, String problemDescription,
                                      String attemptedActions, String idempotencyKey) {
         requireActor(actor);
+        UUID spaceId = compatibleSpaceId(requestedSpaceId);
+        spaceAccess.requireActiveReadable(actor, spaceId);
         String normalizedTitle = required(title, "工单标题", 160);
         String normalizedProblem = required(problemDescription, "问题描述", 8000);
         String normalizedActions = optional(attemptedActions, "已尝试操作", 8000);
         IdempotencyCommand command = command(actor, "TICKET_CREATE_DRAFT", idempotencyKey,
-                RequestFingerprint.sha256(normalizedTitle, normalizedProblem, normalizedActions));
+                RequestFingerprint.sha256(spaceId.toString(), normalizedTitle,
+                        normalizedProblem, normalizedActions));
         return idempotentExecutor.execute(command, () -> {
             Instant now = timeProvider.now();
             String operator = actor.userId().toString();
-            Ticket inserted = repository.save(Ticket.draft(KnowledgeSpace.GLOBAL_SPACE_ID,
+            Ticket inserted = repository.save(Ticket.draft(spaceId,
                     null, null, actor.userId(), normalizedTitle,
                     normalizedProblem, normalizedActions, operator, now));
             String ticketNo = formatTicketNo(inserted.id());
             Ticket numbered = repository.assignNumber(inserted, ticketNo);
-            return new IdempotentResource<>("TICKET", numbered.id(), TicketDetails.from(numbered));
+            return new IdempotentResource<>("TICKET", numbered.id(), queryUseCase.details(numbered));
         }, queryUseCase::getByInternalId);
     }
 
     /** 使用冻结会话轮次创建唯一工单草稿；模型生成必须在调用本方法前完成。 */
-    public TicketDetails createSuggestedDraft(AuthenticatedUser actor, UUID conversationId, UUID sourceTurnId,
+    public TicketDetails createSuggestedDraft(AuthenticatedUser actor, UUID spaceId,
+                                              UUID conversationId, UUID sourceTurnId,
                                               String title, String problemDescription,
                                               String attemptedActions, String idempotencyKey) {
         requireActor(actor);
+        spaceAccess.requireActiveReadable(actor, spaceId);
         if (conversationId == null || sourceTurnId == null) throw new IllegalArgumentException("会话和来源轮次不能为空");
         String normalizedTitle = required(title, "工单标题", 160);
         String normalizedProblem = required(problemDescription, "问题描述", 8000);
         String normalizedActions = optional(attemptedActions, "已尝试操作", 8000);
         IdempotencyCommand command = command(actor, "TICKET_CREATE_FROM_CONVERSATION", idempotencyKey,
-                RequestFingerprint.sha256(conversationId.toString(), sourceTurnId.toString()));
+                RequestFingerprint.sha256(spaceId.toString(), conversationId.toString(),
+                        sourceTurnId.toString()));
         return idempotentExecutor.execute(command, () -> {
             Instant now = timeProvider.now();
             String operator = actor.userId().toString();
-            Ticket inserted = repository.save(Ticket.draft(KnowledgeSpace.GLOBAL_SPACE_ID,
+            Ticket inserted = repository.save(Ticket.draft(spaceId,
                     conversationId, sourceTurnId, actor.userId(),
                     normalizedTitle, normalizedProblem, normalizedActions, operator, now));
             Ticket numbered = repository.assignNumber(inserted, formatTicketNo(inserted.id()));
-            return new IdempotentResource<>("TICKET", numbered.id(), TicketDetails.from(numbered));
+            return new IdempotentResource<>("TICKET", numbered.id(), queryUseCase.details(numbered));
         }, queryUseCase::getByInternalId);
     }
 
@@ -86,12 +97,13 @@ public class TicketCommandUseCase {
                                      String attemptedActions, long version) {
         requireActor(actor);
         Ticket current = requireVersion(queryUseCase.requireTicket(actor, ticketNo), version);
+        spaceAccess.requireActiveReadable(actor, current.spaceId());
         requireStatus(current, TicketStatus.DRAFT, "只有草稿工单可以修改");
         Ticket revised = current.reviseDraft(required(title, "工单标题", 160),
                 required(problemDescription, "问题描述", 8000),
                 optional(attemptedActions, "已尝试操作", 8000),
                 actor.userId().toString(), timeProvider.now());
-        return TicketDetails.from(repository.save(revised));
+        return queryUseCase.details(repository.save(revised));
     }
 
     /** 幂等地把版本匹配的草稿提交为开放工单。 */
@@ -101,10 +113,11 @@ public class TicketCommandUseCase {
                 RequestFingerprint.sha256(ticketNo, Long.toString(version)));
         return idempotentExecutor.execute(command, () -> {
             Ticket current = requireVersion(queryUseCase.requireTicket(actor, ticketNo), version);
+            spaceAccess.requireActiveReadable(actor, current.spaceId());
             requireStatus(current, TicketStatus.DRAFT, "只有草稿工单可以提交");
             Ticket saved = repository.save(current.submit(
                     actor.userId().toString(), timeProvider.now()));
-            return new IdempotentResource<>("TICKET", saved.id(), TicketDetails.from(saved));
+            return new IdempotentResource<>("TICKET", saved.id(), queryUseCase.details(saved));
         }, queryUseCase::getByInternalId);
     }
 
@@ -116,13 +129,14 @@ public class TicketCommandUseCase {
                 RequestFingerprint.sha256(ticketNo, Long.toString(version), normalizedReason));
         return idempotentExecutor.execute(command, () -> {
             Ticket current = requireVersion(queryUseCase.requireTicket(actor, ticketNo), version);
+            spaceAccess.requireActiveReadable(actor, current.spaceId());
             if (current.status() != TicketStatus.DRAFT && current.status() != TicketStatus.OPEN) {
                 throw new ApplicationException(ErrorCode.TICKET_STATUS_CONFLICT,
                         "只有草稿或开放工单可以关闭");
             }
             Ticket saved = repository.save(current.close(normalizedReason,
                     actor.userId().toString(), timeProvider.now()));
-            return new IdempotentResource<>("TICKET", saved.id(), TicketDetails.from(saved));
+            return new IdempotentResource<>("TICKET", saved.id(), queryUseCase.details(saved));
         }, queryUseCase::getByInternalId);
     }
 
@@ -137,6 +151,7 @@ public class TicketCommandUseCase {
                         normalizedCause, normalizedSolution));
         return idempotentExecutor.execute(command, () -> {
             Ticket current = requireVersion(queryUseCase.requireTicket(actor, ticketNo), version);
+            spaceAccess.requireActiveReadable(actor, current.spaceId());
             requireStatus(current, TicketStatus.OPEN, "只有开放工单可以解决");
             String operator = actor.userId().toString();
             Ticket saved = repository.save(current.resolve(normalizedCause, normalizedSolution,
@@ -144,7 +159,7 @@ public class TicketCommandUseCase {
             taskCreator.create(AsyncTaskType.CASE_GENERATION, AggregateType.TICKET,
                     saved.id(), saved.version(),
                     "case-generation:" + saved.id() + ":" + saved.version(), operator);
-            return new IdempotentResource<>("TICKET", saved.id(), TicketDetails.from(saved));
+            return new IdempotentResource<>("TICKET", saved.id(), queryUseCase.details(saved));
         }, queryUseCase::getByInternalId);
     }
 
@@ -161,6 +176,11 @@ public class TicketCommandUseCase {
         if (actor == null) {
             throw new ApplicationException(ErrorCode.AUTH_UNAUTHORIZED, "认证信息无效或已经过期");
         }
+    }
+
+    /** 在阶段 19 兼容窗口把缺失空间显式绑定到 GLOBAL。 */
+    private UUID compatibleSpaceId(UUID requestedSpaceId) {
+        return requestedSpaceId == null ? KnowledgeSpace.GLOBAL_SPACE_ID : requestedSpaceId;
     }
 
     /** 校验并规整必填文本。 */

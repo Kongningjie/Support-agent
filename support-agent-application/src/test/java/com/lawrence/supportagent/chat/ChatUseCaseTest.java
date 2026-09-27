@@ -15,6 +15,7 @@ import com.lawrence.supportagent.chat.port.ConversationStorePort.BeginStatus;
 import com.lawrence.supportagent.auth.AuthenticatedUser;
 import com.lawrence.supportagent.model.ChatModelPort;
 import com.lawrence.supportagent.model.IntentRecognitionPort;
+import com.lawrence.supportagent.knowledgespace.KnowledgeSpace;
 import com.lawrence.supportagent.retrieval.RetrievalService;
 import com.lawrence.supportagent.security.DeterministicPromptSecurityPolicy;
 import com.lawrence.supportagent.security.LlmSecuritySettings;
@@ -49,18 +50,19 @@ class ChatUseCaseTest {
                         assertThat(exception.errorCode()).isEqualTo(
                                 ErrorCode.CHAT_PROMPT_INJECTION_BLOCKED))
                 .hasMessage("请求包含无法安全处理的指令");
-        verify(store, never()).begin(any(), any(), any(), any(), any(), any(), any());
+        verify(store, never()).begin(any(), any(), any(), any(), any(), any(), any(), any());
     }
     /** 会话版本等开始条件必须在接口创建 SSE 响应前同步失败。 */
     @Test
     void shouldRejectInvalidBeginDuringPreparation() {
         ConversationStorePort store = mock(ConversationStorePort.class);
-        when(store.begin(any(), any(), any(), any(), any(), any(), any()))
+        when(store.begin(any(), any(), any(), any(), any(), any(), any(), any()))
                 .thenThrow(new IllegalStateException("版本冲突"));
         ChatUseCase useCase = useCase(store);
 
         org.assertj.core.api.Assertions.assertThatThrownBy(() -> useCase.prepare(
-                new ChatRequest(ACTOR, UUID.randomUUID(), UUID.randomUUID(), "问题", 2L)))
+                new ChatRequest(ACTOR, KnowledgeSpace.GLOBAL_SPACE_ID,
+                        null, UUID.randomUUID(), "问题", 2L)))
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessage("版本冲突");
     }
@@ -70,8 +72,9 @@ class ChatUseCaseTest {
     void shouldEmitFixedBranchInStableOrder() {
         ConversationStorePort store = mock(ConversationStorePort.class);
         UUID conversationId = UUID.randomUUID();
-        when(store.begin(any(), any(), any(), any(), any(), any(), any())).thenReturn(
-                new BeginResult(BeginStatus.ACQUIRED, conversationId, 0, null, null));
+        when(store.begin(any(), any(), any(), any(), any(), any(), any(), any())).thenReturn(
+                new BeginResult(BeginStatus.ACQUIRED, conversationId, 0,
+                        KnowledgeSpace.GLOBAL_SPACE_ID, null, null));
         when(store.recentContext(any(), any(), anyInt(), anyInt())).thenReturn(List.of());
         AtomicLong sequence = new AtomicLong();
         when(store.nextSequence(any(), any(), any())).thenAnswer(ignored -> sequence.incrementAndGet());
@@ -91,8 +94,9 @@ class ChatUseCaseTest {
     void shouldFailRunWithoutCommitWhenSseClientStopsAcceptingEvents() {
         ConversationStorePort store = mock(ConversationStorePort.class);
         UUID conversationId = UUID.randomUUID();
-        when(store.begin(any(), any(), any(), any(), any(), any(), any())).thenReturn(
-                new BeginResult(BeginStatus.ACQUIRED, conversationId, 0, null, null));
+        when(store.begin(any(), any(), any(), any(), any(), any(), any(), any())).thenReturn(
+                new BeginResult(BeginStatus.ACQUIRED, conversationId, 0,
+                        KnowledgeSpace.GLOBAL_SPACE_ID, null, null));
         when(store.recentContext(any(), any(), anyInt(), anyInt())).thenReturn(List.of());
         AtomicLong sequence = new AtomicLong();
         when(store.nextSequence(any(), any(), any())).thenAnswer(ignored -> sequence.incrementAndGet());

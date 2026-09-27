@@ -1,5 +1,6 @@
 package com.lawrence.supportagent.evaluation;
 
+import com.lawrence.supportagent.auth.AuthenticatedUser;
 import com.lawrence.supportagent.retrieval.RetrievalMode;
 import com.lawrence.supportagent.sharedkernel.api.ApiResponseFactory;
 import com.lawrence.supportagent.sharedkernel.api.ApiResult;
@@ -15,6 +16,7 @@ import java.util.UUID;
 import org.springframework.context.annotation.Profile;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -40,11 +42,14 @@ public class RetrievalEvaluationController {
     /** 启动一种检索模式的全部或指定用例评测。 */
     @Operation(summary = "启动固定检索评测", description = "仅 dev/test 可用，不修改数据集或检索参数")
     @PostMapping
-    public ResponseEntity<ApiResult<RunResponse>> start(@Valid @RequestBody StartRequest body,
+    public ResponseEntity<ApiResult<RunResponse>> start(
+                                                         @AuthenticationPrincipal AuthenticatedUser actor,
+                                                         @Valid @RequestBody StartRequest body,
                                                          HttpServletRequest request) {
         EvaluationDatasetKind kind = body.datasetKind() == null
                 ? EvaluationDatasetKind.LOCKED_REGRESSION : body.datasetKind();
-        RetrievalEvaluationRun run = evaluations.start(kind, body.mode(), body.caseIds());
+        RetrievalEvaluationRun run = evaluations.start(actor, body.spaceId(), kind,
+                body.mode(), body.caseIds());
         return ResponseEntity.status(HttpStatus.ACCEPTED)
                 .body(responses.success(RunResponse.from(run), request));
     }
@@ -58,11 +63,14 @@ public class RetrievalEvaluationController {
     }
 
     /**
+     * @param spaceId 显式测试空间；检索范围固定为 GLOBAL 加该空间
      * @param datasetKind 数据集用途；为空兼容原调用并使用锁定回归集
      * @param mode 四种固定模式之一
      * @param caseIds 可选用例 ID 子集，空表示当前数据集全部用例
      */
     public record StartRequest(
+            @NotNull @Schema(description = "测试活动空间 UUID；GLOBAL 评测也必须显式传入")
+            UUID spaceId,
             @Schema(description = "LOCKED_REGRESSION 锁定回归集或 OPTIMIZATION_DEVELOPMENT 优化开发集；为空使用锁定集",
                     nullable = true, example = "LOCKED_REGRESSION")
             EvaluationDatasetKind datasetKind,

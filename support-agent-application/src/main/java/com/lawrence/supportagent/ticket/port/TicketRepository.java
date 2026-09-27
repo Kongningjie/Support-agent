@@ -5,6 +5,7 @@ import com.lawrence.supportagent.ticket.TicketStatus;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.Set;
 
 /** 定义工单聚合的持久化边界。 */
 public interface TicketRepository {
@@ -24,9 +25,16 @@ public interface TicketRepository {
     Ticket assignNumber(Ticket ticket, String ticketNo);
 
     /** 按固定排序和受控条件查询一页工单。 */
-    List<Ticket> findPage(TicketStatus status, String keyword, UUID ownerUserId,
+    List<Ticket> findPage(TicketStatus status, String keyword, Set<UUID> spaceIds, UUID ownerUserId,
                           boolean allTickets, int offset, int size);
 
     /** 统计受控条件下的工单总数。 */
-    long count(TicketStatus status, String keyword, UUID ownerUserId, boolean allTickets);
+    long count(TicketStatus status, String keyword, Set<UUID> spaceIds,
+               UUID ownerUserId, boolean allTickets);
+
+    /** 兼容既有内部测试的全空间计数；生产授权用例必须使用显式空间重载。 */
+    default long count(TicketStatus status, String keyword, UUID ownerUserId,
+                       boolean allTickets) {
+        return count(status, keyword, Set.of(), ownerUserId, allTickets);
+    }
 }

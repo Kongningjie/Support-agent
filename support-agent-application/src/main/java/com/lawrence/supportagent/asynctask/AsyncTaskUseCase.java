@@ -1,12 +1,15 @@
 package com.lawrence.supportagent.asynctask;
 
 import com.lawrence.supportagent.asynctask.port.AsyncTaskRepository;
+import com.lawrence.supportagent.auth.AuthenticatedUser;
 import com.lawrence.supportagent.idempotency.IdempotencyCommand;
 import com.lawrence.supportagent.idempotency.IdempotentExecutor;
 import com.lawrence.supportagent.idempotency.IdempotentResource;
 import com.lawrence.supportagent.idempotency.RequestFingerprint;
 import com.lawrence.supportagent.knowledge.ManagedDocumentStatus;
 import com.lawrence.supportagent.knowledge.port.ManagedDocumentRepository;
+import com.lawrence.supportagent.knowledgespace.KnowledgeSpaceAccessService;
+import com.lawrence.supportagent.knowledgespace.SpaceRole;
 import com.lawrence.supportagent.resolvedcase.ResolvedCaseStatus;
 import com.lawrence.supportagent.resolvedcase.port.ResolvedCaseRepository;
 import com.lawrence.supportagent.sharedkernel.error.ApplicationException;
@@ -17,6 +20,8 @@ import com.lawrence.supportagent.ticket.TicketStatus;
 import com.lawrence.supportagent.ticket.port.TicketRepository;
 import java.time.Duration;
 import java.util.List;
+import java.util.ArrayList;
+import java.util.UUID;
 
 /** 提供异步任务运维查询、取消和经过业务有效性检查的人工重试。 */
 public class AsyncTaskUseCase {
@@ -29,13 +34,15 @@ public class AsyncTaskUseCase {
     private final IdempotentExecutor idempotentExecutor;
     private final OperatorProvider operatorProvider;
     private final TimeProvider timeProvider;
+    private final KnowledgeSpaceAccessService spaceAccess;
 
     /** 注入任务、关联聚合、幂等、操作者和时间端口。 */
     public AsyncTaskUseCase(AsyncTaskRepository taskRepository, TicketRepository ticketRepository,
                             ManagedDocumentRepository documentRepository,
                             ResolvedCaseRepository caseRepository,
                             IdempotentExecutor idempotentExecutor,
-                            OperatorProvider operatorProvider, TimeProvider timeProvider) {
+                            OperatorProvider operatorProvider, TimeProvider timeProvider,
+                            KnowledgeSpaceAccessService spaceAccess) {
         this.taskRepository = taskRepository;
         this.ticketRepository = ticketRepository;
         this.documentRepository = documentRepository;
@@ -43,15 +50,18 @@ public class AsyncTaskUseCase {
         this.idempotentExecutor = idempotentExecutor;
         this.operatorProvider = operatorProvider;
         this.timeProvider = timeProvider;
+        this.spaceAccess = spaceAccess;
     }
 
     /** 按任务 ID 查询隐藏执行锁的运维详情。 */
-    public AsyncTaskDetails get(long taskId) {
-        return AsyncTaskDetails.from(requireTask(taskId));
+    public AsyncTaskDetails get(AuthenticatedUser actor, long taskId) {
+        AsyncTask task = requireTask(taskId);
+        requireVisible(actor, task, false);
+        return AsyncTaskDetails.from(task);
     }
 
     /** 按受控条件和稳定排序返回一页任务。 */
-    public AsyncTaskPage page(AsyncTaskType taskType, AsyncTaskStatus status,
+    public AsyncTaskPage page(AuthenticatedUser actor, AsyncTaskType taskType, AsyncTaskStatus status,
                               AggregateType aggregateType, Long aggregateId,
                               int page, int size) {
         if (page < 1 || size < 1 || size > 100 || page - 1 > Integer.MAX_VALUE / size
@@ -59,17 +69,18 @@ public class AsyncTaskUseCase {
             throw new IllegalArgumentException("异步任务分页参数不合法");
         }
         int offset = (page - 1) * size;
-        long total = taskRepository.count(taskType, status, aggregateType, aggregateId);
-        List<AsyncTaskDetails> items = taskRepository
-                .findPage(taskType, status, aggregateType, aggregateId, offset, size)
-                .stream().map(AsyncTaskDetails::from).toList();
+        List<AsyncTask> visible = visibleTasks(actor, taskType, status, aggregateType, aggregateId);
+        long total = visible.size();
+        List<AsyncTaskDetails> items = visible.stream().skip(offset).limit(size)
+                .map(AsyncTaskDetails::from).toList();
         long pages = total == 0 ? 0 : (total - 1) / size + 1;
         return new AsyncTaskPage(items, page, size, total,
                 pages > Integer.MAX_VALUE ? Integer.MAX_VALUE : (int) pages);
     }
 
     /** 幂等地为仍适用于原业务版本的死亡任务创建新任务。 */
-    public AsyncTaskDetails retry(long taskId, String reason, String idempotencyKey) {
+    public AsyncTaskDetails retry(AuthenticatedUser actor, long taskId, String reason,
+                                  String idempotencyKey) {
         String normalizedReason = required(reason, "人工重试原因", 500);
         String normalizedKey = required(idempotencyKey, "幂等键", 160);
         String requestHash = RequestFingerprint.sha256(Long.toString(taskId), normalizedReason);
@@ -78,12 +89,103 @@ public class AsyncTaskUseCase {
                 IDEMPOTENCY_LEASE, IDEMPOTENCY_RETENTION);
         return idempotentExecutor.execute(command, () -> {
             AsyncTask original = requireTask(taskId);
+            requireVisible(actor, original, true);
             ensureRetryable(original);
             String internalKey = "manual-retry:" + taskId;
             AsyncTask created = taskRepository.save(AsyncTask.manualRetry(original,
                     internalKey, normalizedReason, operatorProvider.currentOperator().value(), timeProvider.now()));
             return new IdempotentResource<>("ASYNC_TASK", created.id(), AsyncTaskDetails.from(created));
-        }, id -> AsyncTaskDetails.from(requireTask(id)));
+        }, id -> replayRetry(actor, id));
+    }
+
+    /** 重放幂等人工重试结果前重新校验当前主体仍拥有活动空间管理权限。 */
+    private AsyncTaskDetails replayRetry(AuthenticatedUser actor, long taskId) {
+        AsyncTask task = requireTask(taskId);
+        requireVisible(actor, task, true);
+        return AsyncTaskDetails.from(task);
+    }
+
+    /** 分批扫描任务并在应用层按关联资源空间和任务类型过滤，避免泄露原始工单事实。 */
+    private List<AsyncTask> visibleTasks(AuthenticatedUser actor, AsyncTaskType taskType,
+                                         AsyncTaskStatus status, AggregateType aggregateType,
+                                         Long aggregateId) {
+        if (actor == null) {
+            throw new ApplicationException(ErrorCode.AUTH_UNAUTHORIZED, "认证信息无效或已经过期");
+        }
+        List<AsyncTask> visible = new ArrayList<>();
+        int offset = 0;
+        while (true) {
+            List<AsyncTask> batch = taskRepository.findPage(taskType, status, aggregateType,
+                    aggregateId, offset, 100);
+            for (AsyncTask task : batch) {
+                if (isVisible(actor, task)) {
+                    visible.add(task);
+                }
+            }
+            if (batch.size() < 100) {
+                return List.copyOf(visible);
+            }
+            offset += batch.size();
+        }
+    }
+
+    /** 返回任务是否可被当前主体查看；非管理员只允许空间知识任务。 */
+    private boolean isVisible(AuthenticatedUser actor, AsyncTask task) {
+        if (actor.administrator()) {
+            return true;
+        }
+        if (task.taskType() == AsyncTaskType.CASE_GENERATION) {
+            return false;
+        }
+        UUID spaceId = aggregateSpaceId(task);
+        if (spaceId == null) {
+            return false;
+        }
+        try {
+            spaceAccess.requireRoleForMetadata(actor, spaceId, SpaceRole.MANAGER);
+            return true;
+        } catch (ApplicationException exception) {
+            return false;
+        }
+    }
+
+    /** 要求当前主体能查看任务，并在重试时重新校验活动空间 MANAGER 权限。 */
+    private void requireVisible(AuthenticatedUser actor, AsyncTask task, boolean retry) {
+        if (actor == null) {
+            throw new ApplicationException(ErrorCode.AUTH_UNAUTHORIZED, "认证信息无效或已经过期");
+        }
+        if (actor.administrator()) {
+            return;
+        }
+        if (task.taskType() == AsyncTaskType.CASE_GENERATION) {
+            throw new ApplicationException(ErrorCode.ASYNC_TASK_NOT_FOUND, "异步任务不存在");
+        }
+        UUID spaceId = aggregateSpaceId(task);
+        if (spaceId == null) {
+            throw new ApplicationException(ErrorCode.ASYNC_TASK_NOT_FOUND, "异步任务不存在");
+        }
+        try {
+            if (retry && task.taskType() == AsyncTaskType.KNOWLEDGE_INDEX) {
+                spaceAccess.requireRole(actor, spaceId, SpaceRole.MANAGER);
+            } else {
+                spaceAccess.requireRoleForMetadata(actor, spaceId, SpaceRole.MANAGER);
+            }
+        } catch (ApplicationException exception) {
+            throw new ApplicationException(ErrorCode.ASYNC_TASK_NOT_FOUND, "异步任务不存在");
+        }
+    }
+
+    /** 从任务关联资源的 MySQL 当前事实解析空间，拒绝信任任务载荷。 */
+    private UUID aggregateSpaceId(AsyncTask task) {
+        if (task.aggregateType() == AggregateType.MANAGED_DOCUMENT) {
+            return documentRepository.findById(task.aggregateId())
+                    .map(value -> value.spaceId()).orElse(null);
+        }
+        if (task.aggregateType() == AggregateType.RESOLVED_CASE) {
+            return caseRepository.findById(task.aggregateId())
+                    .map(value -> value.spaceId()).orElse(null);
+        }
+        return null;
     }
 
     /** 供业务编排在关联对象失效时取消尚未完成的任务。 */

@@ -9,6 +9,7 @@ import com.lawrence.supportagent.auth.AuthenticatedUser;
 import com.lawrence.supportagent.chat.port.ConversationStorePort;
 import com.lawrence.supportagent.chat.port.ConversationStorePort.LifecyclePage;
 import com.lawrence.supportagent.chat.port.ConversationStorePort.LifecycleSnapshot;
+import com.lawrence.supportagent.knowledgespace.KnowledgeSpaceAccessService;
 import com.lawrence.supportagent.user.UserRole;
 import java.time.Instant;
 import java.util.List;
@@ -26,12 +27,13 @@ class ConversationLifecycleUseCaseTest {
     private static final UUID USER_ID = UUID.fromString("20000000-0000-0000-0000-000000000001");
     private static final UUID CONVERSATION_ID = UUID.fromString("10000000-0000-0000-0000-000000000001");
     @Mock private ConversationStorePort store;
+    @Mock private KnowledgeSpaceAccessService spaceAccess;
     private ConversationLifecycleUseCase useCase;
 
     /** 使用固定时间创建用例。 */
     @BeforeEach
     void setUp() {
-        useCase = new ConversationLifecycleUseCase(store, () -> NOW);
+        useCase = new ConversationLifecycleUseCase(store, () -> NOW, spaceAccess);
     }
 
     /** 列表应只查询当前用户并正确计算分页元数据。 */
@@ -63,13 +65,19 @@ class ConversationLifecycleUseCaseTest {
     /** 重置和删除必须始终使用当前认证用户作为所有者。 */
     @Test
     void shouldResetAndDeleteAsCurrentOwner() {
-        when(store.reset(USER_ID, CONVERSATION_ID, 3, NOW)).thenReturn(snapshot(USER_ID));
+        when(store.lifecycleDetails(USER_ID, false, CONVERSATION_ID, 0, NOW))
+                .thenReturn(snapshot(USER_ID));
+        when(store.reset(USER_ID, CONVERSATION_ID,
+                com.lawrence.supportagent.knowledgespace.KnowledgeSpace.GLOBAL_SPACE_ID,
+                3, NOW)).thenReturn(snapshot(USER_ID));
 
-        ConversationOverview reset = useCase.reset(user(), CONVERSATION_ID, 3);
+        ConversationOverview reset = useCase.reset(user(), CONVERSATION_ID, null, 3);
         useCase.delete(user(), CONVERSATION_ID, 0);
 
         assertThat(reset.generation()).isEqualTo(1);
-        verify(store).reset(USER_ID, CONVERSATION_ID, 3, NOW);
+        verify(store).reset(USER_ID, CONVERSATION_ID,
+                com.lawrence.supportagent.knowledgespace.KnowledgeSpace.GLOBAL_SPACE_ID,
+                3, NOW);
         verify(store).delete(USER_ID, CONVERSATION_ID, 0, NOW);
     }
 
@@ -77,7 +85,7 @@ class ConversationLifecycleUseCaseTest {
     @Test
     void shouldRejectInvalidPaginationAndVersion() {
         assertThatThrownBy(() -> useCase.list(user(), 0, 20)).isInstanceOf(IllegalArgumentException.class);
-        assertThatThrownBy(() -> useCase.reset(user(), CONVERSATION_ID, -1))
+        assertThatThrownBy(() -> useCase.reset(user(), CONVERSATION_ID, null, -1))
                 .isInstanceOf(IllegalArgumentException.class);
     }
 

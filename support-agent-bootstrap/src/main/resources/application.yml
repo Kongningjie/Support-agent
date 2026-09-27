@@ -107,7 +107,7 @@ support-agent:
     url: ${SUPPORT_AGENT_ELASTICSEARCH_URL:http://localhost:9200}
     username: ${SUPPORT_AGENT_ELASTICSEARCH_USERNAME:}
     password: ${SUPPORT_AGENT_ELASTICSEARCH_PASSWORD:}
-    knowledge-index: ${SUPPORT_AGENT_KNOWLEDGE_INDEX:support_knowledge_v1}
+    knowledge-index: ${SUPPORT_AGENT_KNOWLEDGE_INDEX:support_knowledge_v2}
     knowledge-alias: ${SUPPORT_AGENT_KNOWLEDGE_ALIAS:support_knowledge_current}
     # 建立 Elasticsearch TCP 连接的最大等待时间。
     connect-timeout: ${SUPPORT_AGENT_ELASTICSEARCH_CONNECT_TIMEOUT:2s}

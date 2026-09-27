@@ -1,5 +1,6 @@
 package com.lawrence.supportagent.knowledge;
 
+import com.lawrence.supportagent.auth.AuthenticatedUser;
 import com.lawrence.supportagent.knowledgespace.KnowledgeSpaceSummary;
 import com.lawrence.supportagent.sharedkernel.api.ApiResponseFactory;
 import com.lawrence.supportagent.sharedkernel.api.ApiResult;
@@ -19,6 +20,7 @@ import java.util.UUID;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -54,9 +56,10 @@ public class ManagedDocumentController {
     @Operation(summary = "由直接文本创建知识草稿")
     @PostMapping("/text")
     public ResponseEntity<ApiResult<DocumentResponse>> createText(
+            @AuthenticationPrincipal AuthenticatedUser actor,
             @Valid @RequestBody CreateTextRequest body, HttpServletRequest request) {
         DocumentResponse result = DocumentResponse.from(commandUseCase.createText(
-                body.title(), body.content(), body.idempotencyKey()));
+                actor, body.spaceId(), body.title(), body.content(), body.idempotencyKey()));
         return ResponseEntity.status(HttpStatus.CREATED).body(responses.success(result, request));
     }
 
@@ -64,12 +67,14 @@ public class ManagedDocumentController {
     @Operation(summary = "上传 Markdown 或 TXT 知识草稿")
     @PostMapping(path = "/files", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     public ResponseEntity<ApiResult<DocumentResponse>> createFile(
+            @AuthenticationPrincipal AuthenticatedUser actor,
+            @RequestPart(required = false) UUID spaceId,
             @RequestPart(required = false) String title,
             @RequestPart @NotNull MultipartFile file,
             @RequestPart @NotBlank @Size(max = 160) String idempotencyKey,
             HttpServletRequest request) {
         try {
-            ManagedDocumentDetails created = commandUseCase.createFile(title,
+            ManagedDocumentDetails created = commandUseCase.createFile(actor, spaceId, title,
                     file.getOriginalFilename(), file.getContentType(), file.getBytes(), idempotencyKey);
             return ResponseEntity.status(HttpStatus.CREATED).body(
                     responses.success(DocumentResponse.from(created), request));
@@ -82,20 +87,23 @@ public class ManagedDocumentController {
     @Operation(summary = "查询知识文档详情")
     @GetMapping("/{documentId}")
     public ApiResult<DocumentResponse> get(@PathVariable long documentId,
+                                           @AuthenticationPrincipal AuthenticatedUser actor,
                                            HttpServletRequest request) {
-        return responses.success(DocumentResponse.from(queryUseCase.get(documentId)), request);
+        return responses.success(DocumentResponse.from(queryUseCase.get(actor, documentId)), request);
     }
 
     /** 按状态和关键词分页查询不含正文的文档摘要。 */
     @Operation(summary = "分页查询知识文档")
     @GetMapping
     public ApiResult<PageResult<DocumentSummaryResponse>> page(
+            @AuthenticationPrincipal AuthenticatedUser actor,
             @RequestParam(required = false) ManagedDocumentStatus status,
             @RequestParam(required = false) String keyword,
+            @RequestParam(required = false) UUID spaceId,
             @RequestParam(defaultValue = "1") int page,
             @RequestParam(defaultValue = "20") int size,
             HttpServletRequest request) {
-        ManagedDocumentPage result = queryUseCase.page(status, keyword, page, size);
+        ManagedDocumentPage result = queryUseCase.page(actor, status, keyword, spaceId, page, size);
         List<DocumentSummaryResponse> items = result.items().stream()
                 .map(DocumentSummaryResponse::from).toList();
         return responses.success(new PageResult<>(items, result.page(), result.size(),
@@ -106,9 +114,10 @@ public class ManagedDocumentController {
     @Operation(summary = "修改知识文档草稿")
     @PutMapping("/{documentId}/draft")
     public ApiResult<DocumentResponse> revise(@PathVariable long documentId,
+                                              @AuthenticationPrincipal AuthenticatedUser actor,
                                               @Valid @RequestBody ReviseRequest body,
                                               HttpServletRequest request) {
-        return responses.success(DocumentResponse.from(commandUseCase.revise(documentId,
+        return responses.success(DocumentResponse.from(commandUseCase.revise(actor, documentId,
                 body.title(), body.content(), body.version())), request);
     }
 
@@ -116,9 +125,10 @@ public class ManagedDocumentController {
     @Operation(summary = "发布知识文档")
     @PostMapping("/{documentId}/publish")
     public ApiResult<ActionResponse> publish(@PathVariable long documentId,
+                                             @AuthenticationPrincipal AuthenticatedUser actor,
                                              @Valid @RequestBody VersionedActionRequest body,
                                              HttpServletRequest request) {
-        return responses.success(ActionResponse.from(commandUseCase.publish(documentId,
+        return responses.success(ActionResponse.from(commandUseCase.publish(actor, documentId,
                 body.version(), body.idempotencyKey())), request);
     }
 
@@ -126,9 +136,10 @@ public class ManagedDocumentController {
     @Operation(summary = "归档知识文档")
     @PostMapping("/{documentId}/archive")
     public ApiResult<ActionResponse> archive(@PathVariable long documentId,
+                                             @AuthenticationPrincipal AuthenticatedUser actor,
                                              @Valid @RequestBody ArchiveRequest body,
                                              HttpServletRequest request) {
-        return responses.success(ActionResponse.from(commandUseCase.archive(documentId,
+        return responses.success(ActionResponse.from(commandUseCase.archive(actor, documentId,
                 body.version(), body.archiveReason(), body.idempotencyKey())), request);
     }
 
@@ -136,20 +147,25 @@ public class ManagedDocumentController {
     @Operation(summary = "删除从未发布的知识草稿")
     @DeleteMapping("/{documentId}")
     public ApiResult<Void> deleteDraft(@PathVariable long documentId,
+                                       @AuthenticationPrincipal AuthenticatedUser actor,
                                        @RequestParam @PositiveOrZero long version,
                                        HttpServletRequest request) {
-        commandUseCase.deleteDraft(documentId, version);
+        commandUseCase.deleteDraft(actor, documentId, version);
         return responses.success(null, request);
     }
 
     /**
      * 直接文本创建请求。
      *
+     * @param spaceId 目标知识空间 UUID；阶段 19 兼容窗口内为空时使用 GLOBAL
      * @param title 文档标题，去除首尾空白后 1～160 字符
      * @param content UTF-8 文本正文，规范化后非空且最大 1 MiB
      * @param idempotencyKey 本次创建操作的幂等键
      */
     public record CreateTextRequest(
+            @Schema(description = "目标知识空间 UUID；为空时兼容绑定 GLOBAL",
+                    example = "00000000-0000-0000-0000-000000000001", nullable = true)
+            UUID spaceId,
             @Schema(description = "文档标题", example = "MySQL 连接故障排查")
             @NotBlank @Size(max = 160) String title,
             @Schema(description = "知识正文", example = "检查 ERROR_CODE 后确认连接参数。")

@@ -10,10 +10,14 @@ import com.lawrence.supportagent.knowledge.ElasticsearchKnowledgeIndexAdapter;
 import com.lawrence.supportagent.knowledge.ExactTermExtractor;
 import com.lawrence.supportagent.knowledge.KnowledgeDeleteTaskHandler;
 import com.lawrence.supportagent.knowledge.KnowledgeIndexTaskHandler;
+import com.lawrence.supportagent.knowledge.KnowledgeIndexRebuildUseCase;
+import com.lawrence.supportagent.knowledge.port.KnowledgeIndexRebuildPort;
 import com.lawrence.supportagent.knowledge.ManagedDocumentCommandUseCase;
 import com.lawrence.supportagent.knowledge.ManagedDocumentQueryUseCase;
 import com.lawrence.supportagent.knowledge.port.KnowledgeIndexPort;
 import com.lawrence.supportagent.knowledge.port.ManagedDocumentRepository;
+import com.lawrence.supportagent.knowledgespace.KnowledgeSpaceAccessService;
+import com.lawrence.supportagent.knowledgespace.port.KnowledgeSpaceRepository;
 import com.lawrence.supportagent.model.DashScopeEmbeddingModelAdapter;
 import com.lawrence.supportagent.model.EmbeddingModelPort;
 import com.lawrence.supportagent.observability.OptimizationTelemetryPort;
@@ -25,6 +29,7 @@ import com.lawrence.supportagent.resolvedcase.ResolvedCaseIndexTaskHandler;
 import com.lawrence.supportagent.resolvedcase.ResolvedCaseQueryUseCase;
 import com.lawrence.supportagent.resolvedcase.port.ResolvedCaseRepository;
 import com.lawrence.supportagent.retrieval.RetrievalParameters;
+import com.lawrence.supportagent.ticket.port.TicketRepository;
 import java.net.URI;
 import org.apache.hc.core5.util.Timeout;
 import org.springframework.context.annotation.Bean;
@@ -55,8 +60,9 @@ public class KnowledgeConfiguration {
     /** 创建托管文档查询用例。 */
     @Bean
     public ManagedDocumentQueryUseCase managedDocumentQueryUseCase(
-            ManagedDocumentRepository repository) {
-        return new ManagedDocumentQueryUseCase(repository);
+            ManagedDocumentRepository repository, KnowledgeSpaceRepository spaces,
+            KnowledgeSpaceAccessService access) {
+        return new ManagedDocumentQueryUseCase(repository, spaces, access);
     }
 
     /** 创建托管文档命令用例。 */
@@ -65,9 +71,11 @@ public class KnowledgeConfiguration {
             ManagedDocumentRepository repository, AsyncTaskRepository taskRepository,
             ManagedDocumentQueryUseCase queryUseCase, AsyncTaskCreator taskCreator,
             IdempotentExecutor idempotentExecutor, OperatorProvider operatorProvider,
-            TimeProvider timeProvider, DocumentContentPolicy contentPolicy) {
+            TimeProvider timeProvider, DocumentContentPolicy contentPolicy,
+            KnowledgeSpaceAccessService access) {
         return new ManagedDocumentCommandUseCase(repository, taskRepository, queryUseCase,
-                taskCreator, idempotentExecutor, operatorProvider, timeProvider, contentPolicy);
+                taskCreator, idempotentExecutor, operatorProvider, timeProvider, contentPolicy,
+                access);
     }
 
     /** 创建不会在启动时访问远端的 DashScope Embedding 独立适配器。 */
@@ -107,14 +115,26 @@ public class KnowledgeConfiguration {
                 config.username(), config.password(), retrievalParameters);
     }
 
+    /** 创建从 MySQL 当前已发布来源重建目标物理索引的管理员用例。 */
+    @Bean
+    public KnowledgeIndexRebuildUseCase knowledgeIndexRebuildUseCase(
+            ManagedDocumentRepository documents, ResolvedCaseRepository cases,
+            KnowledgeSpaceRepository spaces, DocumentChunker chunker,
+            EmbeddingModelPort embeddings, KnowledgeIndexRebuildPort index,
+            TimeProvider time) {
+        return new KnowledgeIndexRebuildUseCase(documents, cases, spaces, chunker,
+                embeddings, index, time);
+    }
+
     /** 注册托管文档异步索引任务处理器。 */
     @Bean
     public KnowledgeIndexTaskHandler knowledgeIndexTaskHandler(
             ManagedDocumentRepository repository, DocumentContentPolicy contentPolicy,
             DocumentChunker chunker, EmbeddingModelPort embeddingModel,
-            KnowledgeIndexPort indexPort, TimeProvider timeProvider) {
+            KnowledgeIndexPort indexPort, TimeProvider timeProvider,
+            KnowledgeSpaceRepository spaces) {
         return new KnowledgeIndexTaskHandler(repository, contentPolicy, chunker,
-                embeddingModel, indexPort, timeProvider);
+                embeddingModel, indexPort, timeProvider, spaces);
     }
 
     /** 注册归档文档的 Elasticsearch 删除任务处理器。 */
@@ -129,9 +149,10 @@ public class KnowledgeConfiguration {
     public ResolvedCaseCommandUseCase resolvedCaseCommandUseCase(
             ResolvedCaseRepository repository, ResolvedCaseQueryUseCase queries,
             AsyncTaskCreator taskCreator, IdempotentExecutor idempotency,
-            OperatorProvider operators, TimeProvider time, DocumentContentPolicy policy) {
+            OperatorProvider operators, TimeProvider time, DocumentContentPolicy policy,
+            KnowledgeSpaceAccessService access, TicketRepository tickets) {
         return new ResolvedCaseCommandUseCase(repository, queries, taskCreator,
-                idempotency, operators, time, policy);
+                idempotency, operators, time, policy, access, tickets);
     }
 
     /** 注册案例异步知识索引处理器。 */
@@ -139,9 +160,10 @@ public class KnowledgeConfiguration {
     public ResolvedCaseIndexTaskHandler resolvedCaseIndexTaskHandler(
             ResolvedCaseRepository repository, DocumentContentPolicy policy,
             DocumentChunker chunker, EmbeddingModelPort embeddings,
-            KnowledgeIndexPort index, TimeProvider time) {
+            KnowledgeIndexPort index, TimeProvider time,
+            KnowledgeSpaceRepository spaces) {
         return new ResolvedCaseIndexTaskHandler(repository, policy, chunker,
-                embeddings, index, time);
+                embeddings, index, time, spaces);
     }
 
     /** 注册案例归档后的索引删除处理器。 */

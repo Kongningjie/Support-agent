@@ -8,6 +8,8 @@ import java.util.UUID;
  * 案例分页列表使用的不含完整正文摘要。
  *
  * @param caseId 案例内部主键
+ * @param spaceId 案例归属的知识空间 UUID
+ * @param space 已授权读取的知识空间最小摘要
  * @param sourceTicketNo 来源工单稳定编号
  * @param title 案例标题
  * @param status 案例生命周期状态

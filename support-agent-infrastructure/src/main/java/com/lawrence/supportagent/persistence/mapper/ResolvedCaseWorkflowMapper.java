@@ -15,10 +15,14 @@ public interface ResolvedCaseWorkflowMapper {
     List<ResolvedCaseDO> findPage(@Param("status") String status,
                                   @Param("sourceTicketNo") String sourceTicketNo,
                                   @Param("keyword") String keyword,
+                                  @Param("spaceIds") List<byte[]> spaceIds,
+                                  @Param("publishedOnly") boolean publishedOnly,
                                   @Param("offset") int offset, @Param("size") int size);
 
     /** 统计与分页相同条件的案例数量。 */
     long count(@Param("status") String status,
                @Param("sourceTicketNo") String sourceTicketNo,
-               @Param("keyword") String keyword);
+               @Param("keyword") String keyword,
+               @Param("spaceIds") List<byte[]> spaceIds,
+               @Param("publishedOnly") boolean publishedOnly);
 }

@@ -46,8 +46,7 @@ public class SecurityConfiguration {
                         .dispatcherTypeMatchers(DispatcherType.ASYNC).permitAll()
                         .requestMatchers("/api/v1/auth/login", "/actuator/health/**", "/v3/api-docs/**",
                                 "/swagger-ui/**", "/swagger-ui.html").permitAll()
-                        .requestMatchers("/api/v1/admin/**", "/api/v1/async-tasks/**",
-                                "/api/v1/knowledge/**", "/api/v1/resolved-cases/**",
+                        .requestMatchers("/api/v1/admin/**",
                                 "/api/v1/retrieval-evaluations/**").hasRole("ADMIN")
                         .anyRequest().authenticated())
                 .exceptionHandling(exceptions -> exceptions

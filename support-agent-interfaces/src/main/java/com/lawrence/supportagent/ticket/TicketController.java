@@ -68,7 +68,7 @@ public class TicketController {
     public ResponseEntity<ApiResult<TicketResponse>> createDraft(
             @AuthenticationPrincipal AuthenticatedUser actor,
             @Valid @RequestBody CreateDraftRequest body, HttpServletRequest request) {
-        TicketResponse result = TicketResponse.from(commandUseCase.createDraft(actor, body.title(),
+        TicketResponse result = TicketResponse.from(commandUseCase.createDraft(actor, body.spaceId(), body.title(),
                 body.problemDescription(), body.attemptedActions(), body.idempotencyKey()));
         return ResponseEntity.status(HttpStatus.CREATED).body(responses.success(result, request));
     }
@@ -152,12 +152,14 @@ public class TicketController {
             @RequestParam(required = false) TicketStatus status,
             @Parameter(description = "可空标题或问题描述关键词，最大 160 字符")
             @RequestParam(required = false) String keyword,
+            @Parameter(description = "可空知识空间 UUID；提供时只查询该授权空间")
+            @RequestParam(required = false) UUID spaceId,
             @Parameter(description = "从 1 开始的页码", example = "1")
             @RequestParam(defaultValue = "1") int page,
             @Parameter(description = "每页数量，范围 1～100", example = "20")
             @RequestParam(defaultValue = "20") int size,
             HttpServletRequest request) {
-        TicketPage result = queryUseCase.page(actor, status, keyword, page, size);
+        TicketPage result = queryUseCase.page(actor, status, keyword, spaceId, page, size);
         List<TicketSummaryResponse> items = result.items().stream()
                 .map(TicketSummaryResponse::from).toList();
         return responses.success(new PageResult<>(items, result.page(), result.size(),
@@ -167,12 +169,16 @@ public class TicketController {
     /**
      * 手工创建工单草稿请求。
      *
+     * @param spaceId 问题所属空间；阶段 19 兼容窗口内为空时使用 GLOBAL
      * @param title 工单标题，去除首尾空白后 1～160 字符
      * @param problemDescription 问题现象和背景，1～8000 字符
      * @param attemptedActions 用户已尝试的操作和结果，可为空，最大 8000 字符
      * @param idempotencyKey 客户端生成的操作幂等键，1～160 字符
      */
     public record CreateDraftRequest(
+            @Schema(description = "问题所属知识空间 UUID；为空时兼容绑定 GLOBAL",
+                    example = "00000000-0000-0000-0000-000000000001", nullable = true)
+            UUID spaceId,
             @Schema(description = "必填工单标题，去除首尾空白后 1～160 字符",
                     example = "应用启动时报数据库连接失败")
             @NotBlank @Size(max = 160) String title,

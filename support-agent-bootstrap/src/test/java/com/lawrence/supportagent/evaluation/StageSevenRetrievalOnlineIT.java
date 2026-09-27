@@ -127,7 +127,7 @@ class StageSevenRetrievalOnlineIT {
         index.indexChunks(corpus);
         LinkedBlockingQueue<RetrievalEvaluationRun> reports = new LinkedBlockingQueue<>();
         try (RetrievalService retrieval = new RetrievalService(index,
-                requested -> Set.copyOf(requested), embeddings, rerank, parameters);
+                (requested, allowed) -> Set.copyOf(requested), embeddings, rerank, parameters);
              RetrievalEvaluationService service = new RetrievalEvaluationService(datasets,
                      reports::add, retrieval, new RetrievalMetricsCalculator(), UUID::randomUUID,
                      Instant::now, snapshot -> new RetrievalEvaluationContext("1.1", snapshot.kind(),

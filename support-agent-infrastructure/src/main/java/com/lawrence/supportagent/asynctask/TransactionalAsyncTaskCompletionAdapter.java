@@ -42,10 +42,18 @@ public class TransactionalAsyncTaskCompletionAdapter implements AsyncTaskComplet
     /** {@inheritDoc} */
     @Override
     @Transactional
-    public void cancel(long taskId, String workerId, Instant now,
+    public void cancel(long taskId, String workerId, String errorCode,
+                       String errorMessage, Instant now,
                        AsyncTaskBusinessMutation businessMutation) {
-        requireChanged(mapper.cancelOwned(taskId, workerId, now));
+        requireChanged(mapper.cancelOwned(taskId, workerId, truncate(errorCode, 100),
+                truncate(errorMessage, 1000), now));
         businessMutation.apply();
+    }
+
+    /** 按数据库公开诊断字段上限截断可空低敏文本。 */
+    private String truncate(String value, int maximumLength) {
+        return value == null || value.length() <= maximumLength
+                ? value : value.substring(0, maximumLength);
     }
 
     /** 租约围栏未命中时抛出异常，使同事务业务修改回滚。 */

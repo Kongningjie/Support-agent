@@ -3,6 +3,7 @@ package com.lawrence.supportagent.chat.port;
 import com.lawrence.supportagent.chat.ChatIntent;
 import com.lawrence.supportagent.chat.ConversationLifecycleStatus;
 import com.lawrence.supportagent.chat.ConversationSummary;
+import com.lawrence.supportagent.knowledgespace.KnowledgeSpace;
 import com.lawrence.supportagent.retrieval.RetrievalStatus;
 import java.time.Instant;
 import java.util.List;
@@ -12,7 +13,14 @@ import java.util.UUID;
 public interface ConversationStorePort {
     /** 原子创建或取得会话执行权，并识别可安全重放的已完成消息。 */
     BeginResult begin(UUID ownerUserId, UUID conversationId, UUID clientMessageId, String message,
-                      Long expectedVersion, UUID runId, Instant now);
+                      UUID requestedSpaceId, Long expectedVersion, UUID runId, Instant now);
+
+    /** 兼容迁移窗口内未携带空间的调用，并固定绑定 GLOBAL。 */
+    default BeginResult begin(UUID ownerUserId, UUID conversationId, UUID clientMessageId,
+                              String message, Long expectedVersion, UUID runId, Instant now) {
+        return begin(ownerUserId, conversationId, clientMessageId, message,
+                KnowledgeSpace.GLOBAL_SPACE_ID, expectedVersion, runId, now);
+    }
 
     /** 在运行围栏仍有效时续租。 */
     boolean renew(UUID ownerUserId, UUID conversationId, UUID runId, Instant now);
@@ -58,7 +66,15 @@ public interface ConversationStorePort {
                                        UUID conversationId, int recentTurnLimit, Instant now);
 
     /** 在版本一致且没有活动运行时原子清空会话上下文并开始新代次。 */
-    LifecycleSnapshot reset(UUID ownerUserId, UUID conversationId, long expectedVersion, Instant now);
+    LifecycleSnapshot reset(UUID ownerUserId, UUID conversationId, UUID newSpaceId,
+                            long expectedVersion, Instant now);
+
+    /** 兼容迁移窗口内未携带空间的重置，并固定使用 GLOBAL。 */
+    default LifecycleSnapshot reset(UUID ownerUserId, UUID conversationId,
+                                    long expectedVersion, Instant now) {
+        return reset(ownerUserId, conversationId, KnowledgeSpace.GLOBAL_SPACE_ID,
+                expectedVersion, now);
+    }
 
     /** 在版本一致且没有活动运行时原子删除会话及其全部关联 Redis 数据。 */
     void delete(UUID ownerUserId, UUID conversationId, long expectedVersion, Instant now);
@@ -70,11 +86,19 @@ public interface ConversationStorePort {
      * @param status 是否取得执行权或重放
      * @param conversationId 会话 UUID
      * @param version 当前会话版本
+     * @param spaceId 当前代际绑定的知识空间 UUID
      * @param replayTurn 重放轮次，非重放时为空
      * @param interruptedRunId 被过期租约接管的旧运行，可为空
      */
-    record BeginResult(BeginStatus status, UUID conversationId, long version,
-                       CompletedTurn replayTurn, UUID interruptedRunId) { }
+    record BeginResult(BeginStatus status, UUID conversationId, long version, UUID spaceId,
+                       CompletedTurn replayTurn, UUID interruptedRunId) {
+        /** 将阶段 18 以前的历史测试和快照明确解释为 GLOBAL。 */
+        public BeginResult(BeginStatus status, UUID conversationId, long version,
+                           CompletedTurn replayTurn, UUID interruptedRunId) {
+            this(status, conversationId, version, KnowledgeSpace.GLOBAL_SPACE_ID,
+                    replayTurn, interruptedRunId);
+        }
+    }
 
     /**
      * @param turnId 成功轮次 UUID
@@ -99,35 +123,61 @@ public interface ConversationStorePort {
 
     /**
      * @param citationId 临时引用标识
+     * @param spaceId 来源所属知识空间 UUID
      * @param documentId 来源 ID 字符串
      * @param documentTitle 来源标题
      * @param headingPath 标题路径
      * @param sourceType 来源类型
      * @param sourceCaseId 案例 ID，仅案例来源有值
      */
-    record Citation(String citationId, String documentId, String documentTitle,
-                    String headingPath, String sourceType, String sourceCaseId) { }
+    record Citation(String citationId, UUID spaceId, String documentId, String documentTitle,
+                    String headingPath, String sourceType, String sourceCaseId) {
+        /** 将阶段 18 以前没有空间字段的历史引用固定解释为 GLOBAL。 */
+        public Citation {
+            if (spaceId == null) {
+                spaceId = KnowledgeSpace.GLOBAL_SPACE_ID;
+            }
+        }
+    }
 
-    /** @param status 消费状态 @param claimId 消费租约 UUID @param frozenContext 冻结上下文 @param sourceTurnId 来源轮次 @param ticketNo 已创建工单号 */
-    record SuggestionClaim(String status, UUID claimId, String frozenContext,
-                           UUID sourceTurnId, String ticketNo) { }
+    /** @param status 消费状态 @param claimId 消费租约 UUID @param spaceId 冻结会话空间 @param frozenContext 冻结上下文 @param sourceTurnId 来源轮次 @param ticketNo 已创建工单号 */
+    record SuggestionClaim(String status, UUID claimId, UUID spaceId, String frozenContext,
+                           UUID sourceTurnId, String ticketNo) {
+        /** 将阶段 18 以前的冻结建议明确解释为 GLOBAL。 */
+        public SuggestionClaim(String status, UUID claimId, String frozenContext,
+                               UUID sourceTurnId, String ticketNo) {
+            this(status, claimId, KnowledgeSpace.GLOBAL_SPACE_ID, frozenContext,
+                    sourceTurnId, ticketNo);
+        }
+    }
 
     /**
      * @param conversationId 当前会话 ID
      * @param conversationVersion 当前成功会话版本
+     * @param spaceId 当前代际绑定空间
      * @param generation 当前会话重置代次，用于拒绝重置前摘要任务的迟到提交
      * @param summaryVersion 当前摘要 CAS 版本，尚无摘要时为零
      * @param summary 当前结构化摘要，尚无摘要时为空
      * @param turns Redis 中仍保留的完整成功轮次
      */
-    record MemorySnapshot(UUID conversationId, long conversationVersion, long generation, long summaryVersion,
+    record MemorySnapshot(UUID conversationId, UUID spaceId, long conversationVersion,
+                          long generation, long summaryVersion,
                           ConversationSummary summary, List<CompletedTurn> turns) {
         /** 复制轮次并校验快照版本非负。 */
         public MemorySnapshot {
-            if (conversationId == null || conversationVersion < 0 || generation < 0 || summaryVersion < 0) {
+            if (conversationId == null || spaceId == null || conversationVersion < 0
+                    || generation < 0 || summaryVersion < 0) {
                 throw new IllegalArgumentException("会话记忆快照版本不能为负数");
             }
             turns = turns == null ? List.of() : List.copyOf(turns);
+        }
+
+        /** 将阶段 18 以前的历史记忆快照明确解释为 GLOBAL。 */
+        public MemorySnapshot(UUID conversationId, long conversationVersion,
+                              long generation, long summaryVersion,
+                              ConversationSummary summary, List<CompletedTurn> turns) {
+            this(conversationId, KnowledgeSpace.GLOBAL_SPACE_ID, conversationVersion,
+                    generation, summaryVersion, summary, turns);
         }
     }
 
@@ -146,6 +196,7 @@ public interface ConversationStorePort {
     /**
      * @param conversationId 公开会话 UUID
      * @param ownerUserId 会话所有者公开用户 UUID
+     * @param spaceId 当前代际绑定的知识空间 UUID
      * @param status 当前是否存在有效活动运行
      * @param version 已成功提交的轮次版本
      * @param generation 同一会话 ID 的重置代次
@@ -154,16 +205,27 @@ public interface ConversationStorePort {
      * @param expiresAt 按当前 Redis TTL 推算的过期时间
      * @param turns 最近成功轮次；列表查询时为空
      */
-    record LifecycleSnapshot(UUID conversationId, UUID ownerUserId, ConversationLifecycleStatus status,
+    record LifecycleSnapshot(UUID conversationId, UUID ownerUserId, UUID spaceId,
+                             ConversationLifecycleStatus status,
                              long version, long generation, long summaryVersion,
                              Instant lastAccessAt, Instant expiresAt, List<CompletedTurn> turns) {
         /** 校验公开元数据完整并复制轮次。 */
         public LifecycleSnapshot {
-            if (conversationId == null || ownerUserId == null || status == null || version < 0
+            if (conversationId == null || ownerUserId == null || spaceId == null
+                    || status == null || version < 0
                     || generation < 0 || summaryVersion < 0 || lastAccessAt == null || expiresAt == null) {
                 throw new IllegalArgumentException("会话生命周期快照字段不合法");
             }
             turns = turns == null ? List.of() : List.copyOf(turns);
+        }
+
+        /** 将阶段 18 以前的历史生命周期快照明确解释为 GLOBAL。 */
+        public LifecycleSnapshot(UUID conversationId, UUID ownerUserId,
+                                 ConversationLifecycleStatus status, long version,
+                                 long generation, long summaryVersion, Instant lastAccessAt,
+                                 Instant expiresAt, List<CompletedTurn> turns) {
+            this(conversationId, ownerUserId, KnowledgeSpace.GLOBAL_SPACE_ID, status,
+                    version, generation, summaryVersion, lastAccessAt, expiresAt, turns);
         }
     }
 }
