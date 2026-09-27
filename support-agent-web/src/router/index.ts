@@ -54,6 +54,18 @@ export const router = createRouter({
       meta: { requiresAuth: true },
     },
     {
+      path: '/tickets',
+      name: 'tickets',
+      component: () => import('@/views/ticket/TicketListView.vue'),
+      meta: { requiresAuth: true },
+    },
+    {
+      path: '/tickets/:ticketNo',
+      name: 'ticket-details',
+      component: () => import('@/views/ticket/TicketDetailView.vue'),
+      meta: { requiresAuth: true },
+    },
+    {
       path: '/account',
       name: 'account',
       component: () => import('@/views/auth/AccountView.vue'),

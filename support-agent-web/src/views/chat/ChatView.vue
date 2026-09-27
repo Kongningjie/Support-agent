@@ -3,6 +3,8 @@ import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import SafeMarkdown from '@/components/content/SafeMarkdown.vue'
+import * as ticketApi from '@/api/ticket.api'
+import { shouldLoadConversation } from '@/chat/chat.route'
 import { useChatStore } from '@/stores/chat.store'
 import type { ChatMessage } from '@/types/chat.types'
 import { ApiError } from '@/types/api.types'
@@ -12,6 +14,8 @@ const router = useRouter()
 const chat = useChatStore()
 const draft = ref('')
 const scroller = ref<HTMLElement | null>(null)
+const suggestionBusyKey = ref<string | null>(null)
+const suggestionKeys = new Map<string, string>()
 const routeConversationId = computed(() =>
   typeof route.params.id === 'string' ? route.params.id : null,
 )
@@ -20,8 +24,13 @@ watch(
   routeConversationId,
   async (conversationId) => {
     try {
-      if (conversationId) await chat.openConversation(conversationId)
-      else chat.startNewConversation()
+      if (!conversationId) {
+        chat.startNewConversation()
+      } else if (
+        shouldLoadConversation(conversationId, chat.conversation?.conversationId ?? null)
+      ) {
+        await chat.openConversation(conversationId)
+      }
     } catch (error) {
       ElMessage.error(error instanceof ApiError ? error.message : '无法读取会话')
       await router.replace('/chat')
@@ -88,6 +97,35 @@ async function deleteConversation(): Promise<void> {
     if (error === 'cancel' || error === 'close') return
     ElMessage.error(error instanceof ApiError ? error.message : '会话删除失败')
   }
+}
+
+/** 显式消费有效建议创建工单草稿，网络结果不确定时复用同一幂等键。 */
+async function createSuggestedTicket(message: ChatMessage): Promise<void> {
+  if (!chat.conversation || !message.suggestionId || isSuggestionExpired(message)) return
+  const key = suggestionKeys.get(message.key) || crypto.randomUUID()
+  suggestionKeys.set(message.key, key)
+  suggestionBusyKey.value = message.key
+  try {
+    const ticket = await ticketApi.createDraftFromSuggestion(
+      chat.conversation.conversationId,
+      message.suggestionId,
+      key,
+    )
+    suggestionKeys.delete(message.key)
+    ElMessage.success(`工单草稿 ${ticket.ticketNo} 已创建`)
+    await router.push(`/tickets/${ticket.ticketNo}`)
+  } catch (error) {
+    ElMessage.error(error instanceof ApiError ? error.message : '创建工单草稿失败')
+  } finally {
+    suggestionBusyKey.value = null
+  }
+}
+
+/** 判断建议是否已超过服务端提供的失效时间。 */
+function isSuggestionExpired(message: ChatMessage): boolean {
+  return Boolean(
+    message.suggestionExpiresAt && new Date(message.suggestionExpiresAt).getTime() <= Date.now(),
+  )
 }
 
 /** 返回检索状态的简体中文解释。 */
@@ -176,7 +214,14 @@ function localTime(value: string | null): string {
               <strong>可以创建工单草稿</strong>
               <span>建议有效至 {{ localTime(message.suggestionExpiresAt) }}</span>
             </div>
-            <el-button disabled title="工单创建将在 F3 阶段接入">创建工单草稿（F3）</el-button>
+            <el-button
+              type="primary"
+              :disabled="isSuggestionExpired(message)"
+              :loading="suggestionBusyKey === message.key"
+              @click="createSuggestedTicket(message)"
+            >
+              {{ isSuggestionExpired(message) ? '建议已过期' : '创建工单草稿' }}
+            </el-button>
           </div>
 
           <el-alert

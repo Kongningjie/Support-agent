@@ -1,6 +1,6 @@
 # Support Agent
 
-基于 Java 21、Spring Boot 4.1、AgentScope Java 和 DashScope 的企业内部技术支持 Agent。当前已完成一期阶段 0～5、二期阶段 6～9、三期阶段 10～14（含阶段 13 补强）、四期阶段 15～17 和前端阶段 F1～F2，覆盖知识检索与工单闭环、上下文压缩、本地认证、会话生命周期、用户可控长期记忆、账号安全、LLM 输入与输出安全治理，以及前端认证、聊天、会话和记忆治理。
+基于 Java 21、Spring Boot 4.1、AgentScope Java 和 DashScope 的企业内部技术支持 Agent。当前已完成一期阶段 0～5、二期阶段 6～9、三期阶段 10～14（含阶段 13 补强）、四期阶段 15～17 和前端阶段 F1～F3，覆盖知识检索与工单闭环、上下文压缩、本地认证、会话生命周期、用户可控长期记忆、账号安全、LLM 输入与输出安全治理，以及前端认证、聊天、会话、记忆和工单闭环。
 
 当前实现的完整事实基线见 [当前系统基线](docs/implementation-plan/10-current-system-baseline.md)，历史阶段计划只用于解释当时的范围和决策。[四期 LLM 安全方案](docs/implementation-plan/11-phase-4-llm-security-plan.md)的阶段 15～17 已完成规定离线与集成门禁；真实 DashScope 对抗验证仍需单独授权，不能把固定数据集结果表述为在线模型安全率。
 
@@ -21,7 +21,7 @@
 
 主要状态流转：
 
-- 工单：`DRAFT -> OPEN -> RESOLVED`，或 `OPEN -> CLOSED`；只有人工填写根因和已验证方案后才能解决。
+- 工单：`DRAFT -> OPEN -> RESOLVED`，也可从 `DRAFT` 或 `OPEN` 进入 `CLOSED`；只有人工填写根因和已验证方案后才能解决。
 - 托管文档：`DRAFT -> PUBLISHING -> PUBLISHED -> ARCHIVED`；发布失败进入 `PUBLISH_FAILED`，修改后可重试。
 - 已解决案例：`DRAFT -> PUBLISHING -> PUBLISHED -> ARCHIVED`；也可从 `DRAFT` 永久进入 `REJECTED`，发布失败进入 `PUBLISH_FAILED`。
 
@@ -35,7 +35,7 @@
 | `support-agent-infrastructure` | MySQL、Redis、Elasticsearch、Flyway、Outbox、认证与安全审计适配 |
 | `support-agent-interfaces` | REST、SSE、Spring Security、OpenAPI 和统一响应 |
 | `support-agent-bootstrap` | Spring Boot 启动、配置和模块装配 |
-| `support-agent-web` | Vue 3 独立前端；当前提供认证、账号安全、角色守卫和应用外壳 |
+| `support-agent-web` | Vue 3 独立前端；当前提供认证、账号安全、角色守卫、聊天、会话、长期记忆和工单闭环 |
 
 ## Windows 11 本地运行
 
@@ -57,7 +57,7 @@ npm ci
 npm run dev
 ```
 
-浏览器访问 `http://localhost:5173`。当前已提供认证、聊天、会话和长期记忆页面；工单与管理员治理页面将在 F3～F4 分阶段实现。
+浏览器访问 `http://localhost:5173`。当前已提供认证、聊天、会话、长期记忆和工单页面；管理员治理页面将在 F4 实现。
 
 `.env` 只供 Docker Compose 读取，Spring Boot 不会自动加载它。通过 IDEA 启动时，请在 `SupportAgentApplication` 的 Run Configuration 中配置 `DASHSCOPE_API_KEY` 和 `DASHSCOPE_HTTP_BASE_URL`。这些变量只对被启动的应用进程生效，因此 IDEA Terminal 中不一定可见。
 
@@ -130,4 +130,4 @@ docker compose -f .\deploy\compose.yml down
 
 ## 安全边界
 
-禁止提交密钥、`.env`、生产数据、完整 Prompt 或模型完整输出。测试数据必须自编或脱敏。当前消息与所有模型上下文统一按不可信数据处理：高置信度直接注入在创建会话前拒绝，高风险证据、历史、摘要、记忆和工单字段只从本次调用排除。问候、RAG、工单回答、工单草稿和案例草稿在外发或持久化前统一执行完整输出安全校验，每次受保护生成调用使用仅存活于内存的随机泄漏标记。当前采用本地用户名密码、BCrypt 和 Redis 不透明 Token，不使用 JWT、Refresh Token、真实 OIDC/SSO、复杂 RBAC、多租户、前端、RocketMQ 或自动调参。
+禁止提交密钥、`.env`、生产数据、完整 Prompt 或模型完整输出。测试数据必须自编或脱敏。当前消息与所有模型上下文统一按不可信数据处理：高置信度直接注入在创建会话前拒绝，高风险证据、历史、摘要、记忆和工单字段只从本次调用排除。问候、RAG、工单回答、工单草稿和案例草稿在外发或持久化前统一执行完整输出安全校验，每次受保护生成调用使用仅存活于内存的随机泄漏标记。当前采用本地用户名密码、BCrypt 和 Redis 不透明 Token，不使用 JWT、Refresh Token、真实 OIDC/SSO、复杂 RBAC、多租户、RocketMQ 或自动调参。
