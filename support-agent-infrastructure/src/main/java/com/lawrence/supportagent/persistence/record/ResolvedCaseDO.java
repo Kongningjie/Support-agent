@@ -6,6 +6,8 @@ import java.time.Instant;
 public class ResolvedCaseDO {
     /** 案例内部自增主键。 */
     public Long id;
+    /** 所属空间公开 UUID 的 16 字节表示。 */
+    public byte[] spaceId;
     /** 来源已解决工单的内部主键。 */
     public long sourceTicketId;
     /** 案例标题。 */

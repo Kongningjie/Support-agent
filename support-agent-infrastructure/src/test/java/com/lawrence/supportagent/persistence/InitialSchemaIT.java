@@ -29,15 +29,18 @@ class InitialSchemaIT {
             assertEquals(8, count(statement, "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema='support_agent' AND table_name IN ('ticket','managed_document','resolved_case','async_task','idempotency_record','agent_run','retrieval_trace','app_user') AND table_comment <> ''"));
             long columns = count(statement, "SELECT COUNT(*) FROM information_schema.columns WHERE table_schema='support_agent' AND table_name IN ('ticket','managed_document','resolved_case','async_task','idempotency_record','agent_run','retrieval_trace','app_user')");
             long commented = count(statement, "SELECT COUNT(*) FROM information_schema.columns WHERE table_schema='support_agent' AND table_name IN ('ticket','managed_document','resolved_case','async_task','idempotency_record','agent_run','retrieval_trace','app_user') AND column_comment <> ''");
-            assertEquals(149, columns);
+            assertEquals(152, columns);
             assertEquals(columns, commented);
-            assertEquals(35, count(statement, "SELECT COUNT(DISTINCT table_name, index_name) FROM information_schema.statistics WHERE table_schema='support_agent' AND table_name IN ('ticket','managed_document','resolved_case','async_task','idempotency_record','agent_run','retrieval_trace','app_user')"));
-            assertEquals(22, count(statement, "SELECT COUNT(*) FROM information_schema.table_constraints WHERE table_schema='support_agent' AND table_name IN ('ticket','managed_document','resolved_case','async_task','idempotency_record','agent_run','retrieval_trace','app_user')"));
+            assertEquals(38, count(statement, "SELECT COUNT(DISTINCT table_name, index_name) FROM information_schema.statistics WHERE table_schema='support_agent' AND table_name IN ('ticket','managed_document','resolved_case','async_task','idempotency_record','agent_run','retrieval_trace','app_user')"));
+            assertEquals(25, count(statement, "SELECT COUNT(*) FROM information_schema.table_constraints WHERE table_schema='support_agent' AND table_name IN ('ticket','managed_document','resolved_case','async_task','idempotency_record','agent_run','retrieval_trace','app_user')"));
             assertEquals(1, count(statement, "SELECT COUNT(*) FROM information_schema.table_constraints WHERE table_schema='support_agent' AND table_name='resolved_case' AND constraint_name='uk_resolved_case_source_ticket' AND constraint_type='UNIQUE'"));
             assertEquals(1, count(statement, "SELECT COUNT(*) FROM information_schema.columns WHERE table_schema='support_agent' AND table_name='managed_document' AND column_name='active_content_hash' AND extra LIKE '%STORED GENERATED%'"));
             assertTrue(count(statement, "SELECT COUNT(*) FROM information_schema.table_constraints WHERE table_schema='support_agent' AND constraint_type='FOREIGN KEY'") >= 2);
             assertEquals(1, count(statement, "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema='support_agent' AND table_name='security_event' AND table_comment <> ''"));
-            assertEquals(8, count(statement, "SELECT COUNT(*) FROM information_schema.columns WHERE table_schema='support_agent' AND table_name='security_event' AND column_comment <> ''"));
+            assertEquals(10, count(statement, "SELECT COUNT(*) FROM information_schema.columns WHERE table_schema='support_agent' AND table_name='security_event' AND column_comment <> ''"));
+            assertEquals(2, count(statement, "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema='support_agent' AND table_name IN ('knowledge_space','user_space_membership') AND table_comment <> ''"));
+            assertEquals(25, count(statement, "SELECT COUNT(*) FROM information_schema.columns WHERE table_schema='support_agent' AND table_name IN ('knowledge_space','user_space_membership') AND column_comment <> ''"));
+            assertEquals(1, count(statement, "SELECT COUNT(*) FROM knowledge_space WHERE code='GLOBAL' AND HEX(space_id)='00000000000000000000000000000001' AND visibility='ENTERPRISE' AND status='ACTIVE' AND system_space=TRUE"));
             assertEquals(1, count(statement, "SELECT COUNT(*) FROM information_schema.columns WHERE table_schema='support_agent' AND table_name='app_user' AND column_name='must_change_password'"));
             assertEquals(1, count(statement, "SELECT COUNT(*) FROM information_schema.columns WHERE table_schema='support_agent' AND table_name='app_user' AND column_name='locked_until'"));
         }
@@ -52,9 +55,11 @@ class InitialSchemaIT {
         try (Connection connection = MYSQL.createConnection("");
              Statement statement = connection.createStatement()) {
             statement.executeUpdate("""
-                    INSERT INTO ticket(ticket_no,title,problem_description,status,created_by,
-                    created_at,updated_by,updated_at) VALUES ('T999999999999','恢复演练',
-                    '验证逻辑备份恢复','DRAFT','test',UTC_TIMESTAMP(6),'test',UTC_TIMESTAMP(6))
+                    INSERT INTO ticket(space_id,ticket_no,title,problem_description,status,created_by,
+                    created_at,updated_by,updated_at)
+                    SELECT space_id,'T999999999999','恢复演练','验证逻辑备份恢复','DRAFT',
+                    'test',UTC_TIMESTAMP(6),'test',UTC_TIMESTAMP(6)
+                    FROM knowledge_space WHERE code='GLOBAL'
                     """);
         }
         var backup = MYSQL.execInContainer("sh", "-c",

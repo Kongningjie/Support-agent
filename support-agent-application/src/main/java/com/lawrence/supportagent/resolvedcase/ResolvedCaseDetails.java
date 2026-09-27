@@ -1,7 +1,9 @@
 package com.lawrence.supportagent.resolvedcase;
 
+import com.lawrence.supportagent.knowledgespace.KnowledgeSpaceSummary;
 import com.lawrence.supportagent.ticket.Ticket;
 import java.time.Instant;
+import java.util.UUID;
 
 /**
  * 提供给接口层的案例详情及来源工单摘要。
@@ -23,7 +25,8 @@ import java.time.Instant;
  * @param publishedAt 案例成功发布 UTC 时间
  * @param archivedAt 案例归档 UTC 时间
  */
-public record ResolvedCaseDetails(long caseId, String sourceTicketNo, String sourceTicketTitle,
+public record ResolvedCaseDetails(long caseId, UUID spaceId, KnowledgeSpaceSummary space,
+                                  String sourceTicketNo, String sourceTicketTitle,
                                   String title, String problem, String cause, String solution,
                                   ResolvedCaseStatus status, long version,
                                   String publishFailureReason, String rejectionReason,
@@ -31,7 +34,9 @@ public record ResolvedCaseDetails(long caseId, String sourceTicketNo, String sou
                                   Instant publishedAt, Instant archivedAt) {
     /** 从案例和来源工单创建不暴露内部工单主键的详情。 */
     public static ResolvedCaseDetails from(ResolvedCase value, Ticket ticket) {
-        return new ResolvedCaseDetails(value.id(), ticket.ticketNo(), ticket.title(),
+        return new ResolvedCaseDetails(value.id(), value.spaceId(),
+                KnowledgeSpaceSummary.global(value.spaceId()),
+                ticket.ticketNo(), ticket.title(),
                 value.title(), value.problem(), value.cause(), value.solution(), value.status(),
                 value.version(), value.publishFailureReason(), value.rejectionReason(),
                 value.archiveReason(), value.createdAt(), value.updatedAt(),

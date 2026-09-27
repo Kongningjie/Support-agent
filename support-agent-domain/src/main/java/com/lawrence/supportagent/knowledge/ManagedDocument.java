@@ -1,10 +1,12 @@
 package com.lawrence.supportagent.knowledge;
 
+import com.lawrence.supportagent.knowledgespace.KnowledgeSpace;
 import com.lawrence.supportagent.sharedkernel.DomainAssertions;
 import java.time.Instant;
+import java.util.UUID;
 
 /** 托管文档聚合，维护发布、失败、归档和草稿删除规则。 */
-public record ManagedDocument(Long id, String title, DocumentInputType inputType,
+public record ManagedDocument(Long id, UUID spaceId, String title, DocumentInputType inputType,
                               String originalFileName, String mediaType, String rawContent,
                               String contentHash, ManagedDocumentStatus status, long version,
                               String indexFailureReason, String archiveReason, boolean deleted,
@@ -17,8 +19,8 @@ public record ManagedDocument(Long id, String title, DocumentInputType inputType
         title = DomainAssertions.requiredText(title, "文档标题");
         rawContent = DomainAssertions.requiredText(rawContent, "文档正文");
         contentHash = DomainAssertions.requiredText(contentHash, "内容哈希");
-        if (inputType == null || status == null || createdAt == null || updatedAt == null) {
-            throw new IllegalArgumentException("文档类型、状态和审计时间不能为空");
+        if (spaceId == null || inputType == null || status == null || createdAt == null || updatedAt == null) {
+            throw new IllegalArgumentException("文档空间、类型、状态和审计时间不能为空");
         }
         createdBy = DomainAssertions.requiredText(createdBy, "创建人");
         updatedBy = DomainAssertions.requiredText(updatedBy, "更新人");
@@ -26,12 +28,35 @@ public record ManagedDocument(Long id, String title, DocumentInputType inputType
     }
 
     /** 创建不可检索的托管文档草稿。 */
+    public static ManagedDocument draft(UUID spaceId, String title, DocumentInputType inputType,
+                                        String originalFileName, String mediaType,
+                                        String content, String hash, String operator, Instant now) {
+        return new ManagedDocument(null, spaceId, title, inputType, originalFileName, mediaType,
+                content, hash, ManagedDocumentStatus.DRAFT, 0, null, null, false,
+                null, null, operator, now, operator, now, null, null, null, null);
+    }
+
+    /** 为既有调用保留 GLOBAL 草稿入口；生产用例应显式传入空间。 */
     public static ManagedDocument draft(String title, DocumentInputType inputType,
                                         String originalFileName, String mediaType,
                                         String content, String hash, String operator, Instant now) {
-        return new ManagedDocument(null, title, inputType, originalFileName, mediaType,
-                content, hash, ManagedDocumentStatus.DRAFT, 0, null, null, false,
-                null, null, operator, now, operator, now, null, null, null, null);
+        return draft(KnowledgeSpace.GLOBAL_SPACE_ID, title, inputType, originalFileName,
+                mediaType, content, hash, operator, now);
+    }
+
+    /** 为既有测试与内部构造保留 GLOBAL 兼容构造器。 */
+    public ManagedDocument(Long id, String title, DocumentInputType inputType,
+                           String originalFileName, String mediaType, String rawContent,
+                           String contentHash, ManagedDocumentStatus status, long version,
+                           String indexFailureReason, String archiveReason, boolean deleted,
+                           String deletedBy, Instant deletedAt, String createdBy,
+                           Instant createdAt, String updatedBy, Instant updatedAt,
+                           String publishedBy, Instant publishedAt, String archivedBy,
+                           Instant archivedAt) {
+        this(id, KnowledgeSpace.GLOBAL_SPACE_ID, title, inputType, originalFileName, mediaType,
+                rawContent, contentHash, status, version, indexFailureReason, archiveReason,
+                deleted, deletedBy, deletedAt, createdBy, createdAt, updatedBy, updatedAt,
+                publishedBy, publishedAt, archivedBy, archivedAt);
     }
 
     /** 修改草稿或索引失败文档并恢复为草稿。 */
@@ -89,7 +114,7 @@ public record ManagedDocument(Long id, String title, DocumentInputType inputType
                                  String failure, String archive, boolean newDeleted,
                                  String newDeletedBy, Instant newDeletedAt, String newPublishedBy,
                                  Instant newPublishedAt, String newArchivedBy, Instant newArchivedAt) {
-        return new ManagedDocument(id, newTitle, inputType, originalFileName, mediaType,
+        return new ManagedDocument(id, spaceId, newTitle, inputType, originalFileName, mediaType,
                 newContent, newHash, newStatus, version + 1, failure, archive, newDeleted,
                 newDeletedBy, newDeletedAt, createdBy, createdAt, operator, now,
                 newPublishedBy, newPublishedAt, newArchivedBy, newArchivedAt);

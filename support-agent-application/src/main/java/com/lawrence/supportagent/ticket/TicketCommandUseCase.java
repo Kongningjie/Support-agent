@@ -8,6 +8,7 @@ import com.lawrence.supportagent.idempotency.IdempotencyCommand;
 import com.lawrence.supportagent.idempotency.IdempotentExecutor;
 import com.lawrence.supportagent.idempotency.IdempotentResource;
 import com.lawrence.supportagent.idempotency.RequestFingerprint;
+import com.lawrence.supportagent.knowledgespace.KnowledgeSpace;
 import com.lawrence.supportagent.sharedkernel.error.ApplicationException;
 import com.lawrence.supportagent.sharedkernel.error.ErrorCode;
 import com.lawrence.supportagent.sharedkernel.port.TimeProvider;
@@ -49,7 +50,8 @@ public class TicketCommandUseCase {
         return idempotentExecutor.execute(command, () -> {
             Instant now = timeProvider.now();
             String operator = actor.userId().toString();
-            Ticket inserted = repository.save(Ticket.draft(null, null, actor.userId(), normalizedTitle,
+            Ticket inserted = repository.save(Ticket.draft(KnowledgeSpace.GLOBAL_SPACE_ID,
+                    null, null, actor.userId(), normalizedTitle,
                     normalizedProblem, normalizedActions, operator, now));
             String ticketNo = formatTicketNo(inserted.id());
             Ticket numbered = repository.assignNumber(inserted, ticketNo);
@@ -71,7 +73,8 @@ public class TicketCommandUseCase {
         return idempotentExecutor.execute(command, () -> {
             Instant now = timeProvider.now();
             String operator = actor.userId().toString();
-            Ticket inserted = repository.save(Ticket.draft(conversationId, sourceTurnId, actor.userId(),
+            Ticket inserted = repository.save(Ticket.draft(KnowledgeSpace.GLOBAL_SPACE_ID,
+                    conversationId, sourceTurnId, actor.userId(),
                     normalizedTitle, normalizedProblem, normalizedActions, operator, now));
             Ticket numbered = repository.assignNumber(inserted, formatTicketNo(inserted.id()));
             return new IdempotentResource<>("TICKET", numbered.id(), TicketDetails.from(numbered));

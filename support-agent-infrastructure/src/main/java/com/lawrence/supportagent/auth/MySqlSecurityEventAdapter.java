@@ -25,9 +25,26 @@ public class MySqlSecurityEventAdapter implements SecurityEventPort {
     @Override public void record(SecurityEventType type, UUID targetUserId, String actorId,
                                  String result, String reason, String sourceHash,
                                  Instant occurredAt) {
+        persist(type, targetUserId, null, null, actorId, result, reason, sourceHash, occurredAt);
+    }
+
+    /** {@inheritDoc} */
+    @Override public void recordResource(SecurityEventType type, UUID targetUserId,
+                                         String resourceType, String resourceId, String actorId,
+                                         String result, String reason, Instant occurredAt) {
+        persist(type, targetUserId, resourceType, resourceId, actorId, result, reason,
+                null, occurredAt);
+    }
+
+    /** 持久化最小事件字段，并确保指标不携带资源或用户高基数标识。 */
+    private void persist(SecurityEventType type, UUID targetUserId,
+                         String resourceType, String resourceId, String actorId,
+                         String result, String reason, String sourceHash, Instant occurredAt) {
         SecurityEventDO event = new SecurityEventDO();
         event.eventType = type.name();
         event.targetUserId = targetUserId == null ? null : bytes(targetUserId);
+        event.resourceType = resourceType;
+        event.resourceId = resourceId;
         event.actorId = actorId;
         event.result = result;
         event.reason = reason;

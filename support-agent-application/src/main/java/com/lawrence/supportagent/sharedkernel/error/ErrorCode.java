@@ -34,6 +34,20 @@ public enum ErrorCode {
     AUTH_PASSWORD_REUSED,
     /** 当前 Token 仅允许完成强制改密流程。 */
     AUTH_PASSWORD_CHANGE_REQUIRED,
+    /** 空间不存在，或调用者无权获知受限空间。 */
+    KNOWLEDGE_SPACE_NOT_FOUND,
+    /** 调用者可见空间但缺少 EDITOR 或 MANAGER 角色。 */
+    KNOWLEDGE_SPACE_ROLE_REQUIRED,
+    /** 已知空间已停用，禁止当前写操作。 */
+    KNOWLEDGE_SPACE_DISABLED,
+    /** 稳定空间代码已存在。 */
+    KNOWLEDGE_SPACE_CODE_CONFLICT,
+    /** 空间或成员乐观锁版本已经变化。 */
+    KNOWLEDGE_SPACE_VERSION_CONFLICT,
+    /** 尝试改变 GLOBAL 系统空间不变量。 */
+    KNOWLEDGE_SPACE_GLOBAL_IMMUTABLE,
+    /** 成员状态、角色或最后一个 MANAGER 保护发生冲突。 */
+    KNOWLEDGE_SPACE_MEMBERSHIP_CONFLICT,
     /** 指定长期记忆不存在或不属于当前用户。 */
     MEMORY_NOT_FOUND,
     /** 长期记忆或开关的乐观锁版本已经变化。 */

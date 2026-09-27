@@ -3,8 +3,8 @@
 <mapper namespace="com.lawrence.supportagent.persistence.mapper.SecurityEventMapper">
     <insert id="insert">
         INSERT INTO security_event
-            (event_type,target_user_id,actor_id,result,reason,source_hash,occurred_at)
+            (event_type,target_user_id,resource_type,resource_id,actor_id,result,reason,source_hash,occurred_at)
         VALUES
-            (#{eventType},#{targetUserId},#{actorId},#{result},#{reason},#{sourceHash},#{occurredAt})
+            (#{eventType},#{targetUserId},#{resourceType},#{resourceId},#{actorId},#{result},#{reason},#{sourceHash},#{occurredAt})
     </insert>
 </mapper>

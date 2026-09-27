@@ -1,5 +1,6 @@
 package com.lawrence.supportagent.knowledge;
 
+import com.lawrence.supportagent.knowledgespace.KnowledgeSpaceSummary;
 import com.lawrence.supportagent.sharedkernel.api.ApiResponseFactory;
 import com.lawrence.supportagent.sharedkernel.api.ApiResult;
 import com.lawrence.supportagent.sharedkernel.api.PageResult;
@@ -14,6 +15,7 @@ import jakarta.validation.constraints.Size;
 import java.io.IOException;
 import java.time.Instant;
 import java.util.List;
+import java.util.UUID;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
@@ -209,7 +211,8 @@ public class ManagedDocumentController {
      * @param publishedAt 成功发布时间
      * @param archivedAt 归档时间
      */
-    public record DocumentResponse(String documentId, String title, DocumentInputType inputType,
+    public record DocumentResponse(String documentId, UUID spaceId, KnowledgeSpaceSummary space,
+                                   String title, DocumentInputType inputType,
                                    String originalFileName, String mediaType, String rawContent,
                                    String contentHash, ManagedDocumentStatus status, long version,
                                    String indexFailureReason, String archiveReason,
@@ -217,7 +220,8 @@ public class ManagedDocumentController {
                                    Instant publishedAt, Instant archivedAt) {
         /** 从应用层详情生成字符串 ID 的接口响应。 */
         public static DocumentResponse from(ManagedDocumentDetails value) {
-            return new DocumentResponse(Long.toString(value.id()), value.title(), value.inputType(),
+            return new DocumentResponse(Long.toString(value.id()), value.spaceId(), value.space(),
+                    value.title(), value.inputType(),
                     value.originalFileName(), value.mediaType(), value.rawContent(),
                     value.contentHash(), value.status(), value.version(), value.indexFailureReason(),
                     value.archiveReason(), value.createdAt(), value.updatedAt(),
@@ -237,14 +241,16 @@ public class ManagedDocumentController {
      * @param updatedAt 更新时间
      * @param publishedAt 成功发布时间
      */
-    public record DocumentSummaryResponse(String documentId, String title,
+    public record DocumentSummaryResponse(String documentId, UUID spaceId,
+                                          KnowledgeSpaceSummary space, String title,
                                           DocumentInputType inputType,
                                           ManagedDocumentStatus status, long version,
                                           Instant createdAt, Instant updatedAt,
                                           Instant publishedAt) {
         /** 从应用层摘要生成字符串 ID 的接口响应。 */
         public static DocumentSummaryResponse from(ManagedDocumentSummary value) {
-            return new DocumentSummaryResponse(Long.toString(value.id()), value.title(),
+            return new DocumentSummaryResponse(Long.toString(value.id()), value.spaceId(),
+                    value.space(), value.title(),
                     value.inputType(), value.status(), value.version(), value.createdAt(),
                     value.updatedAt(), value.publishedAt());
         }

@@ -1,6 +1,8 @@
 package com.lawrence.supportagent.resolvedcase;
 
+import com.lawrence.supportagent.knowledgespace.KnowledgeSpaceSummary;
 import java.time.Instant;
+import java.util.UUID;
 
 /**
  * 案例分页列表使用的不含完整正文摘要。
@@ -13,7 +15,8 @@ import java.time.Instant;
  * @param createdAt 案例创建 UTC 时间
  * @param updatedAt 案例最近更新 UTC 时间
  */
-public record ResolvedCaseSummary(long caseId, String sourceTicketNo, String title,
+public record ResolvedCaseSummary(long caseId, UUID spaceId, KnowledgeSpaceSummary space,
+                                  String sourceTicketNo, String title,
                                   ResolvedCaseStatus status, long version,
                                   Instant createdAt, Instant updatedAt) {
 }

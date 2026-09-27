@@ -487,7 +487,8 @@ public class ChatUseCase {
 
     /** 仅在本次模型调用中隐藏包含高置信度注入指令的可变工单正文。 */
     private TicketDetails secureTicket(TicketDetails ticket) {
-        return new TicketDetails(ticket.ticketNo(), secureTicketField(ticket.title()),
+        return new TicketDetails(ticket.ticketNo(), ticket.spaceId(), ticket.space(),
+                secureTicketField(ticket.title()),
                 secureTicketField(ticket.problemDescription()),
                 secureTicketField(ticket.attemptedActions()), ticket.status(),
                 secureTicketField(ticket.rootCause()), secureTicketField(ticket.solution()),

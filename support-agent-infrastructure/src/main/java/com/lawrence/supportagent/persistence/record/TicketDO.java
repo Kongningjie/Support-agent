@@ -6,6 +6,8 @@ import java.time.Instant;
 public class TicketDO {
     /** MySQL 内部自增主键。 */
     public Long id;
+    /** 所属空间公开 UUID 的 16 字节表示。 */
+    public byte[] spaceId;
     /** 对外工单编号。 */
     public String ticketNo;
     /** 来源会话 UUID 的 16 字节表示。 */

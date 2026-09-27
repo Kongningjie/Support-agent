@@ -1,6 +1,8 @@
 package com.lawrence.supportagent.ticket;
 
+import com.lawrence.supportagent.knowledgespace.KnowledgeSpaceSummary;
 import java.time.Instant;
+import java.util.UUID;
 
 /**
  * 工单分页列表摘要，不返回大文本和内部主键。
@@ -12,11 +14,14 @@ import java.time.Instant;
  * @param createdAt 创建 UTC 时间
  * @param updatedAt 最近更新 UTC 时间
  */
-public record TicketSummary(String ticketNo, String title, TicketStatus status, long version,
+public record TicketSummary(String ticketNo, UUID spaceId, KnowledgeSpaceSummary space,
+                            String title, TicketStatus status, long version,
                             Instant createdAt, Instant updatedAt) {
     /** 从领域聚合创建分页摘要。 */
     public static TicketSummary from(Ticket ticket) {
-        return new TicketSummary(ticket.ticketNo(), ticket.title(), ticket.status(),
+        return new TicketSummary(ticket.ticketNo(), ticket.spaceId(),
+                KnowledgeSpaceSummary.global(ticket.spaceId()),
+                ticket.title(), ticket.status(),
                 ticket.version(), ticket.createdAt(), ticket.updatedAt());
     }
 }

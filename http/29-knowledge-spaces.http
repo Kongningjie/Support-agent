@@ -1,0 +1,88 @@
+### 阶段 18 知识空间与成员治理接口示例
+@baseUrl = http://localhost:8080
+@userToken = replace-with-user-token
+@adminToken = replace-with-admin-token
+@globalSpaceId = 00000000-0000-0000-0000-000000000001
+@spaceId = replace-with-space-uuid
+@memberUserId = replace-with-user-uuid
+
+### 普通用户查询可读的活动空间；GLOBAL 固定排在最前
+GET {{baseUrl}}/api/v1/knowledge-spaces?page=1&size=20
+Authorization: Bearer {{userToken}}
+
+### 查询空间详情；无权访问受限空间时与不存在统一返回 404
+GET {{baseUrl}}/api/v1/knowledge-spaces/{{globalSpaceId}}
+Authorization: Bearer {{userToken}}
+
+### 管理员按状态、可见性和代码或名称关键字筛选空间
+GET {{baseUrl}}/api/v1/knowledge-spaces?status=ACTIVE&visibility=RESTRICTED&keyword=OPS&page=1&size=20
+Authorization: Bearer {{adminToken}}
+
+### 管理员创建默认 RESTRICTED、ACTIVE 的普通空间
+POST {{baseUrl}}/api/v1/admin/knowledge-spaces
+Authorization: Bearer {{adminToken}}
+Idempotency-Key: space-create-001
+Content-Type: application/json
+
+{
+  "code": "TEAM_OPS",
+  "name": "运维支持空间",
+  "description": "保存运维团队内部排障知识"
+}
+
+### 管理员修改名称、说明和可见性；expectedVersion 是当前空间版本
+PATCH {{baseUrl}}/api/v1/admin/knowledge-spaces/{{spaceId}}
+Authorization: Bearer {{adminToken}}
+Idempotency-Key: space-update-001
+Content-Type: application/json
+
+{
+  "name": "生产运维支持空间",
+  "description": "保存生产运维团队内部排障知识",
+  "visibility": "RESTRICTED",
+  "expectedVersion": 0
+}
+
+### 管理员停用普通空间；GLOBAL 永远不能停用
+POST {{baseUrl}}/api/v1/admin/knowledge-spaces/{{spaceId}}/disable
+Authorization: Bearer {{adminToken}}
+Idempotency-Key: space-disable-001
+Content-Type: application/json
+
+{
+  "expectedVersion": 1
+}
+
+### 管理员重新启用已停用空间
+POST {{baseUrl}}/api/v1/admin/knowledge-spaces/{{spaceId}}/enable
+Authorization: Bearer {{adminToken}}
+Idempotency-Key: space-enable-001
+Content-Type: application/json
+
+{
+  "expectedVersion": 2
+}
+
+### 空间 MANAGER 或平台管理员查询成员；不返回密码和 Token 字段
+GET {{baseUrl}}/api/v1/knowledge-spaces/{{spaceId}}/members?page=1&size=20
+Authorization: Bearer {{adminToken}}
+
+### 新增成员；新增时 expectedVersion 省略，已有关系改角色或恢复时必须传当前版本
+PUT {{baseUrl}}/api/v1/knowledge-spaces/{{spaceId}}/members/{{memberUserId}}
+Authorization: Bearer {{adminToken}}
+Idempotency-Key: space-member-put-001
+Content-Type: application/json
+
+{
+  "role": "MANAGER"
+}
+
+### 撤销成员关系；受限空间不能撤销或降级最后一个活动 MANAGER
+DELETE {{baseUrl}}/api/v1/knowledge-spaces/{{spaceId}}/members/{{memberUserId}}
+Authorization: Bearer {{adminToken}}
+Idempotency-Key: space-member-revoke-001
+Content-Type: application/json
+
+{
+  "expectedVersion": 0
+}

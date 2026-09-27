@@ -1,6 +1,7 @@
 package com.lawrence.supportagent.ticket;
 
 import com.lawrence.supportagent.auth.AuthenticatedUser;
+import com.lawrence.supportagent.knowledgespace.KnowledgeSpaceSummary;
 import com.lawrence.supportagent.sharedkernel.api.ApiResponseFactory;
 import com.lawrence.supportagent.sharedkernel.api.ApiResult;
 import com.lawrence.supportagent.sharedkernel.api.PageResult;
@@ -15,6 +16,7 @@ import jakarta.validation.constraints.PositiveOrZero;
 import jakarta.validation.constraints.Size;
 import java.time.Instant;
 import java.util.List;
+import java.util.UUID;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
@@ -292,6 +294,8 @@ public class TicketController {
      */
     public record TicketResponse(
             @Schema(description = "T 加 12 位数字的工单编号", example = "T000000000001") String ticketNo,
+            @Schema(description = "工单所属知识空间 UUID") UUID spaceId,
+            @Schema(description = "工单所属知识空间的最小摘要") KnowledgeSpaceSummary space,
             @Schema(description = "工单标题", example = "应用启动时报 MySQL 连接失败") String title,
             @Schema(description = "问题现象和背景", example = "启动后无法连接 localhost:3306") String problemDescription,
             @Schema(description = "用户已尝试操作；可以为空", example = "已检查端口映射",
@@ -312,7 +316,8 @@ public class TicketController {
                     nullable = true) Instant closedAt) {
         /** 从应用层脱敏视图创建接口响应。 */
         public static TicketResponse from(TicketDetails value) {
-            return new TicketResponse(value.ticketNo(), value.title(), value.problemDescription(),
+            return new TicketResponse(value.ticketNo(), value.spaceId(), value.space(),
+                    value.title(), value.problemDescription(),
                     value.attemptedActions(), value.status(), value.rootCause(), value.solution(),
                     value.closeReason(), value.version(), value.createdAt(), value.updatedAt(),
                     value.resolvedAt(), value.closedAt());
@@ -331,6 +336,8 @@ public class TicketController {
      */
     public record TicketSummaryResponse(
             @Schema(description = "对外工单编号", example = "T000000000001") String ticketNo,
+            @Schema(description = "工单所属知识空间 UUID") UUID spaceId,
+            @Schema(description = "工单所属知识空间的最小摘要") KnowledgeSpaceSummary space,
             @Schema(description = "工单标题", example = "应用启动时报 MySQL 连接失败") String title,
             @Schema(description = "当前工单状态", example = "OPEN") TicketStatus status,
             @Schema(description = "当前乐观锁版本", example = "1") long version,
@@ -338,7 +345,8 @@ public class TicketController {
             @Schema(description = "最近更新 UTC 时间", example = "2026-09-04T01:05:00Z") Instant updatedAt) {
         /** 从应用层分页摘要创建接口响应。 */
         public static TicketSummaryResponse from(TicketSummary value) {
-            return new TicketSummaryResponse(value.ticketNo(), value.title(), value.status(),
+            return new TicketSummaryResponse(value.ticketNo(), value.spaceId(), value.space(),
+                    value.title(), value.status(),
                     value.version(), value.createdAt(), value.updatedAt());
         }
     }

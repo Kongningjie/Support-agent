@@ -29,6 +29,7 @@ public final class AggregateRecordMapper {
     public static TicketDO toRecord(Ticket value) {
         TicketDO record = new TicketDO();
         record.id = value.id();
+        record.spaceId = toBytes(value.spaceId());
         record.ticketNo = value.ticketNo();
         record.conversationId = toBytes(value.conversationId());
         record.sourceTurnId = toBytes(value.sourceTurnId());
@@ -59,7 +60,7 @@ public final class AggregateRecordMapper {
      * @return 工单聚合
      */
     public static Ticket toDomain(TicketDO record) {
-        return new Ticket(record.id, record.ticketNo, toUuid(record.conversationId),
+        return new Ticket(record.id, toUuid(record.spaceId), record.ticketNo, toUuid(record.conversationId),
                 toUuid(record.sourceTurnId), toUuid(record.ownerUserId), record.title, record.problemDescription,
                 record.attemptedActions, TicketStatus.valueOf(record.status), record.rootCause,
                 record.solution, record.closeReason, record.version, record.createdBy,
@@ -76,6 +77,7 @@ public final class AggregateRecordMapper {
     public static ManagedDocumentDO toRecord(ManagedDocument value) {
         ManagedDocumentDO record = new ManagedDocumentDO();
         record.id = value.id();
+        record.spaceId = toBytes(value.spaceId());
         record.title = value.title();
         record.inputType = value.inputType().name();
         record.originalFileName = value.originalFileName();
@@ -107,7 +109,7 @@ public final class AggregateRecordMapper {
      * @return 托管文档聚合
      */
     public static ManagedDocument toDomain(ManagedDocumentDO record) {
-        return new ManagedDocument(record.id, record.title,
+        return new ManagedDocument(record.id, toUuid(record.spaceId), record.title,
                 DocumentInputType.valueOf(record.inputType), record.originalFileName,
                 record.mediaType, record.rawContent, record.contentHash,
                 ManagedDocumentStatus.valueOf(record.status), record.version,
@@ -126,6 +128,7 @@ public final class AggregateRecordMapper {
     public static ResolvedCaseDO toRecord(ResolvedCase value) {
         ResolvedCaseDO record = new ResolvedCaseDO();
         record.id = value.id();
+        record.spaceId = toBytes(value.spaceId());
         record.sourceTicketId = value.sourceTicketId();
         record.title = value.title();
         record.problem = value.problem();
@@ -158,7 +161,7 @@ public final class AggregateRecordMapper {
      * @return 已解决案例聚合
      */
     public static ResolvedCase toDomain(ResolvedCaseDO record) {
-        return new ResolvedCase(record.id, record.sourceTicketId, record.title,
+        return new ResolvedCase(record.id, toUuid(record.spaceId), record.sourceTicketId, record.title,
                 record.problem, record.cause, record.solution,
                 ResolvedCaseStatus.valueOf(record.status), record.contentHash, record.version,
                 record.publishFailureReason, record.rejectionReason, record.archiveReason,

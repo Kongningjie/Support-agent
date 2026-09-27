@@ -1,11 +1,12 @@
 package com.lawrence.supportagent.ticket;
 
+import com.lawrence.supportagent.knowledgespace.KnowledgeSpace;
 import com.lawrence.supportagent.sharedkernel.DomainAssertions;
 import java.time.Instant;
 import java.util.UUID;
 
 /** 工单聚合，集中维护内容、审计字段和状态迁移规则。 */
-public record Ticket(Long id, String ticketNo, UUID conversationId, UUID sourceTurnId, UUID ownerUserId,
+public record Ticket(Long id, UUID spaceId, String ticketNo, UUID conversationId, UUID sourceTurnId, UUID ownerUserId,
                      String title, String problemDescription, String attemptedActions,
                      TicketStatus status, String rootCause, String solution, String closeReason,
                      long version, String createdBy, Instant createdAt, String updatedBy,
@@ -15,8 +16,8 @@ public record Ticket(Long id, String ticketNo, UUID conversationId, UUID sourceT
     public Ticket {
         title = DomainAssertions.requiredText(title, "工单标题");
         problemDescription = DomainAssertions.requiredText(problemDescription, "问题描述");
-        if (status == null || createdAt == null || updatedAt == null) {
-            throw new IllegalArgumentException("工单状态和审计时间不能为空");
+        if (spaceId == null || status == null || createdAt == null || updatedAt == null) {
+            throw new IllegalArgumentException("工单空间、状态和审计时间不能为空");
         }
         createdBy = DomainAssertions.requiredText(createdBy, "创建人");
         updatedBy = DomainAssertions.requiredText(updatedBy, "更新人");
@@ -24,12 +25,34 @@ public record Ticket(Long id, String ticketNo, UUID conversationId, UUID sourceT
     }
 
     /** 创建尚未分配数据库主键和工单号的草稿。 */
+    public static Ticket draft(UUID spaceId, UUID conversationId, UUID sourceTurnId,
+                               UUID ownerUserId, String title,
+                               String problemDescription, String attemptedActions,
+                               String operator, Instant now) {
+        return new Ticket(null, spaceId, null, conversationId, sourceTurnId, ownerUserId, title, problemDescription,
+                attemptedActions, TicketStatus.DRAFT, null, null, null, 0,
+                operator, now, operator, now, null, null, null, null);
+    }
+
+    /** 为既有调用保留 GLOBAL 草稿入口；生产用例应显式传入空间。 */
     public static Ticket draft(UUID conversationId, UUID sourceTurnId, UUID ownerUserId, String title,
                                String problemDescription, String attemptedActions,
                                String operator, Instant now) {
-        return new Ticket(null, null, conversationId, sourceTurnId, ownerUserId, title, problemDescription,
-                attemptedActions, TicketStatus.DRAFT, null, null, null, 0,
-                operator, now, operator, now, null, null, null, null);
+        return draft(KnowledgeSpace.GLOBAL_SPACE_ID, conversationId, sourceTurnId, ownerUserId,
+                title, problemDescription, attemptedActions, operator, now);
+    }
+
+    /** 为既有测试与内部构造保留 GLOBAL 兼容构造器。 */
+    public Ticket(Long id, String ticketNo, UUID conversationId, UUID sourceTurnId,
+                  UUID ownerUserId, String title, String problemDescription,
+                  String attemptedActions, TicketStatus status, String rootCause,
+                  String solution, String closeReason, long version, String createdBy,
+                  Instant createdAt, String updatedBy, Instant updatedAt,
+                  String resolvedBy, Instant resolvedAt, String closedBy, Instant closedAt) {
+        this(id, KnowledgeSpace.GLOBAL_SPACE_ID, ticketNo, conversationId, sourceTurnId,
+                ownerUserId, title, problemDescription, attemptedActions, status, rootCause,
+                solution, closeReason, version, createdBy, createdAt, updatedBy, updatedAt,
+                resolvedBy, resolvedAt, closedBy, closedAt);
     }
 
     /** 在首次持久化取得内部主键后设置稳定对外工单编号，不改变业务版本。 */
@@ -40,7 +63,7 @@ public record Ticket(Long id, String ticketNo, UUID conversationId, UUID sourceT
             throw new IllegalArgumentException("工单内部主键必须为正数");
         }
         assignedTicketNo = DomainAssertions.requiredText(assignedTicketNo, "工单编号");
-        return new Ticket(persistedId, assignedTicketNo, conversationId, sourceTurnId, ownerUserId,
+        return new Ticket(persistedId, spaceId, assignedTicketNo, conversationId, sourceTurnId, ownerUserId,
                 title, problemDescription, attemptedActions, status, rootCause, solution,
                 closeReason, version, createdBy, createdAt, updatedBy, updatedAt,
                 resolvedBy, resolvedAt, closedBy, closedAt);
@@ -50,7 +73,7 @@ public record Ticket(Long id, String ticketNo, UUID conversationId, UUID sourceT
     public Ticket reviseDraft(String newTitle, String newProblemDescription,
                               String newAttemptedActions, String operator, Instant now) {
         requireStatus(TicketStatus.DRAFT, "只有草稿工单可以修改");
-        return new Ticket(id, ticketNo, conversationId, sourceTurnId, ownerUserId, newTitle,
+        return new Ticket(id, spaceId, ticketNo, conversationId, sourceTurnId, ownerUserId, newTitle,
                 newProblemDescription, newAttemptedActions, status, null, null, null,
                 version + 1, createdBy, createdAt, operator, now, null, null, null, null);
     }
@@ -90,7 +113,7 @@ public record Ticket(Long id, String ticketNo, UUID conversationId, UUID sourceT
                         String newCloseReason, String operator, Instant now,
                         String newResolvedBy, Instant newResolvedAt,
                         String newClosedBy, Instant newClosedAt) {
-        return new Ticket(id, ticketNo, conversationId, sourceTurnId, ownerUserId, title, problemDescription,
+        return new Ticket(id, spaceId, ticketNo, conversationId, sourceTurnId, ownerUserId, title, problemDescription,
                 attemptedActions, newStatus, newRootCause, newSolution, newCloseReason,
                 version + 1, createdBy, createdAt, operator, now, newResolvedBy,
                 newResolvedAt, newClosedBy, newClosedAt);

@@ -6,6 +6,8 @@ import java.time.Instant;
 public class ManagedDocumentDO {
     /** 文档内部自增主键。 */
     public Long id;
+    /** 所属空间公开 UUID 的 16 字节表示。 */
+    public byte[] spaceId;
     /** 知识文档标题。 */
     public String title;
     /** 文档输入方式枚举名称。 */

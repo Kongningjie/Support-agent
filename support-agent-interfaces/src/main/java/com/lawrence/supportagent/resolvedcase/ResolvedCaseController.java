@@ -1,5 +1,6 @@
 package com.lawrence.supportagent.resolvedcase;
 
+import com.lawrence.supportagent.knowledgespace.KnowledgeSpaceSummary;
 import com.lawrence.supportagent.sharedkernel.api.ApiResponseFactory;
 import com.lawrence.supportagent.sharedkernel.api.ApiResult;
 import com.lawrence.supportagent.sharedkernel.api.PageResult;
@@ -13,6 +14,7 @@ import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.PositiveOrZero;
 import jakarta.validation.constraints.Size;
 import java.time.Instant;
+import java.util.UUID;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -135,6 +137,8 @@ public class ResolvedCaseController {
      * @param version 版本 @param createdAt 创建时间 @param updatedAt 更新时间 */
     public record CaseSummaryResponse(
             @Schema(description = "案例内部 ID 的字符串形式", example = "1") String caseId,
+            @Schema(description = "案例所属知识空间 UUID") UUID spaceId,
+            @Schema(description = "案例所属知识空间的最小摘要") KnowledgeSpaceSummary space,
             @Schema(description = "来源工单的稳定编号", example = "T000000000001") String sourceTicketNo,
             @Schema(description = "案例标题", example = "Spring Boot 连接 MySQL 端口错误") String title,
             @Schema(description = "案例生命周期状态", example = "DRAFT") ResolvedCaseStatus status,
@@ -143,7 +147,8 @@ public class ResolvedCaseController {
             @Schema(description = "案例最近更新 UTC 时间") Instant updatedAt) {
         /** 从应用摘要创建接口响应。 */
         public static CaseSummaryResponse from(ResolvedCaseSummary value) {
-            return new CaseSummaryResponse(Long.toString(value.caseId()), value.sourceTicketNo(),
+            return new CaseSummaryResponse(Long.toString(value.caseId()), value.spaceId(),
+                    value.space(), value.sourceTicketNo(),
                     value.title(), value.status(), value.version(), value.createdAt(), value.updatedAt());
         }
     }
@@ -159,6 +164,8 @@ public class ResolvedCaseController {
      */
     public record CaseResponse(
             @Schema(description = "案例内部 ID 的字符串形式", example = "1") String caseId,
+            @Schema(description = "案例所属知识空间 UUID") UUID spaceId,
+            @Schema(description = "案例所属知识空间的最小摘要") KnowledgeSpaceSummary space,
             @Schema(description = "来源工单稳定编号", example = "T000000000001") String sourceTicketNo,
             @Schema(description = "来源工单标题") String sourceTicketTitle,
             @Schema(description = "人工审核后的案例标题") String title,
@@ -176,7 +183,8 @@ public class ResolvedCaseController {
             @Schema(description = "归档 UTC 时间", nullable = true) Instant archivedAt) {
         /** 从应用详情创建接口响应并把内部 ID 转为字符串。 */
         public static CaseResponse from(ResolvedCaseDetails value) {
-            return new CaseResponse(Long.toString(value.caseId()), value.sourceTicketNo(),
+            return new CaseResponse(Long.toString(value.caseId()), value.spaceId(), value.space(),
+                    value.sourceTicketNo(),
                     value.sourceTicketTitle(), value.title(), value.problem(), value.cause(),
                     value.solution(), value.status(), value.version(), value.publishFailureReason(),
                     value.rejectionReason(), value.archiveReason(), value.createdAt(),

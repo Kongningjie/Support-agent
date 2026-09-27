@@ -2,7 +2,7 @@
 <!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
 <mapper namespace="com.lawrence.supportagent.persistence.mapper.TicketWorkflowMapper">
     <sql id="ticketColumns">
-        id, ticket_no, conversation_id, source_turn_id, owner_user_id, title, problem_description,
+        id, space_id, ticket_no, conversation_id, source_turn_id, owner_user_id, title, problem_description,
         attempted_actions, status, root_cause, solution, close_reason, version,
         created_by, created_at, updated_by, updated_at, resolved_by, resolved_at,
         closed_by, closed_at

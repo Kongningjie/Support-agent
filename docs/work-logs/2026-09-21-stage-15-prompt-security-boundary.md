@@ -5,9 +5,9 @@
 | 字段 | 内容 | 字段含义 |
 |---|---|---|
 | 日期 | 2026-09-21 | 本阶段开始日期 |
-| 阶段 | stage-15-prompt-security-boundary | 四期阶段 15 Prompt 信任边界与注入防护 |
+| 阶段 | stage-15-prompt-security-boundary | 三期安全补强阶段 15 Prompt 信任边界与注入防护 |
 | 执行者 | Codex | 实际实施和记录负责人 |
-| 关联计划 | [阶段 15](../implementation-plan/11-phase-4-llm-security-plan.md#5-阶段-15prompt-信任边界与注入防护) | 本阶段唯一实施依据 |
+| 关联计划 | [阶段 15](../implementation-plan/11-phase-3-llm-security-plan.md#5-阶段-15prompt-信任边界与注入防护) | 本阶段唯一实施依据 |
 | 状态 | 已完成 | 已通过离线、集成、敏感信息扫描和完整 Review 门禁 |
 
 ## 阶段目标与验收标准

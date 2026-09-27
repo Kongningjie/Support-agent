@@ -1,10 +1,12 @@
 package com.lawrence.supportagent.resolvedcase;
 
+import com.lawrence.supportagent.knowledgespace.KnowledgeSpace;
 import com.lawrence.supportagent.sharedkernel.DomainAssertions;
 import java.time.Instant;
+import java.util.UUID;
 
 /** 已解决案例聚合，确保发布内容来自人工确认的工单事实。 */
-public record ResolvedCase(Long id, long sourceTicketId, String title, String problem,
+public record ResolvedCase(Long id, UUID spaceId, long sourceTicketId, String title, String problem,
                            String cause, String solution, ResolvedCaseStatus status,
                            String contentHash, long version, String publishFailureReason,
                            String rejectionReason, String archiveReason, boolean deleted,
@@ -14,8 +16,8 @@ public record ResolvedCase(Long id, long sourceTicketId, String title, String pr
                            Instant archivedAt) {
     /** 校验案例核心事实、状态及审计信息。 */
     public ResolvedCase {
-        if (sourceTicketId <= 0 || status == null || createdAt == null || updatedAt == null) {
-            throw new IllegalArgumentException("案例来源、状态和审计时间不能为空");
+        if (spaceId == null || sourceTicketId <= 0 || status == null || createdAt == null || updatedAt == null) {
+            throw new IllegalArgumentException("案例空间、来源、状态和审计时间不能为空");
         }
         title = DomainAssertions.requiredText(title, "案例标题");
         problem = DomainAssertions.requiredText(problem, "问题现象");
@@ -28,13 +30,37 @@ public record ResolvedCase(Long id, long sourceTicketId, String title, String pr
     }
 
     /** 创建等待人工审核的案例草稿。 */
-    public static ResolvedCase draft(long sourceTicketId, String title, String problem,
+    public static ResolvedCase draft(UUID spaceId, long sourceTicketId, String title, String problem,
                                      String cause, String solution, String contentHash,
                                      String operator, Instant now) {
-        return new ResolvedCase(null, sourceTicketId, title, problem, cause, solution,
+        return new ResolvedCase(null, spaceId, sourceTicketId, title, problem, cause, solution,
                 ResolvedCaseStatus.DRAFT, contentHash, 0, null, null, null,
                 false, null, null, operator, now, operator, now,
                 null, null, null, null);
+    }
+
+    /** 为既有调用保留 GLOBAL 草稿入口；生产用例应显式传入或继承来源空间。 */
+    public static ResolvedCase draft(long sourceTicketId, String title, String problem,
+                                     String cause, String solution, String contentHash,
+                                     String operator, Instant now) {
+        return draft(KnowledgeSpace.GLOBAL_SPACE_ID, sourceTicketId, title, problem,
+                cause, solution, contentHash, operator, now);
+    }
+
+    /** 为既有测试与内部构造保留 GLOBAL 兼容构造器。 */
+    public ResolvedCase(Long id, long sourceTicketId, String title, String problem,
+                        String cause, String solution, ResolvedCaseStatus status,
+                        String contentHash, long version, String publishFailureReason,
+                        String rejectionReason, String archiveReason, boolean deleted,
+                        String deletedBy, Instant deletedAt, String createdBy,
+                        Instant createdAt, String updatedBy, Instant updatedAt,
+                        String publishedBy, Instant publishedAt, String archivedBy,
+                        Instant archivedAt) {
+        this(id, KnowledgeSpace.GLOBAL_SPACE_ID, sourceTicketId, title, problem, cause,
+                solution, status, contentHash, version, publishFailureReason,
+                rejectionReason, archiveReason, deleted, deletedBy, deletedAt, createdBy,
+                createdAt, updatedBy, updatedAt, publishedBy, publishedAt, archivedBy,
+                archivedAt);
     }
 
     /** 由人工审核人修改草稿或发布失败案例的完整内容。 */
@@ -43,7 +69,7 @@ public record ResolvedCase(Long id, long sourceTicketId, String title, String pr
                                String operator, Instant now) {
         DomainAssertions.state(status == ResolvedCaseStatus.DRAFT
                 || status == ResolvedCaseStatus.PUBLISH_FAILED, "当前案例不能修改");
-        return new ResolvedCase(id, sourceTicketId, newTitle, newProblem, newCause,
+        return new ResolvedCase(id, spaceId, sourceTicketId, newTitle, newProblem, newCause,
                 newSolution, ResolvedCaseStatus.DRAFT, newContentHash, version + 1,
                 null, null, null, deleted, deletedBy, deletedAt, createdBy, createdAt,
                 operator, now, null, null, null, null);
@@ -91,7 +117,7 @@ public record ResolvedCase(Long id, long sourceTicketId, String title, String pr
                               String failure, String rejection, String archive,
                               String newPublishedBy, Instant newPublishedAt,
                               String newArchivedBy, Instant newArchivedAt) {
-        return new ResolvedCase(id, sourceTicketId, title, problem, cause, solution, newStatus,
+        return new ResolvedCase(id, spaceId, sourceTicketId, title, problem, cause, solution, newStatus,
                 contentHash, version + 1, failure, rejection, archive, deleted, deletedBy,
                 deletedAt, createdBy, createdAt, operator, now, newPublishedBy,
                 newPublishedAt, newArchivedBy, newArchivedAt);

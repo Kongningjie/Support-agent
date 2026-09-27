@@ -83,7 +83,7 @@ public class ResolvedCaseGenerationTaskHandler implements AsyncTaskHandler {
             ResolvedCaseDraft generated = safeDraft(facts(ticket));
             String title = required(generated == null ? null : generated.title(), "案例标题", 160);
             String problem = required(generated == null ? null : generated.problem(), "问题描述", 4000);
-            ResolvedCase draft = ResolvedCase.draft(ticket.id(), title, problem,
+            ResolvedCase draft = ResolvedCase.draft(ticket.spaceId(), ticket.id(), title, problem,
                     ticket.rootCause(), ticket.solution(),
                     RequestFingerprint.sha256(title, problem, ticket.rootCause(), ticket.solution()),
                     SYSTEM_OPERATOR, time.now());

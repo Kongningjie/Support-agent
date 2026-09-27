@@ -9,6 +9,7 @@ import com.lawrence.supportagent.idempotency.IdempotencyCommand;
 import com.lawrence.supportagent.idempotency.IdempotentExecutor;
 import com.lawrence.supportagent.idempotency.IdempotentResource;
 import com.lawrence.supportagent.idempotency.RequestFingerprint;
+import com.lawrence.supportagent.knowledgespace.KnowledgeSpace;
 import com.lawrence.supportagent.knowledge.port.ManagedDocumentRepository;
 import com.lawrence.supportagent.sharedkernel.error.ApplicationException;
 import com.lawrence.supportagent.sharedkernel.error.ErrorCode;
@@ -157,7 +158,8 @@ public class ManagedDocumentCommandUseCase {
             String mediaType, DocumentContent content) {
         requireUniqueContent(content.sha256(), null);
         Instant now = timeProvider.now();
-        ManagedDocument saved = repository.save(ManagedDocument.draft(title, inputType,
+        ManagedDocument saved = repository.save(ManagedDocument.draft(KnowledgeSpace.GLOBAL_SPACE_ID,
+                title, inputType,
                 fileName, mediaType, content.normalizedText(), content.sha256(), operator(), now));
         return new IdempotentResource<>("MANAGED_DOCUMENT", saved.id(),
                 ManagedDocumentDetails.from(saved));

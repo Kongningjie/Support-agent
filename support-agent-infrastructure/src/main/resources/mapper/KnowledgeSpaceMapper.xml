@@ -1,0 +1,111 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.lawrence.supportagent.persistence.mapper.KnowledgeSpaceMapper">
+    <sql id="spaceColumns">
+        id,space_id,code,name,description,visibility,status,system_space,version,
+        created_by,created_at,updated_by,updated_at
+    </sql>
+    <sql id="membershipColumns">
+        id,user_id,space_id,role,status,version,created_by,created_at,
+        updated_by,updated_at,revoked_by,revoked_at
+    </sql>
+
+    <select id="findBySpaceId" resultType="com.lawrence.supportagent.persistence.record.KnowledgeSpaceDO">
+        SELECT <include refid="spaceColumns"/> FROM knowledge_space WHERE space_id=#{spaceId}
+    </select>
+    <select id="findById" resultType="com.lawrence.supportagent.persistence.record.KnowledgeSpaceDO">
+        SELECT <include refid="spaceColumns"/> FROM knowledge_space WHERE id=#{id}
+    </select>
+    <select id="findByCode" resultType="com.lawrence.supportagent.persistence.record.KnowledgeSpaceDO">
+        SELECT <include refid="spaceColumns"/> FROM knowledge_space WHERE code=#{code}
+    </select>
+    <select id="findBySpaceIdForUpdate" resultType="com.lawrence.supportagent.persistence.record.KnowledgeSpaceDO">
+        SELECT <include refid="spaceColumns"/> FROM knowledge_space WHERE space_id=#{spaceId} FOR UPDATE
+    </select>
+    <insert id="insertSpace" useGeneratedKeys="true" keyProperty="id">
+        INSERT INTO knowledge_space
+        (space_id,code,name,description,visibility,status,system_space,version,
+         created_by,created_at,updated_by,updated_at)
+        VALUES (#{spaceId},#{code},#{name},#{description},#{visibility},#{status},#{systemSpace},#{version},
+                #{createdBy},#{createdAt},#{updatedBy},#{updatedAt})
+    </insert>
+    <update id="updateSpace">
+        UPDATE knowledge_space
+        SET name=#{space.name},description=#{space.description},visibility=#{space.visibility},
+            status=#{space.status},version=#{space.version},updated_by=#{space.updatedBy},updated_at=#{space.updatedAt}
+        WHERE id=#{space.id} AND version=#{expectedVersion} AND system_space=FALSE
+    </update>
+    <select id="findReadable" resultType="com.lawrence.supportagent.persistence.record.KnowledgeSpaceDO">
+        SELECT DISTINCT ks.id,ks.space_id,ks.code,ks.name,ks.description,ks.visibility,ks.status,
+            ks.system_space,ks.version,ks.created_by,ks.created_at,ks.updated_by,ks.updated_at
+        FROM knowledge_space ks
+        JOIN app_user account ON account.user_id=#{userId} AND account.status='ACTIVE'
+        LEFT JOIN user_space_membership membership
+          ON membership.space_id=ks.space_id AND membership.user_id=#{userId} AND membership.status='ACTIVE'
+        WHERE ks.status='ACTIVE' AND (ks.visibility='ENTERPRISE' OR membership.id IS NOT NULL)
+        ORDER BY ks.system_space DESC,ks.name ASC,ks.space_id ASC
+        LIMIT #{size} OFFSET #{offset}
+    </select>
+    <select id="countReadable" resultType="long">
+        SELECT COUNT(DISTINCT ks.id)
+        FROM knowledge_space ks
+        JOIN app_user account ON account.user_id=#{userId} AND account.status='ACTIVE'
+        LEFT JOIN user_space_membership membership
+          ON membership.space_id=ks.space_id AND membership.user_id=#{userId} AND membership.status='ACTIVE'
+        WHERE ks.status='ACTIVE' AND (ks.visibility='ENTERPRISE' OR membership.id IS NOT NULL)
+    </select>
+    <select id="findAdminPage" resultType="com.lawrence.supportagent.persistence.record.KnowledgeSpaceDO">
+        SELECT <include refid="spaceColumns"/> FROM knowledge_space
+        <where>
+            <if test="status != null">status=#{status}</if>
+            <if test="visibility != null">AND visibility=#{visibility}</if>
+            <if test="keyword != null">
+                AND (code LIKE CONCAT('%',#{keyword},'%') OR name LIKE CONCAT('%',#{keyword},'%'))
+            </if>
+        </where>
+        ORDER BY system_space DESC,name ASC,space_id ASC LIMIT #{size} OFFSET #{offset}
+    </select>
+    <select id="countAdminPage" resultType="long">
+        SELECT COUNT(*) FROM knowledge_space
+        <where>
+            <if test="status != null">status=#{status}</if>
+            <if test="visibility != null">AND visibility=#{visibility}</if>
+            <if test="keyword != null">
+                AND (code LIKE CONCAT('%',#{keyword},'%') OR name LIKE CONCAT('%',#{keyword},'%'))
+            </if>
+        </where>
+    </select>
+
+    <select id="findMembership" resultType="com.lawrence.supportagent.persistence.record.SpaceMembershipDO">
+        SELECT <include refid="membershipColumns"/> FROM user_space_membership
+        WHERE user_id=#{userId} AND space_id=#{spaceId}
+    </select>
+    <select id="findMembershipById" resultType="com.lawrence.supportagent.persistence.record.SpaceMembershipDO">
+        SELECT <include refid="membershipColumns"/> FROM user_space_membership WHERE id=#{id}
+    </select>
+    <insert id="insertMembership" useGeneratedKeys="true" keyProperty="id">
+        INSERT INTO user_space_membership
+        (user_id,space_id,role,status,version,created_by,created_at,updated_by,updated_at,revoked_by,revoked_at)
+        VALUES (#{userId},#{spaceId},#{role},#{status},#{version},#{createdBy},#{createdAt},
+                #{updatedBy},#{updatedAt},#{revokedBy},#{revokedAt})
+    </insert>
+    <update id="updateMembership">
+        UPDATE user_space_membership
+        SET role=#{membership.role},status=#{membership.status},version=#{membership.version},
+            updated_by=#{membership.updatedBy},updated_at=#{membership.updatedAt},
+            revoked_by=#{membership.revokedBy},revoked_at=#{membership.revokedAt}
+        WHERE id=#{membership.id} AND version=#{expectedVersion}
+    </update>
+    <select id="findMembershipPage" resultType="com.lawrence.supportagent.persistence.record.SpaceMembershipDO">
+        SELECT <include refid="membershipColumns"/> FROM user_space_membership
+        WHERE space_id=#{spaceId}
+        ORDER BY status ASC,role DESC,created_at ASC,id ASC LIMIT #{size} OFFSET #{offset}
+    </select>
+    <select id="countMembershipPage" resultType="long">
+        SELECT COUNT(*) FROM user_space_membership WHERE space_id=#{spaceId}
+    </select>
+    <select id="countActiveManagers" resultType="long">
+        SELECT COUNT(*) FROM user_space_membership
+        WHERE space_id=#{spaceId} AND status='ACTIVE' AND role='MANAGER'
+    </select>
+</mapper>

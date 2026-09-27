@@ -5,9 +5,9 @@
 | 字段 | 内容 | 字段含义 |
 |---|---|---|
 | 日期 | 2026-09-21 | 本阶段开始日期 |
-| 阶段 | stage-16-output-security-gateway | 四期阶段 16 统一模型输出安全网关 |
+| 阶段 | stage-16-output-security-gateway | 三期安全补强阶段 16 统一模型输出安全网关 |
 | 执行者 | Codex | 实际实施和记录负责人 |
-| 关联计划 | [阶段 16](../implementation-plan/11-phase-4-llm-security-plan.md#6-阶段-16统一模型输出安全网关) | 本阶段唯一实施依据 |
+| 关联计划 | [阶段 16](../implementation-plan/11-phase-3-llm-security-plan.md#6-阶段-16统一模型输出安全网关) | 本阶段唯一实施依据 |
 | 状态 | 已完成 | 实现、测试、敏感信息扫描和完整 Review 均已通过 |
 
 ## 阶段目标与验收标准

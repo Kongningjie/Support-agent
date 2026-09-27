@@ -2,7 +2,7 @@
 <!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
 <mapper namespace="com.lawrence.supportagent.persistence.mapper.ManagedDocumentWorkflowMapper">
     <sql id="documentColumns">
-        id, title, input_type, original_file_name, media_type, raw_content, content_hash,
+        id, space_id, title, input_type, original_file_name, media_type, raw_content, content_hash,
         status, version, index_failure_reason, archive_reason, deleted, deleted_by,
         deleted_at, created_by, created_at, updated_by, updated_at, published_by,
         published_at, archived_by, archived_at
@@ -35,7 +35,8 @@
     <select id="countActiveHash" resultType="long">
         SELECT COUNT(*)
         FROM managed_document
-        WHERE active_content_hash = #{contentHash}
+        WHERE space_id=UNHEX(REPLACE('00000000-0000-0000-0000-000000000001','-',''))
+          AND active_content_hash = #{contentHash}
         <if test="excludedId != null">AND id &lt;&gt; #{excludedId}</if>
     </select>
 </mapper>

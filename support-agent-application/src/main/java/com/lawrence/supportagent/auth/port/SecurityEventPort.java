@@ -9,4 +9,11 @@ public interface SecurityEventPort {
     /** 写入一条稳定分类的账号安全事件。 */
     void record(SecurityEventType type, UUID targetUserId, String actorId, String result,
                 String reason, String sourceHash, Instant occurredAt);
+
+    /** 记录带目标资源标识的安全事件；旧适配器可安全退化为基础事件。 */
+    default void recordResource(SecurityEventType type, UUID targetUserId,
+                                String resourceType, String resourceId, String actorId,
+                                String result, String reason, Instant occurredAt) {
+        record(type, targetUserId, actorId, result, reason, null, occurredAt);
+    }
 }

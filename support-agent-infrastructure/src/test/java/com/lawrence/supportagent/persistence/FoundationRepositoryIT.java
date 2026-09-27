@@ -22,6 +22,13 @@ import com.lawrence.supportagent.idempotency.RequestFingerprint;
 import com.lawrence.supportagent.knowledge.DocumentInputType;
 import com.lawrence.supportagent.knowledge.ManagedDocument;
 import com.lawrence.supportagent.knowledge.port.ManagedDocumentRepository;
+import com.lawrence.supportagent.knowledgespace.KnowledgeSpace;
+import com.lawrence.supportagent.knowledgespace.KnowledgeSpaceStatus;
+import com.lawrence.supportagent.knowledgespace.KnowledgeSpaceVisibility;
+import com.lawrence.supportagent.knowledgespace.SpaceMembership;
+import com.lawrence.supportagent.knowledgespace.SpaceRole;
+import com.lawrence.supportagent.knowledgespace.port.KnowledgeSpaceRepository;
+import com.lawrence.supportagent.knowledgespace.port.SpaceMembershipRepository;
 import com.lawrence.supportagent.memory.MemoryStatus;
 import com.lawrence.supportagent.memory.MemoryType;
 import com.lawrence.supportagent.memory.CandidateInsertOutcome;
@@ -33,6 +40,7 @@ import com.lawrence.supportagent.persistence.mapper.AsyncTaskWorkflowMapper;
 import com.lawrence.supportagent.persistence.mapper.UserAccountMapper;
 import com.lawrence.supportagent.persistence.mapper.SecurityEventMapper;
 import com.lawrence.supportagent.persistence.record.AsyncTaskMetricsDO;
+import com.lawrence.supportagent.persistence.record.UserAccountDO;
 import com.lawrence.supportagent.persistence.repository.TicketMyBatisRepository;
 import com.lawrence.supportagent.resolvedcase.ResolvedCase;
 import com.lawrence.supportagent.resolvedcase.ResolvedCaseStatus;
@@ -117,6 +125,10 @@ class FoundationRepositoryIT {
     private DataSource dataSource;
     @Autowired
     private UserMemoryRepository userMemoryRepository;
+    @Autowired
+    private KnowledgeSpaceRepository knowledgeSpaceRepository;
+    @Autowired
+    private SpaceMembershipRepository spaceMembershipRepository;
 
     /** 把 Testcontainers 连接信息注入 Spring 数据源。 */
     @DynamicPropertySource
@@ -124,6 +136,51 @@ class FoundationRepositoryIT {
         registry.add("spring.datasource.url", MYSQL::getJdbcUrl);
         registry.add("spring.datasource.username", MYSQL::getUsername);
         registry.add("spring.datasource.password", MYSQL::getPassword);
+    }
+
+    /** 验证 V9 固定 GLOBAL、空间乐观锁和成员关系往返。 */
+    @Test
+    void shouldRoundTripKnowledgeSpaceAndMembership() {
+        KnowledgeSpace global = knowledgeSpaceRepository.findBySpaceId(
+                KnowledgeSpace.GLOBAL_SPACE_ID).orElseThrow();
+        assertEquals(KnowledgeSpace.GLOBAL_CODE, global.code());
+        assertEquals(KnowledgeSpaceVisibility.ENTERPRISE, global.visibility());
+        assertEquals(KnowledgeSpaceStatus.ACTIVE, global.status());
+        assertTrue(global.systemSpace());
+
+        UUID spaceId = UUID.randomUUID();
+        KnowledgeSpace inserted = knowledgeSpaceRepository.save(KnowledgeSpace.create(spaceId,
+                "TEAM_IT_" + UUID.randomUUID().toString().substring(0, 8).toUpperCase(),
+                "IT 支持空间", "集成测试空间", ACTOR.userId().toString(), NOW));
+        KnowledgeSpace updated = knowledgeSpaceRepository.save(inserted.revise(
+                "IT 支持知识", null, KnowledgeSpaceVisibility.ENTERPRISE,
+                ACTOR.userId().toString(), NOW.plusSeconds(1)));
+        assertEquals(1, updated.version());
+        assertEquals(updated, knowledgeSpaceRepository.findBySpaceId(spaceId).orElseThrow());
+
+        UUID memberId = UUID.randomUUID();
+        UserAccountDO account = new UserAccountDO();
+        account.userId = uuidBytes(memberId);
+        account.username = "member_" + memberId.toString().substring(0, 8);
+        account.displayName = "空间成员";
+        account.passwordHash = "$2a$12$abcdefghijklmnopqrstuuVvpjcR7wFAEhfmPLVwlydEvmrCwe";
+        account.role = UserRole.USER.name();
+        account.status = UserStatus.ACTIVE.name();
+        account.version = 0;
+        account.passwordChangedAt = NOW;
+        account.createdBy = "integration";
+        account.createdAt = NOW;
+        account.updatedBy = "integration";
+        account.updatedAt = NOW;
+        userAccountMapper.insert(account);
+
+        SpaceMembership membership = spaceMembershipRepository.save(SpaceMembership.create(
+                memberId, spaceId, SpaceRole.MANAGER, ACTOR.userId().toString(), NOW));
+        assertEquals(SpaceRole.MANAGER, spaceMembershipRepository.find(memberId, spaceId)
+                .orElseThrow().role());
+        assertEquals(1, spaceMembershipRepository.countActiveManagers(spaceId));
+        assertEquals(1, spaceMembershipRepository.save(membership.revoke(
+                ACTOR.userId().toString(), NOW.plusSeconds(1))).version());
     }
 
     /** 验证工单插入、UUID 映射、状态更新和乐观锁版本往返。 */
@@ -594,6 +651,12 @@ class FoundationRepositoryIT {
             throws InterruptedException {
         start.await();
         return taskRepository.claimDue(workerId, now, now.plusSeconds(300), 100);
+    }
+
+    /** 把测试 UUID 转为 MySQL BINARY(16)。 */
+    private byte[] uuidBytes(UUID value) {
+        return java.nio.ByteBuffer.allocate(16).putLong(value.getMostSignificantBits())
+                .putLong(value.getLeastSignificantBits()).array();
     }
 
     /** 只装配数据源、Flyway、MyBatis Mapper 和 Repository 的测试应用。 */

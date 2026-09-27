@@ -4,9 +4,9 @@
 
 | 字段 | 内容 | 含义 |
 |---|---|---|
-| 阶段 | stage-17-security-evaluation-observability | 四期最终阶段 |
+| 阶段 | stage-17-security-evaluation-observability | 三期安全补强最终阶段 |
 | 日期 | 2026-09-21 | 实际完成日期 |
-| 关联计划 | [阶段 17](../implementation-plan/11-phase-4-llm-security-plan.md#7-阶段-17安全评测可观测性与运行闭环) | 本阶段唯一实施依据 |
+| 关联计划 | [阶段 17](../implementation-plan/11-phase-3-llm-security-plan.md#7-阶段-17安全评测可观测性与运行闭环) | 本阶段唯一实施依据 |
 | 状态 | 已完成 | 离线与集成门禁通过，未提交、未推送 |
 
 ## 2. 范围与结果

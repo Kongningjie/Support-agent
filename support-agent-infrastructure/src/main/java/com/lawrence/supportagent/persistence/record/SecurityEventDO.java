@@ -6,6 +6,8 @@ import java.time.Instant;
 public class SecurityEventDO {
     /** 稳定事件类型。 */ public String eventType;
     /** 可空目标用户 UUID 字节。 */ public byte[] targetUserId;
+    /** 可空稳定目标资源类型。 */ public String resourceType;
+    /** 可空目标资源公开标识。 */ public String resourceId;
     /** 操作者公开标识或稳定系统身份。 */ public String actorId;
     /** SUCCEEDED 或 DENIED。 */ public String result;
     /** 低基数原因分类。 */ public String reason;

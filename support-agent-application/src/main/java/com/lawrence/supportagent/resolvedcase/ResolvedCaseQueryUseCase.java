@@ -1,6 +1,7 @@
 package com.lawrence.supportagent.resolvedcase;
 
 import com.lawrence.supportagent.resolvedcase.port.ResolvedCaseRepository;
+import com.lawrence.supportagent.knowledgespace.KnowledgeSpaceSummary;
 import com.lawrence.supportagent.sharedkernel.error.ApplicationException;
 import com.lawrence.supportagent.sharedkernel.error.ErrorCode;
 import com.lawrence.supportagent.ticket.Ticket;
@@ -36,6 +37,8 @@ public class ResolvedCaseQueryUseCase {
         List<ResolvedCaseSummary> items = cases.findPage(status, normalizedTicketNo,
                         normalizedKeyword, offset, size).stream()
                 .map(value -> new ResolvedCaseSummary(value.id(),
+                        value.spaceId(),
+                        KnowledgeSpaceSummary.global(value.spaceId()),
                         requireTicket(value.sourceTicketId()).ticketNo(), value.title(),
                         value.status(), value.version(), value.createdAt(), value.updatedAt()))
                 .toList();

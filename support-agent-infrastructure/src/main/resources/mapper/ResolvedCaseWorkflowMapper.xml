@@ -2,7 +2,7 @@
 <!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
 <mapper namespace="com.lawrence.supportagent.persistence.mapper.ResolvedCaseWorkflowMapper">
     <sql id="caseColumns">
-        c.id,c.source_ticket_id,c.title,c.problem,c.cause,c.solution,c.status,c.content_hash,c.version,
+        c.id,c.space_id,c.source_ticket_id,c.title,c.problem,c.cause,c.solution,c.status,c.content_hash,c.version,
         c.publish_failure_reason,c.rejection_reason,c.archive_reason,c.deleted,c.deleted_by,c.deleted_at,
         c.created_by,c.created_at,c.updated_by,c.updated_at,c.published_by,c.published_at,c.archived_by,c.archived_at
     </sql>
