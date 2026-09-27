@@ -28,10 +28,11 @@ export async function getConversation(conversationId: string): Promise<Conversat
 export async function resetConversation(
   conversationId: string,
   expectedVersion: number,
+  spaceId: string,
 ): Promise<ConversationOverview> {
   const response = await httpClient.post<ApiResult<ConversationOverview>>(
     `/conversations/${conversationId}/reset`,
-    { expectedVersion },
+    { spaceId, expectedVersion },
   )
   return requireData(response.data.data)
 }

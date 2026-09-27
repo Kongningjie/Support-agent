@@ -33,6 +33,25 @@ describe('ticket api', () => {
     })
   })
 
+  it('手工创建草稿时显式发送用户选择的知识空间', async () => {
+    const ticket = sampleTicket()
+    const post = vi.spyOn(httpClient, 'post').mockResolvedValue({ data: success(ticket) })
+    await ticketApi.createDraft({
+      spaceId: ticket.spaceId,
+      title: ticket.title,
+      problemDescription: ticket.problemDescription,
+      attemptedActions: ticket.attemptedActions,
+      idempotencyKey: 'ticket-create-key',
+    })
+    expect(post).toHaveBeenCalledWith('/tickets/drafts', {
+      spaceId: ticket.spaceId,
+      title: ticket.title,
+      problemDescription: ticket.problemDescription,
+      attemptedActions: ticket.attemptedActions,
+      idempotencyKey: 'ticket-create-key',
+    })
+  })
+
   it('解决与关闭动作都携带当前版本和调用方提供的幂等键', async () => {
     const ticket = sampleTicket()
     const post = vi.spyOn(httpClient, 'post').mockResolvedValue({ data: success(ticket) })
@@ -65,6 +84,12 @@ describe('ticket api', () => {
 function sampleTicket(): TicketDetails {
   return {
     ticketNo: 'T000000000001',
+    spaceId: '00000000-0000-0000-0000-000000000001',
+    space: {
+      spaceId: '00000000-0000-0000-0000-000000000001',
+      code: 'GLOBAL',
+      name: '企业公共空间',
+    },
     title: 'MySQL 连接失败',
     problemDescription: '应用无法连接数据库',
     attemptedActions: '已检查容器状态',

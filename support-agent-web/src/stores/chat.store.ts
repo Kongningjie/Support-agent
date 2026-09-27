@@ -47,11 +47,12 @@ export const useChatStore = defineStore('chat', () => {
    * 发送新消息；创建 clientMessageId 后交给内部方法，失败重试可复用该 ID。
    *
    * @param rawMessage 用户输入，去除首尾空白后必须为 1～4000 字符
+   * @param spaceId 新会话选择或既有会话绑定的知识空间 UUID
    */
-  async function send(rawMessage: string): Promise<void> {
+  async function send(rawMessage: string, spaceId: string): Promise<void> {
     const message = rawMessage.trim()
-    if (!message || message.length > 4000 || !canSend.value) return
-    const item = createRunningMessage(message, crypto.randomUUID())
+    if (!message || message.length > 4000 || !spaceId || !canSend.value) return
+    const item = createRunningMessage(message, crypto.randomUUID(), spaceId)
     messages.value.push(item)
     await execute(item)
   }
@@ -79,14 +80,19 @@ export const useChatStore = defineStore('chat', () => {
     controller.value?.abort()
   }
 
-  /** 使用最新版本重置会话；冲突时刷新服务端详情。 */
-  async function reset(): Promise<void> {
+  /**
+   * 使用最新版本和显式目标空间重置会话；冲突时刷新服务端详情。
+   *
+   * @param spaceId 重置后新会话代际绑定的可读知识空间 UUID
+   */
+  async function reset(spaceId: string): Promise<void> {
     if (!conversation.value || streaming.value) return
     loading.value = true
     try {
       conversation.value = await conversationApi.resetConversation(
         conversation.value.conversationId,
         conversation.value.version,
+        spaceId,
       )
       messages.value = []
       progress.value = null
@@ -124,6 +130,7 @@ export const useChatStore = defineStore('chat', () => {
     try {
       await streamChat(
         {
+          spaceId: conversation.value?.spaceId || item.spaceId,
           conversationId: conversation.value?.conversationId || null,
           clientMessageId: item.clientMessageId as string,
           message: item.userMessage,
@@ -166,6 +173,7 @@ export const useChatStore = defineStore('chat', () => {
       const version = numberValue(event.data.conversationVersion)
       conversation.value = {
         conversationId: event.conversationId,
+        spaceId: conversation.value?.spaceId || item.spaceId,
         status: 'RUNNING',
         version,
         generation: conversation.value?.generation ?? 0,
@@ -221,6 +229,7 @@ export const useChatStore = defineStore('chat', () => {
     messages.value = details.recentTurns.map((turn) => ({
       key: turn.turnId,
       clientMessageId: null,
+      spaceId: details.conversation.spaceId,
       userMessage: turn.userMessage,
       answer: turn.answer,
       citations: turn.citations,
@@ -262,10 +271,15 @@ export const useChatStore = defineStore('chat', () => {
 })
 
 /** 创建一条尚未完成的可重试聊天消息。 */
-function createRunningMessage(userMessage: string, clientMessageId: string): ChatMessage {
+function createRunningMessage(
+  userMessage: string,
+  clientMessageId: string,
+  spaceId: string,
+): ChatMessage {
   return {
     key: clientMessageId,
     clientMessageId,
+    spaceId,
     userMessage,
     answer: '',
     citations: [],
@@ -306,6 +320,7 @@ function retrievalStatusValue(value: unknown): RetrievalStatus | null {
 function citationValue(data: Record<string, unknown>): ChatCitation {
   return {
     citationId: stringValue(data.citationId),
+    spaceId: stringValue(data.spaceId),
     documentId: stringValue(data.documentId),
     documentTitle: stringValue(data.documentTitle),
     headingPath: stringValue(data.headingPath),

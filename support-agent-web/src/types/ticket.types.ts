@@ -1,9 +1,13 @@
+import type { KnowledgeSpaceSummary } from './knowledge-space.types'
+
 /** 后端冻结的工单生命周期状态。 */
 export type TicketStatus = 'DRAFT' | 'OPEN' | 'RESOLVED' | 'CLOSED'
 
 /** 工单分页列表中的只读摘要。 */
 export interface TicketSummary {
   ticketNo: string
+  spaceId: string
+  space: KnowledgeSpaceSummary
   title: string
   status: TicketStatus
   version: number
@@ -24,6 +28,7 @@ export interface TicketDetails extends TicketSummary {
 
 /** 手工创建草稿需要的人工事实字段。 */
 export interface CreateTicketDraftRequest {
+  spaceId: string
   title: string
   problemDescription: string
   attemptedActions: string | null

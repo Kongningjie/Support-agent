@@ -2,6 +2,7 @@
 import { onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import * as conversationApi from '@/api/conversation.api'
+import { listAllReadableKnowledgeSpaces } from '@/api/knowledge-space.api'
 import ErrorState from '@/components/feedback/ErrorState.vue'
 import LoadingState from '@/components/feedback/LoadingState.vue'
 import EmptyState from '@/components/feedback/EmptyState.vue'
@@ -14,6 +15,7 @@ const page = ref(1)
 const totalPages = ref(0)
 const loading = ref(false)
 const error = ref<ApiError | null>(null)
+const spaceNames = ref(new Map<string, string>())
 
 onMounted(load)
 
@@ -22,8 +24,14 @@ async function load(): Promise<void> {
   loading.value = true
   error.value = null
   try {
-    const result = await conversationApi.listConversations(page.value, 20)
+    const [result, spaces] = await Promise.all([
+      conversationApi.listConversations(page.value, 20),
+      listAllReadableKnowledgeSpaces(),
+    ])
     items.value = result.items
+    spaceNames.value = new Map(
+      spaces.map((space) => [space.spaceId, `${space.name}（${space.code}）`]),
+    )
     totalPages.value = result.totalPages
   } catch (caught) {
     error.value =
@@ -44,6 +52,11 @@ async function changePage(next: number): Promise<void> {
 /** 使用浏览器本地时区显示 UTC 时间。 */
 function localTime(value: string): string {
   return new Date(value).toLocaleString('zh-CN')
+}
+
+/** 返回当前可读空间名称；权限变化导致名称不可见时仅显示截短标识。 */
+function spaceLabel(spaceId: string): string {
+  return spaceNames.value.get(spaceId) || `空间 ${spaceId.slice(0, 8)}`
 }
 </script>
 
@@ -79,6 +92,7 @@ function localTime(value: string): string {
       >
         <span class="record-card__title">会话 {{ item.conversationId.slice(0, 8) }}</span>
         <span>{{ item.status === 'RUNNING' ? '处理中' : '可继续' }} · 版本 {{ item.version }}</span>
+        <span>{{ spaceLabel(item.spaceId) }}</span>
         <span>最近访问：{{ localTime(item.lastAccessAt) }}</span>
         <small>预计过期：{{ localTime(item.expiresAt) }}</small>
       </button>

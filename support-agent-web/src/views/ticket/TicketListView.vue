@@ -6,6 +6,7 @@ import * as ticketApi from '@/api/ticket.api'
 import EmptyState from '@/components/feedback/EmptyState.vue'
 import ErrorState from '@/components/feedback/ErrorState.vue'
 import LoadingState from '@/components/feedback/LoadingState.vue'
+import KnowledgeSpaceSelect from '@/components/knowledge-space/KnowledgeSpaceSelect.vue'
 import { ticketStatusLabel } from '@/ticket/ticket.rules'
 import { ApiError } from '@/types/api.types'
 import type { TicketStatus, TicketSummary } from '@/types/ticket.types'
@@ -24,6 +25,7 @@ const saving = ref(false)
 const error = ref<ApiError | null>(null)
 const createVisible = ref(false)
 const createKey = ref<string | null>(null)
+const createSpaceId = ref<string | null>(null)
 const draft = reactive({ title: '', problemDescription: '', attemptedActions: '' })
 
 onMounted(load)
@@ -81,12 +83,17 @@ function openCreate(): void {
   draft.title = ''
   draft.problemDescription = ''
   draft.attemptedActions = ''
+  createSpaceId.value = null
   createKey.value = crypto.randomUUID()
   createVisible.value = true
 }
 
 /** 校验人工事实字段并创建工单草稿，网络结果不确定时复用原幂等键。 */
 async function createDraft(): Promise<void> {
+  if (!createSpaceId.value) {
+    ElMessage.warning('请选择工单所属的知识空间')
+    return
+  }
   const title = draft.title.trim()
   const problemDescription = draft.problemDescription.trim()
   const attemptedActions = draft.attemptedActions.trim()
@@ -107,6 +114,7 @@ async function createDraft(): Promise<void> {
   saving.value = true
   try {
     const created = await ticketApi.createDraft({
+      spaceId: createSpaceId.value,
       title,
       problemDescription,
       attemptedActions: attemptedActions || null,
@@ -190,6 +198,7 @@ function asApiError(value: unknown, fallback: string): ApiError {
         <span>
           <strong>{{ item.title }}</strong>
           <small>{{ item.ticketNo }}</small>
+          <small>{{ item.space.name }}（{{ item.space.code }}）</small>
         </span>
         <span class="status-chip">{{ ticketStatusLabel(item.status) }}</span>
         <span>版本 {{ item.version }}</span>
@@ -217,6 +226,11 @@ function asApiError(value: unknown, fallback: string): ApiError {
 
     <el-dialog v-model="createVisible" title="手工创建工单草稿" width="680px">
       <form id="ticket-create-form" class="ticket-form" @submit.prevent="createDraft">
+        <KnowledgeSpaceSelect
+          v-model="createSpaceId"
+          input-id="ticket-create-space"
+          label="问题所属知识空间（必选）"
+        />
         <label for="ticket-create-title">工单标题（必填，1～160 字符）</label>
         <el-input id="ticket-create-title" v-model="draft.title" maxlength="160" show-word-limit />
         <label for="ticket-create-problem">问题描述（必填，1～8000 字符）</label>

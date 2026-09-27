@@ -350,6 +350,10 @@ function asApiError(value: unknown, fallback: string): ApiError {
         </section>
         <dl class="ticket-meta">
           <div>
+            <dt>所属知识空间</dt>
+            <dd>{{ ticket.space.name }}（{{ ticket.space.code }}）</dd>
+          </div>
+          <div>
             <dt>创建时间</dt>
             <dd>{{ localTime(ticket.createdAt) }}</dd>
           </div>

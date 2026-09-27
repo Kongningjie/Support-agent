@@ -10,6 +10,7 @@ export type ConversationStatus = 'IDLE' | 'RUNNING'
 /** 回答引用的公开来源。 */
 export interface ChatCitation {
   citationId: string
+  spaceId: string
   documentId: string
   documentTitle: string
   headingPath: string
@@ -20,6 +21,7 @@ export interface ChatCitation {
 /** 会话列表与写操作返回的公开元数据。 */
 export interface ConversationOverview {
   conversationId: string
+  spaceId: string
   status: ConversationStatus
   version: number
   generation: number
@@ -48,6 +50,7 @@ export interface ConversationDetails {
 
 /** 发起首次或后续聊天的请求。 */
 export interface ChatStreamRequest {
+  spaceId: string
   conversationId: string | null
   clientMessageId: string
   message: string
@@ -69,6 +72,7 @@ export interface ChatEvent {
 export interface ChatMessage {
   key: string
   clientMessageId: string | null
+  spaceId: string
   userMessage: string
   answer: string
   citations: ChatCitation[]

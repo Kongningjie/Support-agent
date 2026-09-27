@@ -31,7 +31,7 @@ describe('chat store', () => {
     ]
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(sseResponse(events)))
     const store = useChatStore()
-    await store.send('你好')
+    await store.send('你好', '00000000-0000-0000-0000-000000000001')
     expect(store.conversation?.version).toBe(1)
     expect(store.conversation?.status).toBe('IDLE')
     expect(store.messages[0]?.answer).toBe('安全回答')
@@ -64,7 +64,7 @@ describe('chat store', () => {
       )
     vi.stubGlobal('fetch', fetchMock)
     const store = useChatStore()
-    await store.send('你好')
+    await store.send('你好', '00000000-0000-0000-0000-000000000001')
     const firstId = store.messages[0]?.clientMessageId
     expect(store.messages[0]?.retryable).toBe(true)
     expect(store.conversation?.status).toBe('IDLE')
@@ -74,11 +74,14 @@ describe('chat store', () => {
     )
     expect(bodies[0]?.clientMessageId).toBe(firstId)
     expect(bodies[1]?.clientMessageId).toBe(firstId)
+    expect(bodies[0]?.spaceId).toBe('00000000-0000-0000-0000-000000000001')
+    expect(bodies[1]?.spaceId).toBe('00000000-0000-0000-0000-000000000001')
   })
 
   it('重置发生 409 时刷新服务端最新会话版本', async () => {
     const overview = {
       conversationId: '33333333-3333-3333-3333-333333333333',
+      spaceId: '00000000-0000-0000-0000-000000000001',
       status: 'IDLE' as const,
       version: 2,
       generation: 0,
@@ -94,8 +97,15 @@ describe('chat store', () => {
     )
     const store = useChatStore()
     await store.openConversation(overview.conversationId)
-    await expect(store.reset()).rejects.toBeInstanceOf(ApiError)
+    await expect(store.reset('44444444-4444-4444-4444-444444444444')).rejects.toBeInstanceOf(
+      ApiError,
+    )
     expect(store.conversation?.version).toBe(3)
+    expect(conversationApi.resetConversation).toHaveBeenCalledWith(
+      overview.conversationId,
+      overview.version,
+      '44444444-4444-4444-4444-444444444444',
+    )
   })
 })
 

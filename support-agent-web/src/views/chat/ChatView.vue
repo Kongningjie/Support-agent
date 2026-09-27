@@ -3,6 +3,7 @@ import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import SafeMarkdown from '@/components/content/SafeMarkdown.vue'
+import KnowledgeSpaceSelect from '@/components/knowledge-space/KnowledgeSpaceSelect.vue'
 import * as ticketApi from '@/api/ticket.api'
 import { shouldLoadConversation } from '@/chat/chat.route'
 import { useChatStore } from '@/stores/chat.store'
@@ -16,6 +17,9 @@ const draft = ref('')
 const scroller = ref<HTMLElement | null>(null)
 const suggestionBusyKey = ref<string | null>(null)
 const suggestionKeys = new Map<string, string>()
+const selectedSpaceId = ref<string | null>(null)
+const resetSpaceId = ref<string | null>(null)
+const resetVisible = ref(false)
 const routeConversationId = computed(() =>
   typeof route.params.id === 'string' ? route.params.id : null,
 )
@@ -26,11 +30,13 @@ watch(
     try {
       if (!conversationId) {
         chat.startNewConversation()
+        selectedSpaceId.value = null
       } else if (
         shouldLoadConversation(conversationId, chat.conversation?.conversationId ?? null)
       ) {
         await chat.openConversation(conversationId)
       }
+      selectedSpaceId.value = chat.conversation?.spaceId ?? null
     } catch (error) {
       ElMessage.error(error instanceof ApiError ? error.message : '无法读取会话')
       await router.replace('/chat')
@@ -53,16 +59,31 @@ onBeforeUnmount(() => chat.cancel())
 async function submit(): Promise<void> {
   const message = draft.value.trim()
   if (!message || !chat.canSend) return
+  if (!selectedSpaceId.value) {
+    ElMessage.warning('请先选择本次会话使用的知识空间')
+    return
+  }
   draft.value = ''
-  await chat.send(message)
+  await chat.send(message, selectedSpaceId.value)
   if (chat.conversation && routeConversationId.value !== chat.conversation.conversationId) {
     await router.replace(`/conversations/${chat.conversation.conversationId}`)
   }
 }
 
 /** 二次确认后重置当前会话的上下文和轮次。 */
+function openReset(): void {
+  if (!chat.conversation) return
+  resetSpaceId.value = chat.conversation.spaceId
+  resetVisible.value = true
+}
+
+/** 二次确认后使用显式空间重置当前会话的上下文和轮次。 */
 async function resetConversation(): Promise<void> {
   if (!chat.conversation) return
+  if (!resetSpaceId.value) {
+    ElMessage.warning('请选择重置后会话使用的知识空间')
+    return
+  }
   try {
     await ElMessageBox.confirm(
       '重置后将清空当前会话轮次和摘要，且无法恢复。是否继续？',
@@ -73,7 +94,9 @@ async function resetConversation(): Promise<void> {
         type: 'warning',
       },
     )
-    await chat.reset()
+    await chat.reset(resetSpaceId.value)
+    selectedSpaceId.value = chat.conversation?.spaceId ?? resetSpaceId.value
+    resetVisible.value = false
     ElMessage.success('会话已重置')
   } catch (error) {
     if (error === 'cancel' || error === 'close') return
@@ -157,7 +180,7 @@ function localTime(value: string | null): string {
       </div>
       <div class="heading-actions">
         <el-button @click="router.push('/conversations')">会话记录</el-button>
-        <el-button :disabled="!chat.conversation || chat.streaming" @click="resetConversation"
+        <el-button :disabled="!chat.conversation || chat.streaming" @click="openReset"
           >重置</el-button
         >
         <el-button
@@ -205,7 +228,10 @@ function localTime(value: string | null): string {
             >
               <strong>[{{ citation.citationId }}] {{ citation.documentTitle }}</strong>
               <span>{{ citation.headingPath || '文档正文' }}</span>
-              <small>{{ citation.sourceType }} · {{ citation.documentId }}</small>
+              <small>
+                {{ citation.sourceType }} · {{ citation.documentId }} · 空间
+                {{ citation.spaceId.slice(0, 8) }}
+              </small>
             </article>
           </div>
 
@@ -248,6 +274,12 @@ function localTime(value: string | null): string {
       <div v-if="chat.progress" class="chat-progress">
         <span aria-hidden="true" />{{ chat.progress }}
       </div>
+      <KnowledgeSpaceSelect
+        v-model="selectedSpaceId"
+        input-id="chat-space"
+        label="当前会话知识空间（必选）"
+        :disabled="Boolean(chat.conversation) || chat.streaming"
+      />
       <label for="chat-message">问题描述</label>
       <el-input
         id="chat-message"
@@ -269,12 +301,29 @@ function localTime(value: string | null): string {
         <el-button
           v-else
           type="primary"
-          :disabled="!draft.trim() || draft.length > 4000"
+          :disabled="!draft.trim() || draft.length > 4000 || !selectedSpaceId"
           @click="submit"
         >
           发送问题
         </el-button>
       </div>
     </footer>
+
+    <el-dialog v-model="resetVisible" title="重置会话并选择知识空间" width="620px">
+      <p class="form-note">
+        重置会清空当前代际的轮次、摘要、工单建议和消息幂等状态；新代际可以选择其他可读空间。
+      </p>
+      <KnowledgeSpaceSelect
+        v-model="resetSpaceId"
+        input-id="chat-reset-space"
+        label="重置后的知识空间（必选）"
+      />
+      <template #footer>
+        <el-button :disabled="chat.loading" @click="resetVisible = false">取消</el-button>
+        <el-button type="primary" :loading="chat.loading" @click="resetConversation">
+          确认重置
+        </el-button>
+      </template>
+    </el-dialog>
   </section>
 </template>

@@ -6,6 +6,7 @@ import type { ApiError } from '@/types/api.types'
 import type { ChatEvent, ChatStreamRequest } from '@/types/chat.types'
 
 const request: ChatStreamRequest = {
+  spaceId: '00000000-0000-0000-0000-000000000001',
   conversationId: null,
   clientMessageId: '11111111-1111-1111-1111-111111111111',
   message: '你好',

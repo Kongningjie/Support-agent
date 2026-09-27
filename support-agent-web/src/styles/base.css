@@ -1035,6 +1035,48 @@ p {
   color: var(--sa-color-muted);
   background: var(--el-color-primary-light-9);
 }
+
+/* F3S：知识空间正式客户端适配。 */
+.space-field {
+  display: grid;
+  gap: var(--sa-space-2);
+}
+.space-field label {
+  color: var(--sa-color-text);
+  font-weight: 700;
+}
+.space-field select {
+  width: 100%;
+  min-height: 40px;
+  padding: 0 var(--sa-space-3);
+  border: 1px solid var(--sa-color-border);
+  border-radius: var(--sa-radius-sm);
+  color: var(--sa-color-text);
+  background: #fff;
+  font: inherit;
+}
+.space-field select:disabled {
+  color: var(--sa-color-muted);
+  background: #f3f5f4;
+}
+.space-field small {
+  color: var(--sa-color-muted);
+  line-height: 1.5;
+}
+.space-field__error {
+  color: #9b2c2c;
+  font-size: 13px;
+}
+.space-field__error button {
+  border: 0;
+  color: var(--sa-color-primary);
+  background: transparent;
+  cursor: pointer;
+  text-decoration: underline;
+}
+.chat-composer .space-field {
+  margin-bottom: var(--sa-space-3);
+}
 @keyframes pulse {
   50% {
     opacity: 0.35;
