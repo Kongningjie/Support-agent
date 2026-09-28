@@ -10,7 +10,7 @@
 
 ```text
 知识文档发布 ─┐
-              ├─> BM25 + 向量 + RRF + Rerank ─> 带来源回答
+              ├─> GLOBAL + 当前知识空间过滤 ─> BM25 + 向量 + RRF + Rerank ─> 带来源回答
 工单解决 -> AI 案例草稿 -> 人工审核发布 ┘
 
 本地账号 -> Bearer Token -> 用户资源归属 -> 会话滚动摘要
@@ -31,13 +31,13 @@
 
 | 模块 | 职责 |
 |---|---|
-| `support-agent-domain` | 纯 Java 聚合、状态机和值对象 |
-| `support-agent-application` | 用例、端口、认证、会话与记忆编排、异步任务和评测 |
+| `support-agent-domain` | 纯 Java 聚合、状态机和值对象，包括知识空间与成员角色 |
+| `support-agent-application` | 用例、端口、认证、空间授权、会话与记忆编排、异步任务和评测 |
 | `support-agent-agent` | AgentScope、DashScope、Prompt 与结构化输出 |
-| `support-agent-infrastructure` | MySQL、Redis、Elasticsearch、Flyway、Outbox、认证与安全审计适配 |
-| `support-agent-interfaces` | REST、SSE、Spring Security、OpenAPI 和统一响应 |
+| `support-agent-infrastructure` | MySQL、Redis、Elasticsearch、Flyway V1～V9、Outbox、认证、安全审计和固定评测适配 |
+| `support-agent-interfaces` | REST、SSE、知识空间治理、Spring Security、OpenAPI 和统一响应 |
 | `support-agent-bootstrap` | Spring Boot 启动、配置和模块装配 |
-| `support-agent-web` | Vue 3 独立前端；当前提供认证、账号安全、角色守卫、聊天、会话、长期记忆和工单闭环 |
+| `support-agent-web` | Vue 3 独立前端；当前提供认证、账号安全、角色守卫、显式空间选择、聊天、会话、长期记忆和工单闭环 |
 
 ## Windows 11 本地运行
 
@@ -47,6 +47,11 @@
 Copy-Item .\.env.example .\.env
 docker compose -f .\deploy\compose.yml up -d --build
 docker compose -f .\deploy\compose.yml ps
+Get-Content .\.env | ForEach-Object {
+    if ($_ -match '^\s*([A-Za-z_][A-Za-z0-9_]*)=(.*)$') {
+        [Environment]::SetEnvironmentVariable($matches[1], $matches[2], 'Process')
+    }
+}
 mvn -pl support-agent-bootstrap -am package
 java -jar .\support-agent-bootstrap\target\support-agent-bootstrap-0.1.0-SNAPSHOT.jar
 ```
@@ -61,7 +66,7 @@ npm run dev
 
 浏览器访问 `http://localhost:5173`。当前已提供认证、聊天、会话、长期记忆和工单页面；管理员治理页面将在 F4 实现。
 
-`.env` 只供 Docker Compose 读取，Spring Boot 不会自动加载它。通过 IDEA 启动时，请在 `SupportAgentApplication` 的 Run Configuration 中配置 `DASHSCOPE_API_KEY` 和 `DASHSCOPE_HTTP_BASE_URL`。这些变量只对被启动的应用进程生效，因此 IDEA Terminal 中不一定可见。
+Docker Compose 会自动读取根目录 `.env`，Spring Boot 不会自动读取；上面的 PowerShell 片段会把简单的 `KEY=VALUE` 配置静默导入当前进程。通过 IDEA 启动时，也可以在 `SupportAgentApplication` 的 Run Configuration 中配置同一组环境变量。若修改 Compose 宿主端口，必须同步修改 `SUPPORT_AGENT_MYSQL_URL`、`SUPPORT_AGENT_REDIS_URL` 或 `SUPPORT_AGENT_ELASTICSEARCH_URL`。Run Configuration 中的变量只对被启动的应用进程生效，因此 IDEA Terminal 中不一定可见。
 
 ## 配置
 
@@ -84,8 +89,10 @@ npm run dev
 | `SUPPORT_AGENT_MYSQL_URL` | MySQL JDBC 地址 |
 | `SUPPORT_AGENT_REDIS_URL` | Redis 地址 |
 | `SUPPORT_AGENT_ELASTICSEARCH_URL` | Elasticsearch 根地址 |
+| `SUPPORT_AGENT_KNOWLEDGE_INDEX` | 全量重建写入的物理知识索引，当前为 `support_knowledge_v2` |
+| `SUPPORT_AGENT_KNOWLEDGE_ALIAS` | 线上检索使用的稳定业务别名，当前为 `support_knowledge_current` |
 
-默认模型为 Chat `qwen3.8-flash`、Intent `qwen3.7-flash`、Embedding `text-embedding-v4`、Rerank `qwen3-rerank`。
+默认模型为 Chat `qwen3.8-flash`、Intent `qwen3.7-flash`、Summary `qwen3.7-flash`、Memory `qwen3.7-flash`、Embedding `text-embedding-v4`、Rerank `qwen3-rerank`。
 
 ## 验证与接口
 
@@ -98,15 +105,17 @@ mvn verify -Ponline-test
 
 `online-test` 会调用真实 DashScope，必须取得明确授权并在当前 Maven 进程中提供密钥。接口文档启动后访问 `http://localhost:8080/swagger-ui.html`；完整调用示例见 `http/`。
 
+最近一次完整门禁基线为：后端 `mvn test` 通过 272 个测试，`mvn verify -Pintegration` 通过 44 个基础设施集成测试和 9 个启动联调测试；前端 F3S 通过 15 个测试文件、44 个单元测试、Lint、类型检查和生产构建。历史证据见对应阶段工作记录，本次 README 同步未重复执行整套测试。
+
 健康检查：
 
 - `/actuator/health/liveness`：只判断应用进程存活。
-- `/actuator/health/readiness`：检查 MySQL、Redis、Elasticsearch及 DashScope 配置。
+- `/actuator/health/readiness`：检查 MySQL、Redis、Elasticsearch 及 DashScope 配置。
 - `/actuator/info`：返回非敏感构建信息。
 
 聊天接口 `POST /api/v1/chat/stream` 使用 SSE。服务端在检索和生成期间发送进度事件或注释心跳；模型原始 delta 不会直接下发。完整答案通过引用与精确值校验后，才发送 `answer.started -> answer.delta -> answer.completed`；两次生成均未通过时只发送 `error`。各分支请求样例和事件顺序见 `http/20-chat.http`。
 
-除登录和健康检查外，业务接口均要求 Redis 不透明 Bearer Token。普通用户只能访问自己的会话、工单和长期记忆；管理员负责用户、知识、案例和异步任务治理。账号安全示例见 `http/27-account-security.http`。
+除登录和健康检查外，业务接口均要求 Redis 不透明 Bearer Token。普通用户只能访问自己的会话、工单和长期记忆；新会话、知识草稿和手工工单要求显式知识空间，会话重置可保留原空间或显式切换。案例继承来源工单的空间归属。空间角色固定为 `READER`、`EDITOR`、`MANAGER`，平台管理员负责空间生命周期、用户和异步任务治理。账号安全示例见 `http/27-account-security.http`，知识空间示例见 `http/29-knowledge-spaces.http`。
 
 ## 固定检索评测
 
@@ -120,6 +129,12 @@ mvn verify -Ponline-test
 
 安全数据位于 `support-agent-infrastructure/src/main/resources/evaluation/llm-security-cases.jsonl`。该结果只验证当前固定样本、确定性规则和应用失败关闭链路，不代表真实模型已经通过开放世界对抗测试。
 
+## 固定知识空间隔离评测
+
+仓库内保存 60 条固定中文隔离用例，覆盖跨空间召回、无权空间、停用空间、成员撤权及并发权限变化。`mvn test` 会校验数据集、聚合门槛与动态报告；报告写入 `target/knowledge-space-evaluation/`。当前结果基于确定性受控观测，用于验证空间过滤和评测链路，不代表真实在线模型已经完成隔离效果验收。
+
+隔离数据位于 `support-agent-infrastructure/src/main/resources/evaluation/knowledge-space-cases.jsonl`。运维核对与恢复步骤见 [知识空间运维手册](docs/operations/knowledge-space-runbook.md)。
+
 ## 数据清理
 
 工单保留审计记录，已发布知识只能归档；用户可以删除自己的会话和长期记忆。未确认的长期记忆候选达到 30 天后按批次清理。停止基础设施不会删除数据：
@@ -132,4 +147,4 @@ docker compose -f .\deploy\compose.yml down
 
 ## 安全边界
 
-禁止提交密钥、`.env`、生产数据、完整 Prompt 或模型完整输出。测试数据必须自编或脱敏。当前消息与所有模型上下文统一按不可信数据处理：高置信度直接注入在创建会话前拒绝，高风险证据、历史、摘要、记忆和工单字段只从本次调用排除。问候、RAG、工单回答、工单草稿和案例草稿在外发或持久化前统一执行完整输出安全校验，每次受保护生成调用使用仅存活于内存的随机泄漏标记。当前采用本地用户名密码、BCrypt 和 Redis 不透明 Token，不使用 JWT、Refresh Token、真实 OIDC/SSO、复杂 RBAC、多租户、RocketMQ 或自动调参。
+禁止提交密钥、`.env`、生产数据、完整 Prompt 或模型完整输出。测试数据必须自编或脱敏。当前消息与所有模型上下文统一按不可信数据处理：高置信度直接注入在创建会话前拒绝，高风险证据、历史、摘要、记忆和工单字段只从本次调用排除。问候、RAG、工单回答、工单草稿和案例草稿在外发或持久化前统一执行完整输出安全校验，每次受保护生成调用使用仅存活于内存的随机泄漏标记。当前采用本地用户名密码、BCrypt、Redis 不透明 Token，以及固定的平台 `ADMIN` 与空间角色，不使用 JWT、Refresh Token、真实 OIDC/SSO、可配置复杂 RBAC、多租户、RocketMQ 或自动调参。
