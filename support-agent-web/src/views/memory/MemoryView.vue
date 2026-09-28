@@ -248,6 +248,7 @@ function asApiError(value: unknown, fallback: string): ApiError {
       v-else-if="error"
       :message="error.message"
       :trace-id="error.traceId"
+      :retryable="error.retryable"
       @retry="load"
     />
     <EmptyState

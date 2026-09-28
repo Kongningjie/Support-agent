@@ -1,6 +1,6 @@
 # Support Agent
 
-基于 Java 21、Spring Boot 4.1、AgentScope Java 和 DashScope 的企业内部技术支持 Agent。当前已完成一期阶段 0～5、二期阶段 6～9、三期阶段 10～17（含阶段 13 补强）、四期阶段 18～20 和前端阶段 F1～F3S，覆盖知识检索与工单闭环、上下文压缩、本地认证、会话生命周期、用户可控长期记忆、账号安全、LLM 输入与输出安全治理、知识空间权限与隔离评测，以及前端认证、聊天、会话、记忆和工单闭环。
+基于 Java 21、Spring Boot 4.1、AgentScope Java 和 DashScope 的企业内部技术支持 Agent。当前已完成一期阶段 0～5、二期阶段 6～9、三期阶段 10～17（含阶段 13 补强）、四期阶段 18～20 和前端阶段 F1～F5，覆盖知识检索与工单闭环、上下文压缩、本地认证、会话生命周期、用户可控长期记忆、账号安全、LLM 输入与输出安全治理、知识空间权限与隔离评测，以及可真实联调的完整 Web 客户端。
 
 当前实现的完整事实基线见 [当前系统基线](docs/implementation-plan/10-current-system-baseline.md)，历史阶段计划只用于解释当时的范围和决策。[三期 LLM 安全补强计划](docs/implementation-plan/11-phase-3-llm-security-plan.md)的阶段 15～17 已完成规定离线与集成门禁；真实 DashScope 对抗验证仍需单独授权，不能把固定数据集结果表述为在线模型安全率。
 
@@ -37,7 +37,7 @@
 | `support-agent-infrastructure` | MySQL、Redis、Elasticsearch、Flyway V1～V9、Outbox、认证、安全审计和固定评测适配 |
 | `support-agent-interfaces` | REST、SSE、知识空间治理、Spring Security、OpenAPI 和统一响应 |
 | `support-agent-bootstrap` | Spring Boot 启动、配置和模块装配 |
-| `support-agent-web` | Vue 3 独立前端；当前提供认证、账号安全、角色守卫、显式空间选择、聊天、会话、长期记忆和工单闭环 |
+| `support-agent-web` | Vue 3 独立前端；提供用户端完整业务、管理员治理、统一错误恢复和 Playwright 真实后端验收 |
 
 ## Windows 11 本地运行
 
@@ -64,7 +64,7 @@ npm ci
 npm run dev
 ```
 
-浏览器访问 `http://localhost:5173`。当前已提供认证、聊天、会话、长期记忆和工单页面；管理员治理页面将在 F4 实现。
+浏览器访问 `http://localhost:5173`。当前已提供认证、聊天、会话、长期记忆、工单以及管理员用户、知识空间、知识、案例和异步任务治理页面。
 
 Docker Compose 会自动读取根目录 `.env`，Spring Boot 不会自动读取；上面的 PowerShell 片段会把简单的 `KEY=VALUE` 配置静默导入当前进程。通过 IDEA 启动时，也可以在 `SupportAgentApplication` 的 Run Configuration 中配置同一组环境变量。若修改 Compose 宿主端口，必须同步修改 `SUPPORT_AGENT_MYSQL_URL`、`SUPPORT_AGENT_REDIS_URL` 或 `SUPPORT_AGENT_ELASTICSEARCH_URL`。Run Configuration 中的变量只对被启动的应用进程生效，因此 IDEA Terminal 中不一定可见。
 
@@ -105,7 +105,7 @@ mvn verify -Ponline-test
 
 `online-test` 会调用真实 DashScope，必须取得明确授权并在当前 Maven 进程中提供密钥。接口文档启动后访问 `http://localhost:8080/swagger-ui.html`；完整调用示例见 `http/`。
 
-最近一次完整门禁基线为：后端 `mvn test` 通过 272 个测试，`mvn verify -Pintegration` 通过 44 个基础设施集成测试和 9 个启动联调测试；前端 F3S 通过 15 个测试文件、44 个单元测试、Lint、类型检查和生产构建。历史证据见对应阶段工作记录，本次 README 同步未重复执行整套测试。
+最近一次完整门禁基线为：后端 `mvn test` 通过 273 个测试，`mvn verify -Pintegration` 通过 44 个基础设施集成测试和 9 个启动联调测试；前端通过 17 个测试文件、65 个单元测试、4 个 Playwright 真实后端 E2E、Lint、格式、严格类型检查、生产构建和高危漏洞审计。F5 的在线 E2E 已在明确授权后验证真实 DashScope 无知识问答与建议建单链路，证据见对应阶段工作记录。
 
 健康检查：
 

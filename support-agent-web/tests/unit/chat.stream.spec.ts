@@ -53,6 +53,35 @@ describe('streamChat', () => {
     )
   })
 
+  it('把连接失败和未收到终止事件收敛为可重试 SSE 错误', async () => {
+    writeAccessToken('test-token')
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new TypeError('socket details')))
+    await expect(
+      streamChat(request, new AbortController().signal, () => undefined),
+    ).rejects.toMatchObject<Partial<ChatStreamError>>({ code: 'NETWORK_ERROR', retryable: true })
+
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(sseResponse([event('conversation.started', 1)])),
+    )
+    await expect(
+      streamChat(request, new AbortController().signal, () => undefined),
+    ).rejects.toMatchObject<Partial<ChatStreamError>>({ code: 'SSE_INCOMPLETE', retryable: true })
+  })
+
+  it.each([
+    [410, '会话已经过期，请发起新会话', false],
+    [502, '模型服务返回无效响应，请稍后重试', true],
+    [503, '聊天依赖暂不可用，请稍后重试', true],
+  ])('为非 JSON HTTP %i 错误提供安全默认体验', async (status, message, retryable) => {
+    writeAccessToken('test-token')
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('upstream failure', { status })))
+
+    await expect(
+      streamChat(request, new AbortController().signal, () => undefined),
+    ).rejects.toMatchObject<Partial<ApiError>>({ status, message, retryable })
+  })
+
   it('保留 403 权限错误的公开 code 和 traceId', async () => {
     writeAccessToken('test-token')
     vi.stubGlobal(

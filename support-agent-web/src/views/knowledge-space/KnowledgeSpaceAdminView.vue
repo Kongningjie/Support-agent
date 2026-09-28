@@ -423,6 +423,7 @@ function localTime(value: string): string {
       v-else-if="error"
       :message="error.message"
       :trace-id="error.traceId"
+      :retryable="error.retryable"
       @retry="load"
     /><EmptyState
       v-else-if="spaces.length === 0"

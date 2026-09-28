@@ -179,6 +179,7 @@ async function responseError(response: Response): Promise<ApiError> {
     410: '会话已经过期，请发起新会话',
     422: '消息未通过安全校验',
     429: '请求过于频繁，请稍后重试',
+    502: '模型服务返回无效响应，请稍后重试',
     503: '聊天依赖暂不可用，请稍后重试',
   }
   return new ApiError(

@@ -25,6 +25,7 @@ async function handleLogout(): Promise<void> {
 
 <template>
   <div v-if="auth.isAuthenticated" class="app-shell">
+    <a class="skip-link" href="#main-content">跳到主要内容</a>
     <aside class="app-sidebar" :class="{ 'app-sidebar--collapsed': collapsed }">
       <RouterLink class="app-sidebar__brand" to="/chat" aria-label="返回 Support Agent 首页">
         <span class="brand-mark brand-mark--small" aria-hidden="true">SA</span>
@@ -32,49 +33,54 @@ async function handleLogout(): Promise<void> {
       </RouterLink>
 
       <nav aria-label="主导航">
-        <RouterLink class="nav-item" to="/chat">
+        <RouterLink class="nav-item" to="/chat" aria-label="AI 支持">
           <span aria-hidden="true">◈</span>
           <span v-if="!collapsed">AI 支持</span>
         </RouterLink>
-        <RouterLink class="nav-item" to="/conversations">
+        <RouterLink class="nav-item" to="/conversations" aria-label="会话记录">
           <span aria-hidden="true">▤</span>
           <span v-if="!collapsed">会话记录</span>
         </RouterLink>
-        <RouterLink class="nav-item" to="/memories">
+        <RouterLink class="nav-item" to="/memories" aria-label="长期记忆">
           <span aria-hidden="true">◇</span>
           <span v-if="!collapsed">长期记忆</span>
         </RouterLink>
-        <RouterLink class="nav-item" to="/tickets">
+        <RouterLink class="nav-item" to="/tickets" aria-label="支持工单">
           <span aria-hidden="true">▱</span>
           <span v-if="!collapsed">支持工单</span>
         </RouterLink>
-        <RouterLink class="nav-item" to="/account">
+        <RouterLink class="nav-item" to="/account" aria-label="账号安全">
           <span aria-hidden="true">○</span>
           <span v-if="!collapsed">账号安全</span>
         </RouterLink>
         <template v-if="auth.isAdmin">
           <p v-if="!collapsed" class="nav-section">管理员</p>
-          <RouterLink class="nav-item" to="/admin/users">
+          <RouterLink class="nav-item" to="/admin/users" aria-label="用户治理">
             <span aria-hidden="true">◇</span>
             <span v-if="!collapsed">用户治理</span>
           </RouterLink>
-          <RouterLink class="nav-item" to="/admin/knowledge-spaces">
+          <RouterLink class="nav-item" to="/admin/knowledge-spaces" aria-label="知识空间">
             <span aria-hidden="true">▦</span>
             <span v-if="!collapsed">知识空间</span>
           </RouterLink>
-          <RouterLink class="nav-item" to="/admin/knowledge">
+          <RouterLink class="nav-item" to="/admin/knowledge" aria-label="知识治理">
             <span aria-hidden="true">▥</span>
             <span v-if="!collapsed">知识治理</span>
           </RouterLink>
-          <RouterLink class="nav-item" to="/admin/resolved-cases">
+          <RouterLink class="nav-item" to="/admin/resolved-cases" aria-label="案例治理">
             <span aria-hidden="true">▧</span>
             <span v-if="!collapsed">案例治理</span>
           </RouterLink>
-          <RouterLink class="nav-item" to="/admin/async-tasks">
+          <RouterLink class="nav-item" to="/admin/async-tasks" aria-label="异步任务">
             <span aria-hidden="true">⌁</span>
             <span v-if="!collapsed">异步任务</span>
           </RouterLink>
-          <RouterLink v-if="evaluationEnabled" class="nav-item" to="/admin/evaluations">
+          <RouterLink
+            v-if="evaluationEnabled"
+            class="nav-item"
+            to="/admin/evaluations"
+            aria-label="本地评测"
+          >
             <span aria-hidden="true">◎</span>
             <span v-if="!collapsed">本地评测</span>
           </RouterLink>
@@ -112,7 +118,7 @@ async function handleLogout(): Promise<void> {
           </template>
         </el-dropdown>
       </header>
-      <main class="page-content">
+      <main id="main-content" class="page-content" tabindex="-1">
         <slot />
       </main>
     </div>

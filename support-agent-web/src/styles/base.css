@@ -491,6 +491,33 @@ p {
   }
 }
 
+.skip-link {
+  position: fixed;
+  z-index: 3000;
+  top: var(--sa-space-3);
+  left: var(--sa-space-3);
+  padding: var(--sa-space-2) var(--sa-space-4);
+  border-radius: var(--sa-radius-sm);
+  color: #fff;
+  background: var(--sa-color-primary-strong);
+  transform: translateY(-160%);
+  transition: transform 120ms ease;
+}
+
+.skip-link:focus {
+  transform: translateY(0);
+}
+
+:where(a, button, input, select, textarea, [tabindex]):focus-visible {
+  outline: 3px solid #a86512;
+  outline-offset: 3px;
+}
+
+.el-dialog,
+.el-message-box {
+  max-width: calc(100vw - 32px);
+}
+
 @media (max-width: 1024px) {
   .login-layout {
     grid-template-columns: minmax(300px, 0.75fr) minmax(440px, 1.25fr);
@@ -745,8 +772,6 @@ p {
   font-size: 12px;
 }
 .chat-composer {
-  position: sticky;
-  bottom: 0;
   padding: var(--sa-space-4) var(--sa-space-5);
   border: 1px solid var(--sa-color-border);
   border-top: 0;

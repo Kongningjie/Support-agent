@@ -360,6 +360,7 @@ function localTime(value: string | null): string {
       v-else-if="error"
       :message="error.message"
       :trace-id="error.traceId"
+      :retryable="error.retryable"
       @retry="load"
     /><EmptyState
       v-else-if="items.length === 0"
@@ -384,8 +385,10 @@ function localTime(value: string | null): string {
             :key="item.documentId"
             class="clickable-row"
             tabindex="0"
+            :aria-label="`查看知识：${item.title}`"
             @click="openDetails(item.documentId)"
             @keydown.enter="openDetails(item.documentId)"
+            @keydown.space.prevent="openDetails(item.documentId)"
           >
             <td>
               <strong>{{ item.title }}</strong
