@@ -260,3 +260,13 @@ http/60-retrieval-evaluation.http
 - 阶段 17 不新增公共 REST、SSE 事件或响应字段，固定安全评测仅通过自动化门禁执行。
 - 安全指标只暴露聚合计数和冻结枚举标签，不提供用户、会话、文档、工单、正文、随机标记或错误详情查询接口。
 - 输入策略异常发生在会话租约和模型调用前并失败关闭；输出策略异常不得发送 `answer.delta` 或持久化未经检查的模型正文。
+
+## 15. 四期知识空间接口与显式空间契约
+
+- 空间查询与成员治理使用 `/api/v1/knowledge-spaces*` 和 `/api/v1/admin/knowledge-spaces*`。平台 `ADMIN` 管理空间；活动空间 `MANAGER` 可管理成员；无权受限空间与不存在统一返回 404，已知空间但角色不足返回 403。
+- 新建会话、手工工单、文本知识草稿和文件知识草稿必须显式提供 `spaceId`；缺失统一返回 `KNOWLEDGE_SPACE_CONTEXT_REQUIRED`。既有会话由服务端使用已持久化空间，客户端仍应回传空间用于一致性校验。
+- `spaceId` 表示资源所属知识空间公开 UUID，不是 MySQL 主键；`GLOBAL` 的固定 UUID 为 `00000000-0000-0000-0000-000000000001`。
+- Chat 在答案正文发送前重新读取当前用户、空间和成员事实。撤权、用户禁用或空间停用时，只发送既有安全 `error` 终结事件，不发送 `answer.started`、`answer.delta`、引用或未通过正文。
+- 工单建议沿用会话冻结的 `spaceId`，消费前重新校验；案例继承来源工单空间，客户端不得指定或改写。
+
+完整请求示例见 `http/10-knowledge-document.http`、`http/20-chat.http`、`http/29-knowledge-spaces.http` 和 `http/30-ticket.http`。

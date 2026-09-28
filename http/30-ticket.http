@@ -1,5 +1,6 @@
 @baseUrl = http://localhost:8080/api/v1
 @globalSpaceId = 00000000-0000-0000-0000-000000000001
+@restrictedSpaceId = replace-with-readable-restricted-space-uuid
 
 ### 手工创建草稿；重复发送相同请求会返回首次创建的工单
 # @name createDraft
@@ -15,6 +16,27 @@ Content-Type: application/json
 }
 
 > {% client.global.set("ticketNo", response.body.data.ticketNo); client.global.set("ticketVersion", response.body.data.version); %}
+
+### 缺少 spaceId；阶段 20 必须返回 KNOWLEDGE_SPACE_CONTEXT_REQUIRED
+POST {{baseUrl}}/tickets/drafts
+Content-Type: application/json
+
+{
+  "title": "验证手工工单空间必填",
+  "problemDescription": "该请求故意省略空间",
+  "idempotencyKey": "ticket-missing-space-001"
+}
+
+### 在可读受限空间手工创建工单
+POST {{baseUrl}}/tickets/drafts
+Content-Type: application/json
+
+{
+  "spaceId": "{{restrictedSpaceId}}",
+  "title": "受限空间问题",
+  "problemDescription": "验证工单空间归属",
+  "idempotencyKey": "ticket-restricted-space-001"
+}
 
 ### 查询刚创建的工单详情
 GET {{baseUrl}}/tickets/{{ticketNo}}

@@ -18,5 +18,6 @@ public enum SecurityEventType {
     /** 空间成员关系首次建立。 */ SPACE_MEMBER_ADDED,
     /** 活动成员的空间角色发生变化。 */ SPACE_MEMBER_ROLE_CHANGED,
     /** 已撤销成员关系恢复为活动。 */ SPACE_MEMBER_RESTORED,
-    /** 活动成员关系被撤销。 */ SPACE_MEMBER_REVOKED
+    /** 活动成员关系被撤销。 */ SPACE_MEMBER_REVOKED,
+    /** 应用层完成一次知识空间访问允许或拒绝判定。 */ SPACE_ACCESS_DECISION
 }

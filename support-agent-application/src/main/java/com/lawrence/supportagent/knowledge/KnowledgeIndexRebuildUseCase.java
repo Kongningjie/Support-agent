@@ -4,6 +4,7 @@ import com.lawrence.supportagent.auth.AuthenticatedUser;
 import com.lawrence.supportagent.knowledge.port.KnowledgeIndexRebuildPort;
 import com.lawrence.supportagent.knowledge.port.ManagedDocumentRepository;
 import com.lawrence.supportagent.knowledgespace.KnowledgeSpace;
+import com.lawrence.supportagent.knowledgespace.KnowledgeSpaceTelemetryPort;
 import com.lawrence.supportagent.knowledgespace.port.KnowledgeSpaceRepository;
 import com.lawrence.supportagent.model.EmbeddingModelPort;
 import com.lawrence.supportagent.resolvedcase.ResolvedCase;
@@ -29,6 +30,7 @@ public class KnowledgeIndexRebuildUseCase {
     private final EmbeddingModelPort embeddings;
     private final KnowledgeIndexRebuildPort index;
     private final TimeProvider time;
+    private final KnowledgeSpaceTelemetryPort telemetry;
 
     /** 注入来源事实、空间、分块、向量、索引和时间端口。 */
     public KnowledgeIndexRebuildUseCase(ManagedDocumentRepository documents,
@@ -38,6 +40,19 @@ public class KnowledgeIndexRebuildUseCase {
                                         EmbeddingModelPort embeddings,
                                         KnowledgeIndexRebuildPort index,
                                         TimeProvider time) {
+        this(documents, cases, spaces, chunker, embeddings, index, time,
+                KnowledgeSpaceTelemetryPort.noOp());
+    }
+
+    /** 注入来源事实、索引能力、时间和低基数重建遥测。 */
+    public KnowledgeIndexRebuildUseCase(ManagedDocumentRepository documents,
+                                        ResolvedCaseRepository cases,
+                                        KnowledgeSpaceRepository spaces,
+                                        DocumentChunker chunker,
+                                        EmbeddingModelPort embeddings,
+                                        KnowledgeIndexRebuildPort index,
+                                        TimeProvider time,
+                                        KnowledgeSpaceTelemetryPort telemetry) {
         this.documents = documents;
         this.cases = cases;
         this.spaces = spaces;
@@ -45,6 +60,7 @@ public class KnowledgeIndexRebuildUseCase {
         this.embeddings = embeddings;
         this.index = index;
         this.time = time;
+        this.telemetry = telemetry == null ? KnowledgeSpaceTelemetryPort.noOp() : telemetry;
     }
 
     /** 仅允许平台管理员执行同步受控重建；任何核对失败都不会切换别名。 */
@@ -55,24 +71,29 @@ public class KnowledgeIndexRebuildUseCase {
         if (!actor.administrator()) {
             throw new ApplicationException(ErrorCode.AUTH_FORBIDDEN, "仅平台管理员可以重建知识索引");
         }
-        Set<UUID> knownSpaces = knownSpaceIds();
-        index.prepareTarget();
-        RebuildCount documentCount = rebuildDocuments(knownSpaces);
-        RebuildCount caseCount = rebuildCases(knownSpaces);
-        long expectedSources = documents.count(ManagedDocumentStatus.PUBLISHED, null,
-                Set.of(), true) + cases.count(ResolvedCaseStatus.PUBLISHED, null, null,
-                Set.of(), true);
-        long actualChunks = index.countTargetChunks();
-        long expectedChunks = documentCount.chunkCount() + caseCount.chunkCount();
-        if (documentCount.sourceCount() + caseCount.sourceCount() != expectedSources
-                || actualChunks != expectedChunks
-                || !index.targetSpacesAreKnown(knownSpaces)) {
-            throw new IllegalStateException("知识索引全量重建完整性校验失败");
+        try {
+            Set<UUID> knownSpaces = knownSpaceIds();
+            index.prepareTarget();
+            RebuildCount documentCount = rebuildDocuments(knownSpaces);
+            RebuildCount caseCount = rebuildCases(knownSpaces);
+            long expectedSources = documents.count(ManagedDocumentStatus.PUBLISHED, null,
+                    Set.of(), true) + cases.count(ResolvedCaseStatus.PUBLISHED, null, null,
+                    Set.of(), true);
+            long actualChunks = index.countTargetChunks();
+            long expectedChunks = documentCount.chunkCount() + caseCount.chunkCount();
+            if (documentCount.sourceCount() + caseCount.sourceCount() != expectedSources
+                    || actualChunks != expectedChunks
+                    || !index.targetSpacesAreKnown(knownSpaces)) {
+                throw new IllegalStateException("知识索引全量重建完整性校验失败");
+            }
+            index.activateTarget();
+            telemetry.recordRebuild(KnowledgeSpaceTelemetryPort.RebuildResult.SUCCEEDED);
+            return new KnowledgeIndexRebuildResult(expectedSources, documentCount.sourceCount(),
+                    caseCount.sourceCount(), actualChunks, true);
+        } catch (RuntimeException exception) {
+            telemetry.recordRebuild(KnowledgeSpaceTelemetryPort.RebuildResult.FAILED);
+            throw exception;
         }
-        index.activateTarget();
-        return new KnowledgeIndexRebuildResult(expectedSources, documentCount.sourceCount(),
-                caseCount.sourceCount(),
-                actualChunks, true);
     }
 
     /** 分页重建全部当前已发布托管文档并逐来源校验版本、空间和哈希。 */

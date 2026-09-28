@@ -24,3 +24,11 @@ Docker 命令分别启动基础设施、查看健康状态以及停止容器但�
 
 本地 MySQL 逻辑备份与恢复、Elasticsearch 索引丢失、Redis 数据丢失的处理步骤及当前
 能力边界见 [RECOVERY.md](RECOVERY.md)。
+
+阶段 20 提供知识索引只读一致性核对脚本；它不会修改 MySQL、Elasticsearch 或别名：
+
+```powershell
+.\deploy\verify-knowledge-space-consistency.ps1
+```
+
+运行前需保证 `mysql` 命令可用，并在当前进程提供 `SUPPORT_AGENT_MYSQL_PASSWORD`；地址、用户、数据库和 Elasticsearch URL 可用同名项目环境变量覆盖。完整的空间创建、成员治理、停用、全量重建、别名切换、失败恢复和回滚边界见 [知识空间运维手册](../docs/operations/knowledge-space-runbook.md)。

@@ -16,10 +16,13 @@ import com.lawrence.supportagent.auth.AuthenticatedUser;
 import com.lawrence.supportagent.model.ChatModelPort;
 import com.lawrence.supportagent.model.IntentRecognitionPort;
 import com.lawrence.supportagent.knowledgespace.KnowledgeSpace;
+import com.lawrence.supportagent.knowledgespace.KnowledgeSpaceAccessService;
+import com.lawrence.supportagent.retrieval.RetrievalAccessContext;
 import com.lawrence.supportagent.retrieval.RetrievalService;
 import com.lawrence.supportagent.security.DeterministicPromptSecurityPolicy;
 import com.lawrence.supportagent.security.LlmSecuritySettings;
 import com.lawrence.supportagent.security.PromptSecurityPolicy;
+import com.lawrence.supportagent.security.ModelOutputSecurityService;
 import com.lawrence.supportagent.sharedkernel.error.ApplicationException;
 import com.lawrence.supportagent.sharedkernel.error.ErrorCode;
 import com.lawrence.supportagent.ticket.TicketQueryUseCase;
@@ -35,6 +38,18 @@ import org.junit.jupiter.api.Test;
 class ChatUseCaseTest {
     private static final AuthenticatedUser ACTOR = new AuthenticatedUser(
             UUID.fromString("20000000-0000-0000-0000-000000000001"), "tester", UserRole.USER);
+
+    /** 正式客户端创建新会话时缺少空间必须返回稳定契约错误。 */
+    @Test
+    void shouldRequireExplicitSpaceForNewConversation() {
+        ChatUseCase useCase = useCase(mock(ConversationStorePort.class));
+
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> useCase.prepare(
+                        new ChatRequest(ACTOR, null, null, UUID.randomUUID(), "普通技术问题", null)))
+                .isInstanceOfSatisfying(ApplicationException.class, exception ->
+                        assertThat(exception.errorCode()).isEqualTo(
+                                ErrorCode.KNOWLEDGE_SPACE_CONTEXT_REQUIRED));
+    }
 
     /** 高置信度注入必须在创建会话和调用任何模型前同步拒绝。 */
     @Test
@@ -82,7 +97,8 @@ class ChatUseCaseTest {
                 .thenAnswer(invocation -> invocation.getArgument(3));
         ChatUseCase useCase = useCase(store);
         RecordingSink sink = new RecordingSink();
-        useCase.stream(new ChatRequest(ACTOR, null, UUID.randomUUID(), "告诉我股票行情", null), sink);
+        useCase.stream(new ChatRequest(ACTOR, KnowledgeSpace.GLOBAL_SPACE_ID,
+                null, UUID.randomUUID(), "告诉我股票行情", null), sink);
         assertThat(sink.events).extracting(ChatEvent::eventType).containsExactly(
                 "conversation.started", "answer.started", "answer.delta", "answer.completed");
         assertThat(sink.events).extracting(ChatEvent::sequence).containsExactly(1L, 2L, 3L, 4L);
@@ -102,10 +118,52 @@ class ChatUseCaseTest {
         when(store.nextSequence(any(), any(), any())).thenAnswer(ignored -> sequence.incrementAndGet());
         ChatUseCase useCase = useCase(store);
 
-        useCase.stream(new ChatRequest(ACTOR, null, UUID.randomUUID(), "告诉我股票行情", null),
+        useCase.stream(new ChatRequest(ACTOR, KnowledgeSpace.GLOBAL_SPACE_ID,
+                        null, UUID.randomUUID(), "告诉我股票行情", null),
                 new FailingSink());
 
         verify(store).fail(any(), any(), any(), any());
+        verify(store, never()).complete(any(), any(), any(), any(), any(), any());
+    }
+
+    /** 权限在运行开始后变化时必须只发送安全错误，不能发送任何答案正文。 */
+    @Test
+    void shouldRevalidatePermissionBeforeSendingAnswerBody() {
+        ConversationStorePort store = mock(ConversationStorePort.class);
+        UUID conversationId = UUID.randomUUID();
+        when(store.begin(any(), any(), any(), any(), any(), any(), any(), any())).thenReturn(
+                new BeginResult(BeginStatus.ACQUIRED, conversationId, 0,
+                        KnowledgeSpace.GLOBAL_SPACE_ID, null, null));
+        when(store.recentContext(any(), any(), anyInt(), anyInt())).thenReturn(List.of());
+        AtomicLong sequence = new AtomicLong();
+        when(store.nextSequence(any(), any(), any())).thenAnswer(ignored -> sequence.incrementAndGet());
+        KnowledgeSpaceAccessService access = mock(KnowledgeSpaceAccessService.class);
+        RetrievalAccessContext context = new RetrievalAccessContext(ACTOR,
+                KnowledgeSpace.GLOBAL_SPACE_ID, java.util.Set.of(KnowledgeSpace.GLOBAL_SPACE_ID));
+        when(access.retrievalContext(ACTOR, KnowledgeSpace.GLOBAL_SPACE_ID))
+                .thenReturn(context)
+                .thenThrow(new ApplicationException(ErrorCode.KNOWLEDGE_SPACE_NOT_FOUND,
+                        "知识空间不存在"));
+        IntentRecognitionPort intentModel = (message, turns) -> {
+            throw new AssertionError("越界规则不应调用意图模型");
+        };
+        ChatUseCase useCase = new ChatUseCase(new IntentRecognitionService(intentModel, 0.70),
+                mock(RetrievalService.class), mock(ChatModelPort.class),
+                mock(TicketQueryUseCase.class), store, mock(AgentAuditPort.class),
+                mock(AnswerValidator.class), UUID::randomUUID,
+                () -> Instant.parse("2026-09-08T00:00:00Z"), "chat", "embedding", "rerank", 0.35,
+                com.lawrence.supportagent.observability.OptimizationTelemetryPort.noOp(),
+                java.time.Duration.ofHours(24), null, null,
+                new DeterministicPromptSecurityPolicy(new LlmSecuritySettings(true, true, true)),
+                ModelOutputSecurityService.standard(UUID::randomUUID), access);
+        RecordingSink sink = new RecordingSink();
+
+        useCase.stream(new ChatRequest(ACTOR, KnowledgeSpace.GLOBAL_SPACE_ID,
+                null, UUID.randomUUID(), "告诉我股票行情", null), sink);
+
+        assertThat(sink.events).extracting(ChatEvent::eventType)
+                .containsExactly("conversation.started", "error");
+        assertThat(sink.events).noneMatch(event -> event.eventType().startsWith("answer."));
         verify(store, never()).complete(any(), any(), any(), any(), any(), any());
     }
 

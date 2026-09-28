@@ -11,15 +11,16 @@ import java.util.UUID;
 /**
  * 聊天流请求 DTO。
  *
- * @param spaceId 新会话选择或既有会话校验的知识空间 UUID；兼容窗口允许为空
+ * @param spaceId 新会话必填的知识空间 UUID；既有会话可提供该字段执行一致性校验
  * @param conversationId 首次为空，后续为服务端返回的会话 UUID
  * @param clientMessageId 当前用户消息的幂等 UUID
  * @param message 去除首尾空白后 1 至 4000 字符的消息
  * @param expectedConversationVersion 首次为空，后续为客户端持有的会话版本
  */
 public record ChatStreamRequest(
-        @Schema(description = "新会话选择或既有会话校验的知识空间 UUID；为空时新会话绑定 GLOBAL",
-                example = "00000000-0000-0000-0000-000000000001", nullable = true)
+        @Schema(description = "新会话必填的知识空间 UUID；既有会话可提供该字段执行一致性校验",
+                example = "00000000-0000-0000-0000-000000000001",
+                requiredMode = Schema.RequiredMode.REQUIRED)
         UUID spaceId,
         @Schema(description = "首次为空；后续填写服务端会话 UUID", example = "8e51b6d7-a9a9-4db1-b083-aec0fcfa3881")
         UUID conversationId,

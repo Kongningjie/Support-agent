@@ -83,8 +83,10 @@ class TicketUseCaseTest {
     /** 验证草稿编号格式及同 Key 同请求复用首次工单。 */
     @Test
     void shouldCreateAndReplayDraft() {
-        TicketDetails first = commands.createDraft(ACTOR, null, "启动失败", "无法连接数据库", null, "create-1");
-        TicketDetails replay = commands.createDraft(ACTOR, null, "启动失败", "无法连接数据库", null, "create-1");
+        TicketDetails first = commands.createDraft(ACTOR, KnowledgeSpace.GLOBAL_SPACE_ID,
+                "启动失败", "无法连接数据库", null, "create-1");
+        TicketDetails replay = commands.createDraft(ACTOR, KnowledgeSpace.GLOBAL_SPACE_ID,
+                "启动失败", "无法连接数据库", null, "create-1");
 
         assertEquals("T000000000001", first.ticketNo());
         assertEquals(first.ticketNo(), replay.ticketNo());
@@ -94,17 +96,20 @@ class TicketUseCaseTest {
     /** 验证同一幂等 Key 携带不同请求时返回稳定冲突。 */
     @Test
     void shouldRejectReusedIdempotencyKeyWithDifferentRequest() {
-        commands.createDraft(ACTOR, null, "启动失败", "无法连接数据库", null, "create-1");
+        commands.createDraft(ACTOR, KnowledgeSpace.GLOBAL_SPACE_ID,
+                "启动失败", "无法连接数据库", null, "create-1");
 
         ApplicationException exception = assertThrows(ApplicationException.class,
-                () -> commands.createDraft(ACTOR, null, "另一个问题", "无法连接数据库", null, "create-1"));
+                () -> commands.createDraft(ACTOR, KnowledgeSpace.GLOBAL_SPACE_ID,
+                        "另一个问题", "无法连接数据库", null, "create-1"));
         assertEquals(ErrorCode.COMMON_IDEMPOTENCY_KEY_REUSED, exception.errorCode());
     }
 
     /** 验证解决工单时保存人工结论并以解决后版本创建案例任务。 */
     @Test
     void shouldResolveOpenTicketAndCreateCaseTask() {
-        TicketDetails draft = commands.createDraft(ACTOR, null, "启动失败", "无法连接数据库", null, "create-1");
+        TicketDetails draft = commands.createDraft(ACTOR, KnowledgeSpace.GLOBAL_SPACE_ID,
+                "启动失败", "无法连接数据库", null, "create-1");
         TicketDetails open = commands.submit(ACTOR, draft.ticketNo(), draft.version(), "submit-1");
 
         TicketDetails resolved = commands.resolve(ACTOR, open.ticketNo(), "端口配置错误",
@@ -124,7 +129,8 @@ class TicketUseCaseTest {
     /** 验证草稿修改、提交、关闭及版本冲突使用稳定业务错误。 */
     @Test
     void shouldEnforceTicketStateAndVersion() {
-        TicketDetails draft = commands.createDraft(ACTOR, null, "启动失败", "无法连接数据库", null, "create-1");
+        TicketDetails draft = commands.createDraft(ACTOR, KnowledgeSpace.GLOBAL_SPACE_ID,
+                "启动失败", "无法连接数据库", null, "create-1");
         TicketDetails revised = commands.reviseDraft(ACTOR, draft.ticketNo(), "启动异常",
                 "数据库拒绝连接", "检查了端口", draft.version());
         TicketDetails open = commands.submit(ACTOR, revised.ticketNo(), revised.version(), "submit-1");
@@ -136,6 +142,16 @@ class TicketUseCaseTest {
         ApplicationException exception = assertThrows(ApplicationException.class,
                 () -> commands.reviseDraft(ACTOR, closed.ticketNo(), "标题", "描述", null, 0));
         assertEquals(ErrorCode.TICKET_VERSION_CONFLICT, exception.errorCode());
+    }
+
+    /** 手工建单缺少空间时不得继续静默绑定 GLOBAL。 */
+    @Test
+    void shouldRequireExplicitSpaceForManualDraft() {
+        ApplicationException exception = assertThrows(ApplicationException.class,
+                () -> commands.createDraft(ACTOR, null, "启动失败",
+                        "无法连接数据库", null, "missing-space"));
+
+        assertEquals(ErrorCode.KNOWLEDGE_SPACE_CONTEXT_REQUIRED, exception.errorCode());
     }
 
     /** 为测试中的新建聚合补入模拟数据库生成的内部主键。 */

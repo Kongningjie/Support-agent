@@ -1,10 +1,10 @@
 # Support Agent
 
-基于 Java 21、Spring Boot 4.1、AgentScope Java 和 DashScope 的企业内部技术支持 Agent。当前已完成一期阶段 0～5、二期阶段 6～9、三期阶段 10～17（含阶段 13 补强）、四期阶段 18 和前端阶段 F1～F3，覆盖知识检索与工单闭环、上下文压缩、本地认证、会话生命周期、用户可控长期记忆、账号安全、LLM 输入与输出安全治理、知识空间与成员治理，以及前端认证、聊天、会话、记忆和工单闭环。
+基于 Java 21、Spring Boot 4.1、AgentScope Java 和 DashScope 的企业内部技术支持 Agent。当前已完成一期阶段 0～5、二期阶段 6～9、三期阶段 10～17（含阶段 13 补强）、四期阶段 18～20 和前端阶段 F1～F3S，覆盖知识检索与工单闭环、上下文压缩、本地认证、会话生命周期、用户可控长期记忆、账号安全、LLM 输入与输出安全治理、知识空间权限与隔离评测，以及前端认证、聊天、会话、记忆和工单闭环。
 
 当前实现的完整事实基线见 [当前系统基线](docs/implementation-plan/10-current-system-baseline.md)，历史阶段计划只用于解释当时的范围和决策。[三期 LLM 安全补强计划](docs/implementation-plan/11-phase-3-llm-security-plan.md)的阶段 15～17 已完成规定离线与集成门禁；真实 DashScope 对抗验证仍需单独授权，不能把固定数据集结果表述为在线模型安全率。
 
-产品一期至四期的业务与架构决策统一放在 [冻结方案目录](docs/design-freezes/README.md)。[四期知识空间方案](docs/design-freezes/04-phase-4-knowledge-space.md)已经冻结，[阶段 18～20 实施计划](docs/implementation-plan/12-phase-4-knowledge-space-plan.md)中的阶段 18 已完成，阶段 19～20 待执行。轻量级学习部署已经延期，暂不归属任何期次。
+产品一期至四期的业务与架构决策统一放在 [冻结方案目录](docs/design-freezes/README.md)。[四期知识空间方案](docs/design-freezes/04-phase-4-knowledge-space.md)已经冻结，[阶段 18～20 实施计划](docs/implementation-plan/12-phase-4-knowledge-space-plan.md)已全部完成。轻量级学习部署已经延期，暂不归属任何期次。
 
 ## 核心流程
 

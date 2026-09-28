@@ -472,12 +472,15 @@ class FoundationRepositoryIT {
                 new AsyncTaskCreator(taskRepository, Instant::now), access);
         String key = "integration-ticket-" + UUID.randomUUID();
 
-        TicketDetails first = commandUseCase.createDraft(ACTOR, null, "幂等工单", "相同请求只创建一次",
+        TicketDetails first = commandUseCase.createDraft(ACTOR, KnowledgeSpace.GLOBAL_SPACE_ID,
+                "幂等工单", "相同请求只创建一次",
                 null, key);
-        TicketDetails replayed = commandUseCase.createDraft(ACTOR, null, "幂等工单", "相同请求只创建一次",
+        TicketDetails replayed = commandUseCase.createDraft(ACTOR, KnowledgeSpace.GLOBAL_SPACE_ID,
+                "幂等工单", "相同请求只创建一次",
                 null, key);
         ApplicationException conflict = assertThrows(ApplicationException.class,
-                () -> commandUseCase.createDraft(ACTOR, null, "变更标题", "相同请求只创建一次", null, key));
+                () -> commandUseCase.createDraft(ACTOR, KnowledgeSpace.GLOBAL_SPACE_ID,
+                        "变更标题", "相同请求只创建一次", null, key));
 
         assertEquals(first.ticketNo(), replayed.ticketNo());
         assertEquals(ErrorCode.COMMON_IDEMPOTENCY_KEY_REUSED, conflict.errorCode());
@@ -494,8 +497,8 @@ class FoundationRepositoryIT {
                 queryUseCase, idempotentExecutor, Instant::now,
                 new AsyncTaskCreator(taskRepository, Instant::now), access);
         String suffix = UUID.randomUUID().toString();
-        TicketDetails draft = commandUseCase.createDraft(ACTOR, null, "待解决工单", "连接失败", null,
-                "create-resolve-" + suffix);
+        TicketDetails draft = commandUseCase.createDraft(ACTOR, KnowledgeSpace.GLOBAL_SPACE_ID,
+                "待解决工单", "连接失败", null, "create-resolve-" + suffix);
         TicketDetails open = commandUseCase.submit(ACTOR, draft.ticketNo(), draft.version(),
                 "submit-resolve-" + suffix);
 
@@ -525,8 +528,8 @@ class FoundationRepositoryIT {
         TicketCommandUseCase commandUseCase = new TicketCommandUseCase(ticketRepository,
                 queryUseCase, idempotentExecutor, Instant::now, failingCreator, access);
         String suffix = UUID.randomUUID().toString();
-        TicketDetails draft = commandUseCase.createDraft(ACTOR, null, "事务回滚工单", "连接失败", null,
-                "create-rollback-" + suffix);
+        TicketDetails draft = commandUseCase.createDraft(ACTOR, KnowledgeSpace.GLOBAL_SPACE_ID,
+                "事务回滚工单", "连接失败", null, "create-rollback-" + suffix);
         TicketDetails open = commandUseCase.submit(ACTOR, draft.ticketNo(), draft.version(),
                 "submit-rollback-" + suffix);
         long tasksBefore = taskRepository.count(AsyncTaskType.CASE_GENERATION,

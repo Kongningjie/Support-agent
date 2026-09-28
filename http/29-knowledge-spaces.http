@@ -86,3 +86,15 @@ Content-Type: application/json
 {
   "expectedVersion": 0
 }
+
+### 撤权即时收敛验证
+# 1. 先使用 userToken 成功读取该受限空间并开始一次会话。
+# 2. 使用上面的 DELETE 撤销该用户成员关系。
+# 3. 再次读取空间或新建 Chat，必须返回 404 或安全 SSE error，且不得发送 answer.delta。
+GET {{baseUrl}}/api/v1/knowledge-spaces/{{spaceId}}
+Authorization: Bearer {{userToken}}
+
+### 空间停用即时收敛验证
+# 执行 disable 后，普通用户空间列表不得再包含该空间，新 Chat、检索、知识写入和工单创建必须失败。
+GET {{baseUrl}}/api/v1/knowledge-spaces?page=1&size=100
+Authorization: Bearer {{userToken}}

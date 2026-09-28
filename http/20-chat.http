@@ -1,4 +1,6 @@
 @globalSpaceId = 00000000-0000-0000-0000-000000000001
+@restrictedSpaceId = replace-with-readable-restricted-space-uuid
+@unauthorizedSpaceId = replace-with-unreadable-space-uuid
 
 ### 首次技术支持对话；clientMessageId 每次测试需更换
 POST http://localhost:8080/api/v1/chat/stream
@@ -12,6 +14,27 @@ Content-Type: application/json
   "message": "MySQL 连接超时应该如何排查？",
   "expectedConversationVersion": null
 }
+
+### 缺少 spaceId；阶段 20 必须返回 KNOWLEDGE_SPACE_CONTEXT_REQUIRED
+POST http://localhost:8080/api/v1/chat/stream
+Accept: text/event-stream
+Content-Type: application/json
+
+{"clientMessageId":"11111111-1111-1111-1111-111111111112","message":"验证空间必填"}
+
+### 受限空间会话；先为当前用户授予至少 READER
+POST http://localhost:8080/api/v1/chat/stream
+Accept: text/event-stream
+Content-Type: application/json
+
+{"spaceId":"{{restrictedSpaceId}}","clientMessageId":"11111111-1111-1111-1111-111111111113","message":"查询当前空间排障知识"}
+
+### 无权空间防枚举；不得返回空间名称、代码、标题、成员或命中数
+POST http://localhost:8080/api/v1/chat/stream
+Accept: text/event-stream
+Content-Type: application/json
+
+{"spaceId":"{{unauthorizedSpaceId}}","clientMessageId":"11111111-1111-1111-1111-111111111114","message":"查询受限知识"}
 
 ### 问候分支
 POST http://localhost:8080/api/v1/chat/stream

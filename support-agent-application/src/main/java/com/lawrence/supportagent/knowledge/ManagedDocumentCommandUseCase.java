@@ -10,7 +10,6 @@ import com.lawrence.supportagent.idempotency.IdempotencyCommand;
 import com.lawrence.supportagent.idempotency.IdempotentExecutor;
 import com.lawrence.supportagent.idempotency.IdempotentResource;
 import com.lawrence.supportagent.idempotency.RequestFingerprint;
-import com.lawrence.supportagent.knowledgespace.KnowledgeSpace;
 import com.lawrence.supportagent.knowledgespace.KnowledgeSpaceAccessService;
 import com.lawrence.supportagent.knowledgespace.SpaceRole;
 import com.lawrence.supportagent.knowledge.port.ManagedDocumentRepository;
@@ -67,7 +66,7 @@ public class ManagedDocumentCommandUseCase {
     public ManagedDocumentDetails createText(AuthenticatedUser actor, UUID requestedSpaceId,
                                              String title, String content,
                                              String idempotencyKey) {
-        UUID spaceId = compatibleSpaceId(requestedSpaceId);
+        UUID spaceId = requireSpaceId(requestedSpaceId);
         spaceAccess.requireRole(actor, spaceId, SpaceRole.EDITOR);
         String normalizedTitle = required(title, "文档标题", 160);
         DocumentContent normalizedContent = contentPolicy.normalizeDirectText(content);
@@ -85,7 +84,7 @@ public class ManagedDocumentCommandUseCase {
                                               String requestedTitle, String originalFileName,
                                               String declaredMediaType, byte[] bytes,
                                               String idempotencyKey) {
-        UUID spaceId = compatibleSpaceId(requestedSpaceId);
+        UUID spaceId = requireSpaceId(requestedSpaceId);
         spaceAccess.requireRole(actor, spaceId, SpaceRole.EDITOR);
         FileMetadata metadata = fileMetadata(requestedTitle, originalFileName, declaredMediaType);
         DocumentContent normalizedContent = contentPolicy.decodeUploadedFile(bytes);
@@ -261,9 +260,13 @@ public class ManagedDocumentCommandUseCase {
         }
     }
 
-    /** 在阶段 19 兼容窗口把缺失空间显式绑定到 GLOBAL。 */
-    private UUID compatibleSpaceId(UUID requestedSpaceId) {
-        return requestedSpaceId == null ? KnowledgeSpace.GLOBAL_SPACE_ID : requestedSpaceId;
+    /** 要求正式客户端显式提供文档业务域，禁止继续静默绑定 GLOBAL。 */
+    private UUID requireSpaceId(UUID requestedSpaceId) {
+        if (requestedSpaceId == null) {
+            throw new ApplicationException(ErrorCode.KNOWLEDGE_SPACE_CONTEXT_REQUIRED,
+                    "创建知识草稿必须选择知识空间");
+        }
+        return requestedSpaceId;
     }
 
     /** 幂等重放前重新验证当前空间角色并返回真实空间摘要。 */

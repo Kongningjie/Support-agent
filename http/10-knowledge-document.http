@@ -1,5 +1,6 @@
 @baseUrl = http://localhost:8080/api/v1
 @globalSpaceId = 00000000-0000-0000-0000-000000000001
+@restrictedSpaceId = replace-with-editor-restricted-space-uuid
 
 ### 直接文本创建知识草稿；响应 documentId 为字符串
 # @name createKnowledgeText
@@ -14,6 +15,27 @@ Content-Type: application/json
 }
 
 > {% client.global.set("documentId", response.body.data.documentId); client.global.set("documentVersion", response.body.data.version); %}
+
+### 缺少 spaceId；阶段 20 必须返回 KNOWLEDGE_SPACE_CONTEXT_REQUIRED
+POST {{baseUrl}}/knowledge/documents/text
+Content-Type: application/json
+
+{
+  "title": "验证知识草稿空间必填",
+  "content": "该请求故意省略空间。",
+  "idempotencyKey": "knowledge-missing-space-001"
+}
+
+### 在受限空间创建草稿；当前用户至少需要 EDITOR
+POST {{baseUrl}}/knowledge/documents/text
+Content-Type: application/json
+
+{
+  "spaceId": "{{restrictedSpaceId}}",
+  "title": "受限空间测试知识",
+  "content": "仅用于验证空间化知识治理。",
+  "idempotencyKey": "knowledge-restricted-space-001"
+}
 
 ### 上传单个 Markdown 文件；title 留空时使用文件名主体
 # @name uploadKnowledgeFile

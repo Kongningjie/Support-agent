@@ -33,6 +33,18 @@ import org.junit.jupiter.api.Test;
 
 /** 验证托管文档文件导入元数据和创建期安全门禁。 */
 class ManagedDocumentCommandUseCaseTest {
+
+    /** 新建知识草稿缺少空间时必须返回稳定契约错误。 */
+    @Test
+    void shouldRequireExplicitSpaceForKnowledgeDraft() {
+        ManagedDocumentCommandUseCase useCase = useCase();
+
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> useCase.createText(
+                        ACTOR, null, "配置", "普通正文", "missing-space"))
+                .isInstanceOfSatisfying(ApplicationException.class, exception ->
+                        assertEquals(ErrorCode.KNOWLEDGE_SPACE_CONTEXT_REQUIRED,
+                                exception.errorCode()));
+    }
     private static final Instant NOW = Instant.parse("2026-09-07T01:00:00Z");
     private static final AuthenticatedUser ACTOR = new AuthenticatedUser(
             UUID.randomUUID(), "tester", UserRole.ADMIN);
@@ -42,7 +54,7 @@ class ManagedDocumentCommandUseCaseTest {
     void shouldDeriveTitleAndMediaTypeFromMarkdownFileName() {
         ManagedDocumentCommandUseCase useCase = useCase();
 
-        ManagedDocumentDetails result = useCase.createFile(ACTOR, null, null,
+        ManagedDocumentDetails result = useCase.createFile(ACTOR, KnowledgeSpace.GLOBAL_SPACE_ID, null,
                 "C:\\upload\\排障手册.md",
                 "text/markdown", "# 排障\n检查连接".getBytes(StandardCharsets.UTF_8), "file-001");
 
@@ -57,9 +69,11 @@ class ManagedDocumentCommandUseCaseTest {
     void shouldRejectUnsupportedOrMismatchedFile() {
         ManagedDocumentCommandUseCase useCase = useCase();
 
-        assertThrows(IllegalArgumentException.class, () -> useCase.createFile(ACTOR, null, null,
+        assertThrows(IllegalArgumentException.class, () -> useCase.createFile(
+                ACTOR, KnowledgeSpace.GLOBAL_SPACE_ID, null,
                 "manual.pdf", "application/pdf", "text".getBytes(StandardCharsets.UTF_8), "file-002"));
-        assertThrows(IllegalArgumentException.class, () -> useCase.createFile(ACTOR, null, null,
+        assertThrows(IllegalArgumentException.class, () -> useCase.createFile(
+                ACTOR, KnowledgeSpace.GLOBAL_SPACE_ID, null,
                 "manual.txt", "application/json", "text".getBytes(StandardCharsets.UTF_8), "file-003"));
     }
 
@@ -69,7 +83,7 @@ class ManagedDocumentCommandUseCaseTest {
         ManagedDocumentCommandUseCase useCase = useCase();
 
         ApplicationException exception = assertThrows(ApplicationException.class,
-                () -> useCase.createText(ACTOR, null, "配置",
+                () -> useCase.createText(ACTOR, KnowledgeSpace.GLOBAL_SPACE_ID, "配置",
                         "password=super-secret-value", "text-001"));
 
         assertEquals(ErrorCode.KNOWLEDGE_SENSITIVE_CONTENT, exception.errorCode());

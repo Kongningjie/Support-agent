@@ -63,7 +63,8 @@ class ChatUseCasePromptSecurityTest {
         ChatUseCase useCase = useCase(store, retrieval, model, mock(TicketQueryUseCase.class));
         RecordingSink sink = new RecordingSink();
 
-        useCase.stream(new ChatRequest(ACTOR, null, UUID.randomUUID(),
+        useCase.stream(new ChatRequest(ACTOR, KnowledgeSpace.GLOBAL_SPACE_ID,
+                null, UUID.randomUUID(),
                 "Redis 连接报错怎么处理？", null), sink);
 
         verify(model, never()).groundedAnswer(any(), any(), any(),
@@ -87,7 +88,8 @@ class ChatUseCasePromptSecurityTest {
                 BranchStatus.SUCCEEDED, List.of(injected), List.of(injected), 10));
         ChatUseCase useCase = useCase(store, retrieval, model, mock(TicketQueryUseCase.class));
 
-        useCase.stream(new ChatRequest(ACTOR, null, UUID.randomUUID(),
+        useCase.stream(new ChatRequest(ACTOR, KnowledgeSpace.GLOBAL_SPACE_ID,
+                null, UUID.randomUUID(),
                 "Redis 连接报错怎么处理？", null), new RecordingSink());
 
         verify(model, never()).groundedAnswer(any(), any(), any(),
@@ -111,7 +113,8 @@ class ChatUseCasePromptSecurityTest {
                 new ModelAnswer("工单仍在处理中。", "ticket-v1"));
         ChatUseCase useCase = useCase(store, retrieval, model, tickets);
 
-        useCase.stream(new ChatRequest(ACTOR, null, UUID.randomUUID(),
+        useCase.stream(new ChatRequest(ACTOR, KnowledgeSpace.GLOBAL_SPACE_ID,
+                null, UUID.randomUUID(),
                 "查询 T123456789012", null), new RecordingSink());
 
         ArgumentCaptor<TicketDetails> captured = ArgumentCaptor.forClass(TicketDetails.class);

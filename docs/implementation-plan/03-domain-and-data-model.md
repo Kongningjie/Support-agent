@@ -357,3 +357,36 @@ Redis 会话当前包含 `ownerUserId`、`generation`、结构化滚动摘要、
 Redis 认证只保存 Token SHA-256 和用户 Token ZSET 索引。Token 固定有效期为 2 小时，每用户最多 5 个有效 Token；登录失败键只保存用户名或客户端来源的不可逆哈希、失败次数和锁定截止时间。
 
 `security_event` 不保存用户名、密码、原始 Token、Token 哈希或请求正文。`user_memory` 候选必须由用户确认后才能注入；每用户最多保留 100 条未永久删除的记忆。
+
+## 14. 四期知识空间数据模型
+
+### 14.1 知识空间 `knowledge_space`
+
+| 字段 | 可空 | 含义与约束 |
+|---|---:|---|
+| `id` | 否 | MySQL 内部自增主键，不通过 API 暴露 |
+| `space_id` | 否 | 空间公开 UUID，创建后不可变；`GLOBAL` 固定为 `00000000-0000-0000-0000-000000000001` |
+| `code` | 否 | 企业内唯一稳定代码，匹配 `[A-Z][A-Z0-9_-]{1,63}`，创建后不可修改 |
+| `name` | 否 | 用户可见名称，最长 100 字符 |
+| `description` | 是 | 空间用途和知识边界说明，最长 500 字符 |
+| `visibility` | 否 | `ENTERPRISE` 表示活动用户可读，`RESTRICTED` 表示依赖活动成员关系 |
+| `status` | 否 | `ACTIVE` 或 `DISABLED`；停用后新请求立即拒绝 |
+| `system_space` | 否 | 是否为系统空间；四期仅 `GLOBAL=true` 且不可修改或停用 |
+| `version` | 否 | 修改、停用和启用使用的乐观锁版本 |
+| `created_by/created_at` | 否 | 创建操作者和 UTC 时间 |
+| `updated_by/updated_at` | 否 | 最近修改操作者和 UTC 时间 |
+
+### 14.2 空间成员 `user_space_membership`
+
+| 字段 | 可空 | 含义与约束 |
+|---|---:|---|
+| `user_id` | 否 | 成员的公开用户 UUID |
+| `space_id` | 否 | 所属空间公开 UUID；同一用户和空间最多一行 |
+| `role` | 否 | `READER` 可读、`EDITOR` 可维护知识、`MANAGER` 可治理成员和发布知识 |
+| `status` | 否 | `ACTIVE` 或 `REVOKED`；撤销后新请求立即失效 |
+| `version` | 否 | 改角色、恢复或撤销使用的乐观锁版本 |
+| `created_by/created_at` | 否 | 首次建立关系的操作者和 UTC 时间 |
+| `updated_by/updated_at` | 否 | 最近修改操作者和 UTC 时间 |
+| `revoked_by/revoked_at` | 是 | 仅 `REVOKED` 时必填的撤销审计信息 |
+
+`managed_document.space_id`、`ticket.space_id` 和 `resolved_case.space_id` 均为非空外键；案例必须继承来源工单空间。Redis 会话保存 `spaceId`，历史无该字段的会话只在原 7 天 TTL 内按 `GLOBAL` 兼容读取，新会话不再允许缺省空间。Elasticsearch v2 分块保存 `spaceId` 并在 BM25、向量、回查和来源详情阶段重复过滤。

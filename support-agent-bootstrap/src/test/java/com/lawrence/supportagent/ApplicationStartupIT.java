@@ -61,7 +61,7 @@ class ApplicationStartupIT {
     private ObjectMapper objectMapper;
     @Autowired
     private UserMemoryRepository userMemoryRepository;
-    private volatile String adminToken;
+    private static volatile String adminToken;
 
     /** 把 Testcontainers MySQL 连接信息注入完整应用。 */
     @DynamicPropertySource
@@ -86,9 +86,10 @@ class ApplicationStartupIT {
                         URI.create("http://127.0.0.1:" + serverPort + "/api/v1/chat/stream"))
                 .header("Accept", "text/event-stream")
                 .header("Content-Type", "application/json")
-                .header("Authorization", "Bearer " + accessToken())
+                        .header("Authorization", "Bearer " + accessToken())
                 .POST(HttpRequest.BodyPublishers.ofString("""
-                        {"clientMessageId":"%s","message":"告诉我今天的股票行情"}
+                        {"spaceId":"00000000-0000-0000-0000-000000000001",
+                         "clientMessageId":"%s","message":"告诉我今天的股票行情"}
                         """.formatted(UUID.randomUUID())))
                 .build();
 
@@ -109,8 +110,10 @@ class ApplicationStartupIT {
     void shouldManageAuthenticatedConversationLifecycle() throws Exception {
         HttpClient client = HttpClient.newHttpClient();
         HttpResponse<String> streamed = send(client, "POST", "/api/v1/chat/stream", """
-                {"clientMessageId":"%s","message":"告诉我今天的股票行情"}
+                {"spaceId":"00000000-0000-0000-0000-000000000001",
+                 "clientMessageId":"%s","message":"告诉我今天的股票行情"}
                 """.formatted(UUID.randomUUID()), accessToken());
+        assertEquals(200, streamed.statusCode(), streamed.body());
         var matcher = java.util.regex.Pattern.compile("\\\"conversationId\\\":\\\"([0-9a-f-]{36})\\\"")
                 .matcher(streamed.body());
         assertTrue(matcher.find());
@@ -231,11 +234,13 @@ class ApplicationStartupIT {
         HttpClient client = HttpClient.newHttpClient();
         String createKey = "startup-it-create-" + UUID.randomUUID();
         String createBody = """
-                {"title":"启动失败","problemDescription":"无法连接数据库",
+                {"spaceId":"00000000-0000-0000-0000-000000000001",
+                "title":"启动失败","problemDescription":"无法连接数据库",
                 "attemptedActions":"已检查端口","idempotencyKey":"%s"}
                 """.formatted(createKey);
         HttpResponse<String> created = sendJson(client, "POST", "/api/v1/tickets/drafts", createBody);
         HttpResponse<String> replayed = sendJson(client, "POST", "/api/v1/tickets/drafts", createBody);
+        assertEquals(201, created.statusCode(), created.body());
         JsonNode createdJson = objectMapper.readTree(created.body());
         JsonNode replayedJson = objectMapper.readTree(replayed.body());
         String ticketNo = createdJson.path("data").path("ticketNo").stringValue();
@@ -286,12 +291,14 @@ class ApplicationStartupIT {
         String key = "startup-it-knowledge-" + UUID.randomUUID();
         String content = "唯一正文-" + UUID.randomUUID();
         String createBody = """
-                {"title":"MySQL 排障","content":"%s","idempotencyKey":"%s"}
+                {"spaceId":"00000000-0000-0000-0000-000000000001",
+                "title":"MySQL 排障","content":"%s","idempotencyKey":"%s"}
                 """.formatted(content, key);
         HttpResponse<String> created = sendJson(client, "POST",
                 "/api/v1/knowledge/documents/text", createBody);
         HttpResponse<String> replayed = sendJson(client, "POST",
                 "/api/v1/knowledge/documents/text", createBody);
+        assertEquals(201, created.statusCode(), created.body());
         JsonNode createdJson = objectMapper.readTree(created.body()).path("data");
         String documentId = createdJson.path("documentId").stringValue();
 
@@ -425,10 +432,16 @@ class ApplicationStartupIT {
 
     /** 返回缓存的管理员 Token，首次使用时通过公开登录接口获取。 */
     private String accessToken() throws IOException, InterruptedException {
-        if (adminToken == null) {
-            adminToken = login(ADMIN_USERNAME, ADMIN_PASSWORD);
+        String cached = adminToken;
+        if (cached != null) {
+            return cached;
         }
-        return adminToken;
+        synchronized (ApplicationStartupIT.class) {
+            if (adminToken == null) {
+                adminToken = login(ADMIN_USERNAME, ADMIN_PASSWORD);
+            }
+            return adminToken;
+        }
     }
 
     /** 使用用户名密码登录并返回一次性原始 Bearer Token。 */

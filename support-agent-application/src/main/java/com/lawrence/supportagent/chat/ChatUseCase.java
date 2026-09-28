@@ -5,6 +5,7 @@ import com.lawrence.supportagent.chat.port.ConversationStorePort;
 import com.lawrence.supportagent.chat.port.ConversationStorePort.BeginResult;
 import com.lawrence.supportagent.chat.port.ConversationStorePort.Citation;
 import com.lawrence.supportagent.chat.port.ConversationStorePort.CompletedTurn;
+import com.lawrence.supportagent.auth.AuthenticatedUser;
 import com.lawrence.supportagent.model.ChatModelPort;
 import com.lawrence.supportagent.model.ChatModelPort.ModelAnswer;
 import com.lawrence.supportagent.model.ModelInvocationSecurity;
@@ -248,10 +249,14 @@ public class ChatUseCase {
         return new PreparedChat(normalized, runId, begin, accessContext);
     }
 
-    /** 解析新会话或既有会话的活动空间，并在历史兼容窗口使用 GLOBAL。 */
+    /** 解析新会话或既有会话的活动空间；新会话必须显式提供空间。 */
     private UUID resolveActiveSpace(ChatRequest request) {
         if (request.conversationId() == null) {
-            return request.spaceId() == null ? KnowledgeSpace.GLOBAL_SPACE_ID : request.spaceId();
+            if (request.spaceId() == null) {
+                throw new ApplicationException(ErrorCode.KNOWLEDGE_SPACE_CONTEXT_REQUIRED,
+                        "新会话必须选择知识空间");
+            }
+            return request.spaceId();
         }
         UUID storedSpaceId = conversations.lifecycleDetails(request.actor().userId(), false,
                 request.conversationId(), 0, time.now()).spaceId();
@@ -307,6 +312,7 @@ public class ChatUseCase {
                     outcome.retrievalStatus, outcome.citations, outcome.suggestionId,
                     suggestionContext(request.message(), context), outcome.resultStatus,
                     time.now(), begin.version() + 1);
+            revalidateBeforeAnswer(request.actor(), prepared.accessContext());
             emitAnswerBody(ownerUserId, sink, begin.conversationId(), runId, pending, started);
             Long suggestionSequence = pending.suggestionId() == null ? null
                     : conversations.nextSequence(ownerUserId, begin.conversationId(), runId);
@@ -350,6 +356,20 @@ public class ChatUseCase {
             conversations.fail(ownerUserId, begin.conversationId(), runId, time.now());
             audits.fail(runId, "FAILED", code, elapsed(started), time.now());
             telemetry.recordDuration(Operation.CHAT_REQUEST, elapsed(started), false);
+        }
+    }
+
+    /** 在任何正文或引用发送前重新读取当前账号、空间和成员事实，权限变化时失败关闭。 */
+    private void revalidateBeforeAnswer(AuthenticatedUser actor,
+                                        RetrievalAccessContext accessContext) {
+        if (spaceAccess == null) {
+            return;
+        }
+        RetrievalAccessContext current = spaceAccess.retrievalContext(
+                actor, accessContext.activeSpaceId());
+        if (!current.allowedSpaceIds().equals(accessContext.allowedSpaceIds())) {
+            throw new ApplicationException(ErrorCode.KNOWLEDGE_SPACE_NOT_FOUND,
+                    "知识空间不可访问");
         }
     }
 

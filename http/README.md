@@ -6,3 +6,4 @@
 
 按 `00` 到 `60` 的编号顺序验证完整闭环。需要认证的文件必须把 Token 占位符替换为登录接口返回的临时 Bearer Token。`29-knowledge-spaces.http` 中的 UUID 和版本号应使用前序响应真实值。案例生成和知识发布由异步 Worker 完成，调用后应通过
 `50-async-task.http` 查询任务状态。`60-retrieval-evaluation.http` 只适用于 `dev/test` Profile。
+阶段 20 的 `10`、`20`、`29`、`30` 示例还覆盖显式空间必填、受限空间、越权防枚举、成员撤权和空间停用；占位 UUID 必须替换为本地真实测试空间，禁止填写生产标识或凭据。

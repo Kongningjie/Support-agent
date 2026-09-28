@@ -213,3 +213,12 @@ JaCoCo 生成报告但一期不设全局硬覆盖率。状态迁移、幂等、�
 - 指标前缀为 `support.agent.security`，记录 Prompt 评估、上下文排除、输出评估、完整重生成和最终拒绝。标签只允许 `source/action/signal/branch/rule`，未知输出规则折叠为固定 `NONE`，禁止业务标识、正文、随机标记和错误详情。
 - 安全策略异常执行失败关闭：输入预检异常不创建会话或调用模型；输出策略异常不外发、不提交会话且不持久化业务草稿。安全策略不参与 readiness，生产安全配置非法仍按既有规则启动失败。
 - 本阶段未运行 `mvn verify -Ponline-test`。固定数据集结果只证明本地策略与应用链路；真实 DashScope 对抗表现必须取得单独授权后验证。
+
+## 15. 四期空间治理、评测与恢复
+
+- 空间权限每个新请求从 MySQL 当前事实计算；成员撤销、角色降低、用户禁用和空间停用不等待 Token 或缓存过期。
+- `support.agent.knowledge.space.access` 只使用动作、允许/拒绝、要求角色、可见性、是否 `GLOBAL` 和冻结拒绝原因标签；`support.agent.knowledge.space.retrieval` 只记录允许空间数量区间；`support.agent.knowledge.index.rebuild` 只记录成功或失败。标签禁止出现空间、用户、会话或正文标识。
+- `SPACE_ACCESS_DECISION` 安全事件覆盖允许和拒绝结果，资源字段只保存空间 UUID；不保存空间名称、成员列表、查询、知识或模型正文。
+- 固定数据位于 `support-agent-infrastructure/src/main/resources/evaluation/knowledge-space-cases.jsonl`。动态报告写入 `target/knowledge-space-evaluation/`，字段表示总用例数、各类跨空间泄漏数、撤权拒绝率、Recall@5、无命中准确率、精确词召回率、防枚举泄漏数、失败稳定编号和最终结论。
+- 运维手册见 `docs/operations/knowledge-space-runbook.md`；`deploy/verify-knowledge-space-consistency.ps1` 只读比对 MySQL 已发布来源与 Elasticsearch 的来源版本、空间和分块数量，不提供修数能力。
+- 数据库迁移不回退。应用兼容回滚窗口和旧索引至少保留 7 天，别名仅在新索引完整性核对通过后切换；历史无空间 Redis 会话依赖原 7 天 TTL 自然退出。

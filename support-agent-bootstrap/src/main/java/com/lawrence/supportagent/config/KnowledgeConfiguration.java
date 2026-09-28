@@ -17,6 +17,7 @@ import com.lawrence.supportagent.knowledge.ManagedDocumentQueryUseCase;
 import com.lawrence.supportagent.knowledge.port.KnowledgeIndexPort;
 import com.lawrence.supportagent.knowledge.port.ManagedDocumentRepository;
 import com.lawrence.supportagent.knowledgespace.KnowledgeSpaceAccessService;
+import com.lawrence.supportagent.knowledgespace.KnowledgeSpaceTelemetryPort;
 import com.lawrence.supportagent.knowledgespace.port.KnowledgeSpaceRepository;
 import com.lawrence.supportagent.model.DashScopeEmbeddingModelAdapter;
 import com.lawrence.supportagent.model.EmbeddingModelPort;
@@ -121,9 +122,9 @@ public class KnowledgeConfiguration {
             ManagedDocumentRepository documents, ResolvedCaseRepository cases,
             KnowledgeSpaceRepository spaces, DocumentChunker chunker,
             EmbeddingModelPort embeddings, KnowledgeIndexRebuildPort index,
-            TimeProvider time) {
+            TimeProvider time, KnowledgeSpaceTelemetryPort telemetry) {
         return new KnowledgeIndexRebuildUseCase(documents, cases, spaces, chunker,
-                embeddings, index, time);
+                embeddings, index, time, telemetry);
     }
 
     /** 注册托管文档异步索引任务处理器。 */

@@ -169,15 +169,16 @@ public class TicketController {
     /**
      * 手工创建工单草稿请求。
      *
-     * @param spaceId 问题所属空间；阶段 19 兼容窗口内为空时使用 GLOBAL
+     * @param spaceId 必填的问题所属空间 UUID
      * @param title 工单标题，去除首尾空白后 1～160 字符
      * @param problemDescription 问题现象和背景，1～8000 字符
      * @param attemptedActions 用户已尝试的操作和结果，可为空，最大 8000 字符
      * @param idempotencyKey 客户端生成的操作幂等键，1～160 字符
      */
     public record CreateDraftRequest(
-            @Schema(description = "问题所属知识空间 UUID；为空时兼容绑定 GLOBAL",
-                    example = "00000000-0000-0000-0000-000000000001", nullable = true)
+            @Schema(description = "必填的问题所属知识空间 UUID",
+                    example = "00000000-0000-0000-0000-000000000001",
+                    requiredMode = Schema.RequiredMode.REQUIRED)
             UUID spaceId,
             @Schema(description = "必填工单标题，去除首尾空白后 1～160 字符",
                     example = "应用启动时报数据库连接失败")

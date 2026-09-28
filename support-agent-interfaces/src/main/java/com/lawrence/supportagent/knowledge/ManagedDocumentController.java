@@ -6,6 +6,7 @@ import com.lawrence.supportagent.sharedkernel.api.ApiResponseFactory;
 import com.lawrence.supportagent.sharedkernel.api.ApiResult;
 import com.lawrence.supportagent.sharedkernel.api.PageResult;
 import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.Parameter;
 import io.swagger.v3.oas.annotations.media.Schema;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
@@ -68,6 +69,7 @@ public class ManagedDocumentController {
     @PostMapping(path = "/files", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     public ResponseEntity<ApiResult<DocumentResponse>> createFile(
             @AuthenticationPrincipal AuthenticatedUser actor,
+            @Parameter(description = "必填的目标知识空间 UUID", required = true)
             @RequestPart(required = false) UUID spaceId,
             @RequestPart(required = false) String title,
             @RequestPart @NotNull MultipartFile file,
@@ -157,14 +159,15 @@ public class ManagedDocumentController {
     /**
      * 直接文本创建请求。
      *
-     * @param spaceId 目标知识空间 UUID；阶段 19 兼容窗口内为空时使用 GLOBAL
+     * @param spaceId 必填的目标知识空间 UUID
      * @param title 文档标题，去除首尾空白后 1～160 字符
      * @param content UTF-8 文本正文，规范化后非空且最大 1 MiB
      * @param idempotencyKey 本次创建操作的幂等键
      */
     public record CreateTextRequest(
-            @Schema(description = "目标知识空间 UUID；为空时兼容绑定 GLOBAL",
-                    example = "00000000-0000-0000-0000-000000000001", nullable = true)
+            @Schema(description = "必填的目标知识空间 UUID",
+                    example = "00000000-0000-0000-0000-000000000001",
+                    requiredMode = Schema.RequiredMode.REQUIRED)
             UUID spaceId,
             @Schema(description = "文档标题", example = "MySQL 连接故障排查")
             @NotBlank @Size(max = 160) String title,

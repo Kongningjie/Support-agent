@@ -129,7 +129,8 @@ class ChatUseCaseOutputSecurityTest {
 
     /** 创建稳定的问候请求。 */
     private ChatRequest request() {
-        return new ChatRequest(ACTOR, null, UUID.randomUUID(), "你好", null);
+        return new ChatRequest(ACTOR, KnowledgeSpace.GLOBAL_SPACE_ID,
+                null, UUID.randomUUID(), "你好", null);
     }
 
     /** 提取客户端实际看见的答案片段。 */

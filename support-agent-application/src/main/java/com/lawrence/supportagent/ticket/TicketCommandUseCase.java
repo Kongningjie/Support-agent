@@ -8,7 +8,6 @@ import com.lawrence.supportagent.idempotency.IdempotencyCommand;
 import com.lawrence.supportagent.idempotency.IdempotentExecutor;
 import com.lawrence.supportagent.idempotency.IdempotentResource;
 import com.lawrence.supportagent.idempotency.RequestFingerprint;
-import com.lawrence.supportagent.knowledgespace.KnowledgeSpace;
 import com.lawrence.supportagent.knowledgespace.KnowledgeSpaceAccessService;
 import com.lawrence.supportagent.sharedkernel.error.ApplicationException;
 import com.lawrence.supportagent.sharedkernel.error.ErrorCode;
@@ -47,7 +46,7 @@ public class TicketCommandUseCase {
                                      String title, String problemDescription,
                                      String attemptedActions, String idempotencyKey) {
         requireActor(actor);
-        UUID spaceId = compatibleSpaceId(requestedSpaceId);
+        UUID spaceId = requireSpaceId(requestedSpaceId);
         spaceAccess.requireActiveReadable(actor, spaceId);
         String normalizedTitle = required(title, "工单标题", 160);
         String normalizedProblem = required(problemDescription, "问题描述", 8000);
@@ -178,9 +177,13 @@ public class TicketCommandUseCase {
         }
     }
 
-    /** 在阶段 19 兼容窗口把缺失空间显式绑定到 GLOBAL。 */
-    private UUID compatibleSpaceId(UUID requestedSpaceId) {
-        return requestedSpaceId == null ? KnowledgeSpace.GLOBAL_SPACE_ID : requestedSpaceId;
+    /** 要求正式客户端显式提供工单业务域，禁止继续静默绑定 GLOBAL。 */
+    private UUID requireSpaceId(UUID requestedSpaceId) {
+        if (requestedSpaceId == null) {
+            throw new ApplicationException(ErrorCode.KNOWLEDGE_SPACE_CONTEXT_REQUIRED,
+                    "手工创建工单必须选择知识空间");
+        }
+        return requestedSpaceId;
     }
 
     /** 校验并规整必填文本。 */
