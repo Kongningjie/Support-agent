@@ -9,6 +9,7 @@ const router = useRouter()
 const auth = useAuthStore()
 const collapsed = ref(false)
 const displayName = computed(() => auth.user?.displayName || auth.user?.username || '当前用户')
+const evaluationEnabled = import.meta.env.VITE_ENABLE_EVALUATION === 'true'
 
 /** 注销当前 Token 并返回登录页。 */
 async function handleLogout(): Promise<void> {
@@ -56,6 +57,26 @@ async function handleLogout(): Promise<void> {
           <RouterLink class="nav-item" to="/admin/users">
             <span aria-hidden="true">◇</span>
             <span v-if="!collapsed">用户治理</span>
+          </RouterLink>
+          <RouterLink class="nav-item" to="/admin/knowledge-spaces">
+            <span aria-hidden="true">▦</span>
+            <span v-if="!collapsed">知识空间</span>
+          </RouterLink>
+          <RouterLink class="nav-item" to="/admin/knowledge">
+            <span aria-hidden="true">▥</span>
+            <span v-if="!collapsed">知识治理</span>
+          </RouterLink>
+          <RouterLink class="nav-item" to="/admin/resolved-cases">
+            <span aria-hidden="true">▧</span>
+            <span v-if="!collapsed">案例治理</span>
+          </RouterLink>
+          <RouterLink class="nav-item" to="/admin/async-tasks">
+            <span aria-hidden="true">⌁</span>
+            <span v-if="!collapsed">异步任务</span>
+          </RouterLink>
+          <RouterLink v-if="evaluationEnabled" class="nav-item" to="/admin/evaluations">
+            <span aria-hidden="true">◎</span>
+            <span v-if="!collapsed">本地评测</span>
           </RouterLink>
         </template>
       </nav>

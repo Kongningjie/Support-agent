@@ -74,9 +74,43 @@ export const router = createRouter({
     {
       path: '/admin/users',
       name: 'admin-users',
-      component: () => import('@/views/shell/AdminAccessView.vue'),
+      component: () => import('@/views/user-admin/AdminUsersView.vue'),
       meta: { requiresAuth: true, requiresAdmin: true },
     },
+    {
+      path: '/admin/knowledge-spaces',
+      name: 'admin-knowledge-spaces',
+      component: () => import('@/views/knowledge-space/KnowledgeSpaceAdminView.vue'),
+      meta: { requiresAuth: true, requiresAdmin: true },
+    },
+    {
+      path: '/admin/knowledge',
+      name: 'admin-knowledge',
+      component: () => import('@/views/knowledge/KnowledgeAdminView.vue'),
+      meta: { requiresAuth: true, requiresAdmin: true },
+    },
+    {
+      path: '/admin/resolved-cases',
+      name: 'admin-resolved-cases',
+      component: () => import('@/views/resolved-case/ResolvedCaseAdminView.vue'),
+      meta: { requiresAuth: true, requiresAdmin: true },
+    },
+    {
+      path: '/admin/async-tasks',
+      name: 'admin-async-tasks',
+      component: () => import('@/views/async-task/AsyncTaskAdminView.vue'),
+      meta: { requiresAuth: true, requiresAdmin: true },
+    },
+    ...(import.meta.env.VITE_ENABLE_EVALUATION === 'true'
+      ? [
+          {
+            path: '/admin/evaluations',
+            name: 'admin-evaluations',
+            component: () => import('@/views/evaluation/EvaluationAdminView.vue'),
+            meta: { requiresAuth: true, requiresAdmin: true },
+          },
+        ]
+      : []),
     {
       path: '/forbidden',
       name: 'forbidden',

@@ -70,10 +70,10 @@ public class ManagedDocumentController {
     public ResponseEntity<ApiResult<DocumentResponse>> createFile(
             @AuthenticationPrincipal AuthenticatedUser actor,
             @Parameter(description = "必填的目标知识空间 UUID", required = true)
-            @RequestPart(required = false) UUID spaceId,
-            @RequestPart(required = false) String title,
+            @RequestParam(required = false) UUID spaceId,
+            @RequestParam(required = false) String title,
             @RequestPart @NotNull MultipartFile file,
-            @RequestPart @NotBlank @Size(max = 160) String idempotencyKey,
+            @RequestParam @NotBlank @Size(max = 160) String idempotencyKey,
             HttpServletRequest request) {
         try {
             ManagedDocumentDetails created = commandUseCase.createFile(actor, spaceId, title,
