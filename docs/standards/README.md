@@ -23,6 +23,8 @@
 6. [安全与可观测性规范](06-security-and-observability.md)
 7. [AI Coding 工作流](07-ai-coding-workflow.md)
 
+涉及 `support-agent-web/` 时，还必须同时遵守 [前端工程与 AI Coding 强制规范](../frontend/implementation-plan/01-frontend-engineering-standard.md)；前端专属规则与本目录规则冲突时，在不削弱安全和质量门禁的前提下采用更具体的前端规则。
+
 ## 强制用语
 
 - “必须”“不得”“严禁”表示不可跳过的规则。

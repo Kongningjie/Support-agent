@@ -27,6 +27,7 @@ docs/frontend/
 | 阶段 F4 | 已完成 | 管理员治理页面、在线知识与案例发布归档、受控 DEAD 任务重试和完整门禁已通过 |
 | 阶段 F5 | 已完成 | Playwright 真实后端 E2E、错误恢复、无障碍、窄屏、构建和 Review 门禁已通过 |
 | 本地联调 | F1～F5 已完成 | 已验证认证、真实在线问答、会话、记忆、工单、空间选择及管理员完整治理链路 |
+| 最近质量基线 | 通过 | 17 个单元测试文件、65 项单测、4 项 Playwright 真实后端 E2E、生产构建和 0 个已知 npm 漏洞 |
 
 ## 执行入口
 
@@ -35,6 +36,6 @@ docs/frontend/
 1. [前端分阶段冻结实施计划](implementation-plan/00-frontend-phased-implementation-plan.md)。
 2. [前端工程与 AI Coding 强制规范](implementation-plan/01-frontend-engineering-standard.md)。
 3. 后端的 [当前系统基线](../implementation-plan/10-current-system-baseline.md) 和 [API 契约](../implementation-plan/04-api-and-sse.md)。
-4. 最近一份 [前端阶段工作记录](work-logs/README.md)。
+4. [前端工作记录索引](work-logs/README.md)及其中标注的最近阶段记录。
 
 一次只执行一个前端阶段。阶段测试、完整 Review 和工作记录未完成前，不得进入下一阶段，也不得自动提交或推送。

@@ -19,3 +19,8 @@
 5. 每次提交前必须先完成记录和完整差异 Review。
 
 判断最近记录时只读取以日期开头的文件；`README.md` 和 `TEMPLATE.md` 不属于阶段结果。
+
+## 当前最新记录
+
+- [F5 本地联调、质量补强与验收](2026-09-28-frontend-f5-local-acceptance.md)：前端 F1～F5 已全部完成；记录 65 项单元测试、4 项真实后端 E2E、经授权 DashScope 无知识问答和最终 Review 结果。
+- 更早记录保留对应阶段当时的范围、测试数量和未完成项，不因后续阶段完成而回写；判断当前能力时以最新记录和 [当前系统基线](../../implementation-plan/10-current-system-baseline.md) 为准。

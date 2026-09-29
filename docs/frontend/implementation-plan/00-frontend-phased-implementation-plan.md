@@ -31,7 +31,7 @@
 | SSE | 原生 `fetch` + `ReadableStream` | 支持 POST、JSON 请求体、Authorization 和主动取消；不使用 `EventSource` |
 | Markdown | markdown-it + DOMPurify | 禁用原始 HTML，净化生成结果并限制链接协议后再展示模型答案 |
 | 单元测试 | Vitest + Vue Test Utils | 验证 Store、组合函数、SSE 解析、权限和关键组件 |
-| 端到端测试 | Playwright | F5 使用真实本地后端验证核心业务链路 |
+| 端到端测试 | Playwright 1.63.0 | F5 使用真实本地后端验证核心业务链路；版本在 `package-lock.json` 中精确锁定 |
 | 代码质量 | ESLint + Prettier + `vue-tsc` | 锁定格式、静态检查和严格类型检查 |
 
 前端工程固定放在仓库根目录 `support-agent-web/`，不加入 Maven Reactor，也不把 Node 构建塞入后端 Maven 生命周期。本地联调分别运行 Maven 后端和 Vite 前端。
@@ -303,11 +303,13 @@ F4 的空间与成员治理页面属于平台管理员工作台。后端虽然�
 ```powershell
 Set-Location .\support-agent-web
 npm ci
+npm run format:check
 npm run lint
 npm run type-check
 npm run test:unit
 npm run build
 npm run test:e2e
+npm audit --audit-level=high
 
 Set-Location ..
 mvn test

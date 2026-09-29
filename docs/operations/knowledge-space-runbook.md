@@ -51,7 +51,7 @@ $env:SUPPORT_AGENT_MYSQL_PASSWORD = "仅本机只读核对账号密码"
 
 ## 7. 验收与审计
 
-- 执行 `mvn test`、`mvn verify -Pintegration` 和前端冻结门禁。
+- 执行 `mvn test`、`mvn verify -Pintegration`，并按 [前端冻结计划](../frontend/implementation-plan/00-frontend-phased-implementation-plan.md) 执行格式、Lint、类型、单元测试、构建及需要的真实后端 E2E 门禁。
 - 固定 60 条数据位于 `support-agent-infrastructure/src/main/resources/evaluation/knowledge-space-cases.jsonl`；动态报告必须写入 `target/knowledge-space-evaluation/`。
 - 核对跨空间 Rerank 候选、引用、回答事实和详情泄漏均为 0，撤权/禁用/停用拒绝率为 100%，且 `noHitAccuracy=1.00`、`exactTermRecall=1.00`。
 - 未经单独授权不得执行或宣称通过真实 DashScope 在线测试。

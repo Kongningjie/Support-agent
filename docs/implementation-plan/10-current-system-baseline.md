@@ -5,12 +5,13 @@
 ## 1. 完成状态
 
 - 产品前三期已经完成：一期对应阶段 0～5，二期对应阶段 6～9，三期对应阶段 10～17 及阶段 13 补强批次；以上均已完成规定离线与集成门禁。
-- 最近后端门禁结果：阶段 20 的 `mvn test` 通过 272 个测试；`mvn verify -Pintegration` 通过 44 个基础设施集成测试和 9 个应用启动联调测试。
+- 最近后端门禁结果：F5 最终回归的 `mvn test` 通过 273 个测试；`mvn verify -Pintegration` 通过 44 个基础设施集成测试和 9 个应用启动联调测试。
 - 阶段 10 的真实在线摘要质量评测按用户决定暂缓；不得据此宣称在线摘要质量已经验收。
 - 三期 LLM 安全补强阶段 15～17 已完成规定离线与集成门禁；真实模型对抗验证尚未获得单独授权，不得宣称已通过在线安全率验收。
 - 四期阶段 18～20 已完成：知识空间、成员、治理 API、即时撤权、安全审计、MySQL 资源归属、Redis 会话空间、Elasticsearch v2 空间字段、`GLOBAL + 当前空间` 双重过滤、60 条固定隔离评测、低基数指标和运行恢复手册均已实现。
 - 前端阶段 F1～F5 已完成；管理员用户、知识空间及成员、托管知识、案例、异步任务和可选评测页面均已实现，真实知识与案例发布归档、受控 DEAD 任务重试以及 Playwright 真实后端核心链路验收通过。
 - 当前前端门禁通过 17 个测试文件、65 个单元测试、4 个 Playwright 真实后端 E2E、Lint、格式、严格类型检查、生产构建和高危漏洞审计；后端全量 `mvn test` 当前共 273 项测试通过，基础设施集成 44 项和启动联调 9 项通过。
+- F5 在线 E2E 在用户明确授权后验证了真实 DashScope `GLOBAL` 无知识问答、建议建单和会话清理。该结果不覆盖阶段 10 在线摘要质量、阶段 17 在线模型对抗或阶段 19 非 `GLOBAL` 空间真实模型问答，完整 `mvn verify -Ponline-test` 仍未执行。
 
 ## 2. 当前能力
 
@@ -23,7 +24,7 @@
 ## 3. 架构与存储
 
 - 仍为 Java 21、Spring Boot 4.1.1 的 Maven 六模块单体，依赖方向为领域层 ← 应用层 ← 适配层，由 Bootstrap 装配。
-- 仓库新增独立 `support-agent-web/`：Vue 3、TypeScript、Vite、Vue Router、Pinia、Element Plus 和 Axios；不加入 Maven Reactor，本地通过 Vite `/api` 代理访问后端。
+- 仓库包含独立 `support-agent-web/`：Node.js 24、npm 11、Vue 3、TypeScript、Vite、Vue Router、Pinia、Element Plus、Axios、Vitest 和 Playwright 1.63.0；不加入 Maven Reactor，本地通过 Vite `/api` 代理访问后端。
 - MySQL 8.4.11 保存业务事实、用户、长期记忆、知识空间与成员、幂等、任务和安全审计；当前 Flyway 版本为 V9。
 - Redis 保存会话、滚动摘要、运行租约、建议、登录失败状态和不透明 Token 哈希索引。
 - Elasticsearch 9.5.2 + ICU 承担 BM25、向量、RRF 和 Rerank 前的候选召回。

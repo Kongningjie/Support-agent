@@ -26,3 +26,10 @@
 - 测试必须写出可复现命令、结果和执行环境；未运行时说明原因与影响。
 - 每个新增或变化的字段、配置、状态、错误码和接口必须写明其含义，禁止只罗列名称。
 - Review 记录必须包含范围、结论、问题和处理结果，不得只写“已 Review”。
+
+## 当前状态入口
+
+- 最近后端业务阶段记录：[阶段 20 空间权限治理、评测与四期验收](2026-09-27-stage-20-governance-evaluation-acceptance.md)。
+- 最近前端阶段记录：[F5 本地联调、质量补强与验收](../frontend/work-logs/2026-09-28-frontend-f5-local-acceptance.md)。
+- 最近全局文档同步记录：[阶段 20 / F5 当前状态同步](2026-09-28-documentation-current-state-sync.md)。
+- 历史记录保留当时事实，不回写旧测试数量、范围排除或未完成项；当前能力统一以 [当前系统基线](../implementation-plan/10-current-system-baseline.md) 为准。

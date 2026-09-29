@@ -7,6 +7,8 @@
 - 单元测试命名为 `*Test`，集成测试命名为 `*IT`。单元测试不得依赖 Docker、网络或真实密钥。
 - 覆盖成功路径、参数校验、异常分支、边界值、状态迁移和幂等/并发行为；缺陷修复必须补充回归测试。
 - 不得通过删除测试、削弱断言、扩大忽略范围或滥用 Mock 让测试“通过”。未执行的测试必须记录原因和风险。
+- 修改 `support-agent-web/` 时，最低前端门禁为 `npm run format:check`、`npm run lint`、`npm run type-check`、`npm run test:unit` 和 `npm run build`；涉及依赖时还必须执行 `npm audit --audit-level=high`。
+- 前端阶段或真实联调变更需要执行 `npm run test:e2e`。Playwright 必须连接本地真实后端，不得用页面拦截伪造成功；真实 DashScope 调用仍须获得当次明确授权。
 
 ## 提交前强制 Review
 
@@ -29,6 +31,6 @@ Review 至少检查：
 
 - Review 已通过且发现的问题已闭环。
 - 必要测试已通过，或不可执行项已明确获得接受。
-- `docs/work-logs/` 中的阶段记录已更新，包含 Review 和测试结果。
+- 后端工作更新 `docs/work-logs/`；前端工作更新 `docs/frontend/work-logs/`。对应记录必须包含 Review、测试结果和未验证项。
 
 编译成功或测试通过不能替代 Review。推送前还必须核对提交内容、提交信息和目标 `main` 分支。
