@@ -33,7 +33,8 @@
 - 最近前端阶段记录：[F5 本地联调、质量补强与验收](../frontend/work-logs/2026-09-28-frontend-f5-local-acceptance.md)。
 - 最近全局文档同步记录：[阶段 20 / F5 当前状态同步](2026-09-28-documentation-current-state-sync.md)。
 - 最近规划记录：[五期 Agent 能力扩展预规划](2026-09-29-phase-5-agent-capability-preplanning.md)。
-- 评测规划记录：[评测体系优化专项预规划](2026-10-12-evaluation-quality-loop-preplanning.md)；专项批次 1 已另行冻结并完成实现与自动化门禁，批次 2、3 仍未进入实施。
+- 评测规划记录：[评测体系优化专项预规划](2026-10-12-evaluation-quality-loop-preplanning.md)；专项批次 1、2 已分别冻结并实施，批次 3 仍未进入实施。
 - 最近提交前 Review 记录：[注释整理与规划文档提交](2026-10-12-comment-review-and-push.md)。
-- 用户回答反馈专项批次 1：[用户回答反馈工作记录](2026-10-12-answer-feedback.md)；后端与聊天前端已实现，真实后端浏览器 E2E 未执行，人工评测和 LLM-as-Judge 仍未启动。
+- 用户回答反馈专项批次 1：[用户回答反馈工作记录](2026-10-12-answer-feedback.md)；后端与聊天前端已实现，真实后端浏览器 E2E 未执行。
+- 人工评测专项批次 2：[人工评测工作记录](2026-10-12-human-evaluation.md)；管理员脱敏副本、双人盲评及数据集晋升已实现，LLM-as-Judge 仍未启动。
 - 历史记录保留当时事实，不回写旧测试数量、范围排除或未完成项；当前能力统一以 [当前系统基线](../implementation-plan/10-current-system-baseline.md) 为准。

@@ -75,6 +75,10 @@ async function handleLogout(): Promise<void> {
             <span aria-hidden="true">⌁</span>
             <span v-if="!collapsed">异步任务</span>
           </RouterLink>
+          <RouterLink class="nav-item" to="/admin/human-evaluations" aria-label="人工评测">
+            <span aria-hidden="true">◎</span>
+            <span v-if="!collapsed">人工评测</span>
+          </RouterLink>
           <RouterLink
             v-if="evaluationEnabled"
             class="nav-item"

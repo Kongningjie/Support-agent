@@ -2,7 +2,7 @@
 
 ## 1. 文档目的
 
-本文保留阶段 0～17 的历史执行细节和入口，并登记四期知识空间阶段 18～20。产品期次的稳定业务与架构决策已抽取到 [冻结方案目录](../design-freezes/README.md)：一期对应阶段 0～5，二期对应阶段 6～9，三期对应阶段 10～17，四期知识空间计划对应阶段 18～20。五期 Agent 能力扩展目前只有 [预规划](13-phase-5-agent-capability-extension-plan.md)，尚不可执行；[评测体系优化专项](14-evaluation-quality-loop-preplan.md)的回答反馈批次已单独冻结实施，其余批次仍待排期。当前实际系统状态以 [当前系统基线](10-current-system-baseline.md) 为准；历史阶段中的“不实现”描述只约束当时阶段，不代表当前能力缺失。
+本文保留阶段 0～17 的历史执行细节和入口，并登记四期知识空间阶段 18～20。产品期次的稳定业务与架构决策已抽取到 [冻结方案目录](../design-freezes/README.md)：一期对应阶段 0～5，二期对应阶段 6～9，三期对应阶段 10～17，四期知识空间计划对应阶段 18～20。五期 Agent 能力扩展目前只有 [预规划](13-phase-5-agent-capability-extension-plan.md)，尚不可执行；[评测体系优化专项](14-evaluation-quality-loop-preplan.md)的回答反馈与人工评测批次已分别冻结实施，LLM-as-Judge 仍待排期。当前实际系统状态以 [当前系统基线](10-current-system-baseline.md) 为准；历史阶段中的“不实现”描述只约束当时阶段，不代表当前能力缺失。
 
 执行任何阶段前必须同时阅读：
 
@@ -366,4 +366,4 @@ DashScope 模型冻结为：Chat `qwen3.7-plus-2026-05-26`、Intent `qwen3.7-fla
 
 ## 18. 评测体系优化专项预规划
 
-[评测体系优化专项预规划](14-evaluation-quality-loop-preplan.md)按用户回答反馈、人工评测、LLM-as-Judge 辅助评测的顺序逐批推进。该专项与五期 Agent 能力扩展并列，正式期次和阶段编号尚未分配。用户已确认并冻结[回答反馈单批次实施计划](15-answer-feedback-implementation-plan.md)，当前只执行这一批次；人工评测与 LLM-as-Judge 尚未冻结，不得提前编码或调用在线模型。
+[评测体系优化专项预规划](14-evaluation-quality-loop-preplan.md)按用户回答反馈、人工评测、LLM-as-Judge 辅助评测的顺序逐批推进。该专项与五期 Agent 能力扩展并列，正式期次和阶段编号尚未分配。回答反馈与[人工评测单批次实施计划](16-human-evaluation-implementation-plan.md)已分别冻结并实施；LLM-as-Judge 尚未冻结，不得提前编码或调用在线模型。

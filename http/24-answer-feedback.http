@@ -35,6 +35,6 @@ Content-Type: application/json
 DELETE {{baseUrl}}/api/v1/answer-feedback/{{runId}}?expectedVersion=1
 Authorization: Bearer {{accessToken}}
 
-### 管理员仅查看聚合计数，不查看个体说明
+### 回答反馈管理员接口仍仅返回聚合计数；人工评测另有仅含候选元数据的受限接口
 GET {{baseUrl}}/api/v1/admin/answer-feedback/summary
 Authorization: Bearer {{adminToken}}

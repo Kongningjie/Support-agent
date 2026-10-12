@@ -18,6 +18,13 @@ import com.lawrence.supportagent.feedback.AnswerFeedback;
 import com.lawrence.supportagent.feedback.FeedbackRating;
 import com.lawrence.supportagent.feedback.FeedbackReason;
 import com.lawrence.supportagent.feedback.port.AnswerFeedbackRepository;
+import com.lawrence.supportagent.evaluation.HumanEvaluationRepository;
+import com.lawrence.supportagent.evaluation.HumanEvaluationRepository.DatasetState;
+import com.lawrence.supportagent.evaluation.HumanEvaluationRepository.ReviewStatus;
+import com.lawrence.supportagent.evaluation.HumanEvaluationRepository.Sample;
+import com.lawrence.supportagent.evaluation.HumanEvaluationRepository.Score;
+import com.lawrence.supportagent.evaluation.MySqlHumanEvaluationRepository;
+import com.lawrence.supportagent.persistence.mapper.HumanEvaluationMapper;
 import com.lawrence.supportagent.auth.MySqlUserRepository;
 import com.lawrence.supportagent.auth.MySqlSecurityEventAdapter;
 import com.lawrence.supportagent.auth.SecurityEventType;
@@ -139,6 +146,73 @@ class FoundationRepositoryIT {
     private SpaceMembershipRepository spaceMembershipRepository;
     @Autowired
     private AnswerFeedbackRepository feedbackRepository;
+    @Autowired
+    private HumanEvaluationRepository humanEvaluations;
+
+    /** 真实 MySQL 校验独立评分、分歧复核、同人限制与数据集版本晋升。 */
+    @Test
+    void shouldPersistHumanReviewAndDatasetPromotion() {
+        UUID sampleId = UUID.randomUUID();
+        UUID first = UUID.randomUUID();
+        UUID second = UUID.randomUUID();
+        UUID arbiter = UUID.randomUUID();
+        Sample sample = new Sample(sampleId, "FIXED", "A8-GROUND-001-" + sampleId,
+                UUID.fromString("00000000-0000-0000-0000-000000000001"),
+                "脱敏问题", "脱敏回答", "允许展示的证据", first,
+                ReviewStatus.FIRST_PENDING, DatasetState.NONE, 0, NOW);
+        assertTrue(humanEvaluations.create(sample));
+        assertTrue(!humanEvaluations.create(sample));
+        Score strong = new Score(2, 2, 2, 2, 2);
+        Score weak = new Score(0, 1, 1, 1, 2);
+        assertEquals(ReviewStatus.SECOND_PENDING,
+                humanEvaluations.submit(sampleId, first, strong, "首评理由", NOW).status());
+        assertThrows(ApplicationException.class,
+                () -> humanEvaluations.submit(sampleId, first, strong, "重复评分", NOW));
+        assertEquals(ReviewStatus.ARBITRATION_PENDING,
+                humanEvaluations.submit(sampleId, second, weak, "次评理由", NOW).status());
+        assertEquals(ReviewStatus.DECIDED,
+                humanEvaluations.submit(sampleId, arbiter, weak, "复核理由", NOW).status());
+        assertEquals(3, humanEvaluations.reviews(sampleId).size());
+        assertThrows(ApplicationException.class,
+                () -> humanEvaluations.submit(sampleId, UUID.randomUUID(), weak, "过期评分", NOW));
+        Sample development = humanEvaluations.promote(sampleId, first, DatasetState.DEVELOPMENT, NOW);
+        assertTrue(development.datasetVersion() > 0);
+        Sample regression = humanEvaluations.promote(sampleId, second, DatasetState.REGRESSION, NOW);
+        assertTrue(regression.datasetVersion() > development.datasetVersion());
+        assertThrows(ApplicationException.class,
+                () -> humanEvaluations.promote(sampleId, second, DatasetState.REGRESSION, NOW));
+    }
+
+    /** 无帮助反馈候选只暴露必要元数据；双人同分直接形成结论。 */
+    @Test
+    void shouldExposeMinimalFeedbackCandidateAndAgreeWithoutArbiter() {
+        UUID runId = UUID.randomUUID();
+        UUID conversationId = UUID.randomUUID();
+        JdbcTemplate jdbc = new JdbcTemplate(dataSource);
+        jdbc.update("INSERT INTO agent_run(run_id,user_id,conversation_id,client_message_id,status,created_at,finished_at) "
+                        + "VALUES (?,?,?,?,?,?,?)",
+                uuidBytes(runId), uuidBytes(ACTOR.userId()), uuidBytes(conversationId),
+                uuidBytes(UUID.randomUUID()), "SUCCEEDED", NOW, NOW);
+        assertTrue(feedbackRepository.insert(new AnswerFeedback(runId, ACTOR.userId(),
+                FeedbackRating.NOT_HELPFUL, FeedbackReason.INCOMPLETE,
+                "不要暴露此说明", 0, NOW, NOW)));
+        assertEquals(conversationId, humanEvaluations.feedbackConversation(runId).orElseThrow());
+        var candidate = humanEvaluations.feedbackCandidates(0, 100).stream()
+                .filter(value -> value.runId().equals(runId)).findFirst().orElseThrow();
+        assertEquals("INCOMPLETE", candidate.reason());
+        assertEquals(conversationId, candidate.conversationId());
+        UUID sampleId = UUID.randomUUID();
+        assertTrue(humanEvaluations.create(new Sample(sampleId, "FEEDBACK", runId.toString(),
+                UUID.fromString("00000000-0000-0000-0000-000000000001"),
+                "脱敏问题", "脱敏回答", "无", ACTOR.userId(),
+                ReviewStatus.FIRST_PENDING, DatasetState.NONE, 0, NOW)));
+        assertTrue(humanEvaluations.feedbackCandidates(0, 100).stream()
+                .noneMatch(value -> value.runId().equals(runId)));
+        Score score = new Score(2, 2, 2, 2, 2);
+        humanEvaluations.submit(sampleId, UUID.randomUUID(), score, "理由一", NOW);
+        assertEquals(ReviewStatus.DECIDED,
+                humanEvaluations.submit(sampleId, UUID.randomUUID(), score, "理由二", NOW).status());
+    }
 
     /** 把 Testcontainers 连接信息注入 Spring 数据源。 */
     @DynamicPropertySource
@@ -769,6 +843,10 @@ class FoundationRepositoryIT {
             "com.lawrence.supportagent.feedback"
     })
     static class TestApplication {
+        /** 显式装配人工评测 Repository，复用当前测试 MyBatis 与事务基础设施。 */
+        @Bean HumanEvaluationRepository humanEvaluationRepository(HumanEvaluationMapper mapper) {
+            return new MySqlHumanEvaluationRepository(mapper);
+        }
         /** 为幂等适配器提供与生产一致的 UTC 系统时间端口。 */
         @Bean
         TimeProvider timeProvider() {

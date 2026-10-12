@@ -1,0 +1,101 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.lawrence.supportagent.persistence.mapper.HumanEvaluationMapper">
+    <resultMap id="candidate" type="com.lawrence.supportagent.persistence.record.HumanEvaluationCandidateDO">
+        <result property="runId" column="run_id"/>
+        <result property="conversationId" column="conversation_id"/>
+        <result property="reason" column="reason"/>
+        <result property="createdAt" column="created_at"/>
+    </resultMap>
+    <resultMap id="sample" type="com.lawrence.supportagent.persistence.record.HumanEvaluationSampleDO">
+        <id property="sampleId" column="sample_id"/>
+        <result property="sourceType" column="source_type"/>
+        <result property="sourceRef" column="source_ref"/>
+        <result property="spaceId" column="space_id"/>
+        <result property="questionText" column="question_text"/>
+        <result property="answerText" column="answer_text"/>
+        <result property="evidenceText" column="evidence_text"/>
+        <result property="createdBy" column="created_by"/>
+        <result property="reviewStatus" column="review_status"/>
+        <result property="datasetState" column="dataset_state"/>
+        <result property="datasetVersion" column="dataset_version"/>
+        <result property="createdAt" column="created_at"/>
+    </resultMap>
+    <resultMap id="review" type="com.lawrence.supportagent.persistence.record.HumanEvaluationReviewDO">
+        <result property="sampleId" column="sample_id"/>
+        <result property="reviewerId" column="reviewer_id"/>
+        <result property="reviewRole" column="review_role"/>
+        <result property="factual" column="factual"/>
+        <result property="citation" column="citation"/>
+        <result property="completeness" column="completeness"/>
+        <result property="actionability" column="actionability"/>
+        <result property="clarity" column="clarity"/>
+        <result property="reason" column="reason"/>
+        <result property="createdAt" column="created_at"/>
+    </resultMap>
+    <select id="feedbackCandidates" resultMap="candidate">
+        SELECT af.run_id, ar.conversation_id, af.reason, af.created_at
+        FROM answer_feedback af JOIN agent_run ar ON ar.run_id = af.run_id
+        WHERE af.deleted_at IS NULL AND af.rating = 'NOT_HELPFUL' AND ar.status = 'SUCCEEDED'
+          AND NOT EXISTS (SELECT 1 FROM human_evaluation_sample s
+                          WHERE s.source_type = 'FEEDBACK' AND s.source_ref = BIN_TO_UUID(af.run_id))
+        ORDER BY af.created_at DESC, af.run_id LIMIT #{size} OFFSET #{offset}
+    </select>
+    <select id="feedbackSource" resultMap="candidate">
+        SELECT af.run_id, ar.conversation_id, af.reason, af.created_at
+        FROM answer_feedback af JOIN agent_run ar ON ar.run_id = af.run_id
+        WHERE af.run_id = #{runId} AND af.deleted_at IS NULL
+          AND af.rating = 'NOT_HELPFUL' AND ar.status = 'SUCCEEDED'
+    </select>
+    <select id="lockFeedbackSource" resultMap="candidate">
+        SELECT af.run_id, ar.conversation_id, af.reason, af.created_at
+        FROM answer_feedback af JOIN agent_run ar ON ar.run_id = af.run_id
+        WHERE af.run_id = #{runId} AND af.deleted_at IS NULL
+          AND af.rating = 'NOT_HELPFUL' AND ar.status = 'SUCCEEDED' FOR UPDATE
+    </select>
+    <insert id="insertSample">
+        INSERT INTO human_evaluation_sample (sample_id, source_type, source_ref, space_id,
+            question_text, answer_text, evidence_text, created_by, review_status,
+            dataset_state, dataset_version, created_at)
+        VALUES (#{sampleId}, #{sourceType}, #{sourceRef}, #{spaceId}, #{questionText},
+            #{answerText}, #{evidenceText}, #{createdBy}, #{reviewStatus},
+            #{datasetState}, #{datasetVersion}, #{createdAt})
+    </insert>
+    <select id="listSamples" resultMap="sample">
+        SELECT sample_id, source_type, source_ref, space_id, question_text, answer_text,
+               evidence_text, created_by, review_status, dataset_state, dataset_version, created_at
+        FROM human_evaluation_sample ORDER BY created_at DESC, sample_id LIMIT #{size} OFFSET #{offset}
+    </select>
+    <select id="findSample" resultMap="sample">
+        SELECT sample_id, source_type, source_ref, space_id, question_text, answer_text,
+               evidence_text, created_by, review_status, dataset_state, dataset_version, created_at
+        FROM human_evaluation_sample WHERE sample_id = #{sampleId}
+    </select>
+    <select id="lockSample" resultMap="sample">
+        SELECT sample_id, source_type, source_ref, space_id, question_text, answer_text,
+               evidence_text, created_by, review_status, dataset_state, dataset_version, created_at
+        FROM human_evaluation_sample WHERE sample_id = #{sampleId} FOR UPDATE
+    </select>
+    <select id="reviews" resultMap="review">
+        SELECT sample_id, reviewer_id, review_role, factual, citation, completeness,
+               actionability, clarity, reason, created_at
+        FROM human_evaluation_review WHERE sample_id = #{sampleId} ORDER BY id
+    </select>
+    <insert id="insertReview">
+        INSERT INTO human_evaluation_review (sample_id, reviewer_id, review_role, factual,
+            citation, completeness, actionability, clarity, reason, created_at)
+        VALUES (#{sampleId}, #{reviewerId}, #{reviewRole}, #{factual}, #{citation},
+            #{completeness}, #{actionability}, #{clarity}, #{reason}, #{createdAt})
+    </insert>
+    <update id="updateReviewStatus">
+        UPDATE human_evaluation_sample SET review_status = #{status} WHERE sample_id = #{sampleId}
+    </update>
+    <insert id="insertDatasetChange" useGeneratedKeys="true" keyProperty="version">
+        INSERT INTO human_evaluation_dataset_change (sample_id, actor_id, from_state, to_state, changed_at)
+        VALUES (#{sampleId}, #{actorId}, #{fromState}, #{toState}, #{changedAt})
+    </insert>
+    <update id="updateDatasetState">
+        UPDATE human_evaluation_sample SET dataset_state = #{state}, dataset_version = #{version}
+        WHERE sample_id = #{sampleId}
+    </update>
+</mapper>

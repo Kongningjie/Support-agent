@@ -1,0 +1,58 @@
+@baseUrl = http://localhost:8080
+@adminToken = replace-with-admin-access-token
+@sampleId = replace-with-created-sample-uuid
+
+### 管理员读取无帮助反馈候选；只返回运行 ID、会话 ID、原因和时间
+GET {{baseUrl}}/api/v1/admin/human-evaluations/feedback-candidates?page=1&size=20
+Authorization: Bearer {{adminToken}}
+
+### 管理员读取固定回答用例候选
+GET {{baseUrl}}/api/v1/admin/human-evaluations/fixed-candidates
+Authorization: Bearer {{adminToken}}
+
+### 管理员显式确认脱敏后创建固定来源样本；反馈来源改为 FEEDBACK 和真实 runId
+POST {{baseUrl}}/api/v1/admin/human-evaluations
+Authorization: Bearer {{adminToken}}
+Content-Type: application/json
+
+{
+  "sourceType": "FIXED",
+  "sourceRef": "A8-GROUND-001",
+  "spaceId": "00000000-0000-0000-0000-000000000001",
+  "question": "MySQL 连接被拒绝时先检查什么？",
+  "answer": "先确认实例状态、监听地址与端口，再检查连接配置。",
+  "evidence": "允许评审查看的脱敏证据摘要",
+  "sanitizedConfirmed": true
+}
+
+### 第一位管理员独立评分；第二位管理员需换另一个账号提交
+POST {{baseUrl}}/api/v1/admin/human-evaluations/{{sampleId}}/reviews
+Authorization: Bearer {{adminToken}}
+Content-Type: application/json
+
+{
+  "factual": 2,
+  "citation": 1,
+  "completeness": 1,
+  "actionability": 2,
+  "clarity": 2,
+  "reason": "事实与操作路径基本正确，引用和完整性仍需补强"
+}
+
+### 读取当前管理员可见评分；未决时看不到其他人的评分
+GET {{baseUrl}}/api/v1/admin/human-evaluations/{{sampleId}}
+Authorization: Bearer {{adminToken}}
+
+### 结论形成后显式纳入独立开发集
+POST {{baseUrl}}/api/v1/admin/human-evaluations/{{sampleId}}/promotions
+Authorization: Bearer {{adminToken}}
+Content-Type: application/json
+
+{"target":"DEVELOPMENT"}
+
+### 另一次显式审批晋升独立回归集；目标改为 REGRESSION
+POST {{baseUrl}}/api/v1/admin/human-evaluations/{{sampleId}}/promotions
+Authorization: Bearer {{adminToken}}
+Content-Type: application/json
+
+{"target":"REGRESSION"}

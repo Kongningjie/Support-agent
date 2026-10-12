@@ -101,6 +101,12 @@ export const router = createRouter({
       component: () => import('@/views/async-task/AsyncTaskAdminView.vue'),
       meta: { requiresAuth: true, requiresAdmin: true },
     },
+    {
+      path: '/admin/human-evaluations',
+      name: 'admin-human-evaluations',
+      component: () => import('@/views/evaluation/HumanEvaluationAdminView.vue'),
+      meta: { requiresAuth: true, requiresAdmin: true },
+    },
     ...(import.meta.env.VITE_ENABLE_EVALUATION === 'true'
       ? [
           {

@@ -31,6 +31,7 @@
 3. [三期用户、记忆与 LLM 安全治理冻结方案](03-phase-3-user-memory-security.md)
 4. [四期知识空间冻结方案](04-phase-4-knowledge-space.md)
 5. [用户回答反馈冻结方案](05-answer-feedback.md)（评测专项批次 1，不改变一期至四期既有边界）
+6. [人工评测冻结方案](06-human-evaluation.md)（评测专项批次 2；不授权 LLM-as-Judge）
 
 ## 4. 延期事项
 

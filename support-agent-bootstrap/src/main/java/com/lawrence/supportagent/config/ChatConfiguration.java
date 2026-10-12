@@ -22,6 +22,10 @@ import com.lawrence.supportagent.chat.port.AgentAuditPort;
 import com.lawrence.supportagent.chat.port.ConversationStorePort;
 import com.lawrence.supportagent.feedback.AnswerFeedbackUseCase;
 import com.lawrence.supportagent.feedback.port.AnswerFeedbackRepository;
+import com.lawrence.supportagent.evaluation.AnswerEvaluationDatasetPort;
+import com.lawrence.supportagent.evaluation.HumanEvaluationRepository;
+import com.lawrence.supportagent.evaluation.HumanEvaluationUseCase;
+import com.lawrence.supportagent.evaluation.ClasspathAnswerEvaluationDatasetAdapter;
 import com.lawrence.supportagent.knowledge.DocumentContentPolicy;
 import com.lawrence.supportagent.knowledge.ElasticsearchKnowledgeIndexAdapter;
 import com.lawrence.supportagent.knowledge.ExactTermExtractor;
@@ -251,6 +255,16 @@ public class ChatConfiguration {
     @Bean public AnswerFeedbackUseCase answerFeedbackUseCase(
             AnswerFeedbackRepository repository, UserMemoryContentPolicy sensitiveText, TimeProvider time) {
         return new AnswerFeedbackUseCase(repository, sensitiveText, time);
+    }
+    /** 装配固定回答用例来源校验，不触发模型调用。 */
+    @Bean public AnswerEvaluationDatasetPort answerEvaluationDatasetPort(ObjectMapper mapper) {
+        return new ClasspathAnswerEvaluationDatasetAdapter(mapper);
+    }
+    /** 装配受管理员权限保护的人工评测用例。 */
+    @Bean public HumanEvaluationUseCase humanEvaluationUseCase(
+            HumanEvaluationRepository repository, AnswerEvaluationDatasetPort fixedCases,
+            ConversationLifecycleUseCase conversations, TimeProvider time) {
+        return new HumanEvaluationUseCase(repository, fixedCases, conversations, time);
     }
     /** 创建 MySQL Agent 安全审计适配器。 */
     @Bean public AgentAuditPort agentAuditPort(AgentAuditMapper mapper, ObjectMapper json) {
