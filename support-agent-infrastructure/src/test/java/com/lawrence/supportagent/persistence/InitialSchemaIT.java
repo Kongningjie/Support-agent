@@ -39,6 +39,8 @@ class InitialSchemaIT {
             assertEquals(1, count(statement, "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema='support_agent' AND table_name='security_event' AND table_comment <> ''"));
             assertEquals(10, count(statement, "SELECT COUNT(*) FROM information_schema.columns WHERE table_schema='support_agent' AND table_name='security_event' AND column_comment <> ''"));
             assertEquals(2, count(statement, "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema='support_agent' AND table_name IN ('knowledge_space','user_space_membership') AND table_comment <> ''"));
+            assertEquals(1, count(statement, "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema='support_agent' AND table_name='answer_feedback' AND table_comment <> ''"));
+            assertEquals(10, count(statement, "SELECT COUNT(*) FROM information_schema.columns WHERE table_schema='support_agent' AND table_name='answer_feedback' AND column_comment <> ''"));
             assertEquals(25, count(statement, "SELECT COUNT(*) FROM information_schema.columns WHERE table_schema='support_agent' AND table_name IN ('knowledge_space','user_space_membership') AND column_comment <> ''"));
             assertEquals(1, count(statement, "SELECT COUNT(*) FROM knowledge_space WHERE code='GLOBAL' AND HEX(space_id)='00000000000000000000000000000001' AND visibility='ENTERPRISE' AND status='ACTIVE' AND system_space=TRUE"));
             assertEquals(1, count(statement, "SELECT COUNT(*) FROM information_schema.columns WHERE table_schema='support_agent' AND table_name='app_user' AND column_name='must_change_password'"));

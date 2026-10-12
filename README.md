@@ -34,7 +34,7 @@
 | `support-agent-domain` | 纯 Java 聚合、状态机和值对象，包括知识空间与成员角色 |
 | `support-agent-application` | 用例、端口、认证、空间授权、会话与记忆编排、异步任务和评测 |
 | `support-agent-agent` | AgentScope、DashScope、Prompt 与结构化输出 |
-| `support-agent-infrastructure` | MySQL、Redis、Elasticsearch、Flyway V1～V9、Outbox、认证、安全审计和固定评测适配 |
+| `support-agent-infrastructure` | MySQL、Redis、Elasticsearch、Flyway V1～V10、Outbox、认证、安全审计、回答反馈和固定评测适配 |
 | `support-agent-interfaces` | REST、SSE、知识空间治理、Spring Security、OpenAPI 和统一响应 |
 | `support-agent-bootstrap` | Spring Boot 启动、配置和模块装配 |
 | `support-agent-web` | Vue 3 独立前端；提供用户端完整业务、管理员治理、统一错误恢复和 Playwright 真实后端验收 |
@@ -65,6 +65,7 @@ npm run dev
 ```
 
 浏览器访问 `http://localhost:5173`。当前已提供认证、聊天、会话、长期记忆、工单以及管理员用户、知识空间、知识、案例和异步任务治理页面。
+聊天页可对本人已完成回答提交、更正或删除“有帮助/无帮助”反馈；管理员可通过只读聚合接口查看分类计数，见 `http/24-answer-feedback.http`。反馈不会自动修改知识或模型。
 
 Docker Compose 会自动读取根目录 `.env`，Spring Boot 不会自动读取；上面的 PowerShell 片段会把简单的 `KEY=VALUE` 配置静默导入当前进程。通过 IDEA 启动时，也可以在 `SupportAgentApplication` 的 Run Configuration 中配置同一组环境变量。若修改 Compose 宿主端口，必须同步修改 `SUPPORT_AGENT_MYSQL_URL`、`SUPPORT_AGENT_REDIS_URL` 或 `SUPPORT_AGENT_ELASTICSEARCH_URL`。Run Configuration 中的变量只对被启动的应用进程生效，因此 IDEA Terminal 中不一定可见。
 
@@ -105,7 +106,7 @@ mvn verify -Ponline-test
 
 `online-test` 会调用真实 DashScope，必须取得明确授权并在当前 Maven 进程中提供密钥。接口文档启动后访问 `http://localhost:8080/swagger-ui.html`；完整调用示例见 `http/`。
 
-最近一次完整门禁基线为：后端 `mvn test` 通过 273 个测试，`mvn verify -Pintegration` 通过 44 个基础设施集成测试和 9 个启动联调测试；前端通过 17 个测试文件、65 个单元测试、4 个 Playwright 真实后端 E2E、Lint、格式、严格类型检查、生产构建和高危漏洞审计。F5 的在线 E2E 已在明确授权后验证真实 DashScope 无知识问答与建议建单链路，证据见对应阶段工作记录。
+用户回答反馈批次的最近门禁为：后端 `mvn test` 通过 283 个测试，`mvn verify -Pintegration` 通过 46 个基础设施集成测试和 9 个启动联调测试；前端通过 18 个测试文件、69 个单元测试、Lint、格式、严格类型检查和生产构建。F5 历史上通过 4 个 Playwright 真实后端 E2E 和高危漏洞审计，并在单独授权后验证 DashScope 无知识问答与建议建单；本次反馈批次未重跑在线 E2E，也未调用真实模型，详见工作记录。
 
 健康检查：
 

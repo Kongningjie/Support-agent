@@ -1,0 +1,54 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.lawrence.supportagent.persistence.mapper.AnswerFeedbackMapper">
+    <resultMap id="feedback" type="com.lawrence.supportagent.persistence.record.AnswerFeedbackDO">
+        <result property="runId" column="run_id"/>
+        <result property="userId" column="user_id"/>
+        <result property="rating" column="rating"/>
+        <result property="reason" column="reason"/>
+        <result property="note" column="note"/>
+        <result property="version" column="version"/>
+        <result property="createdAt" column="created_at"/>
+        <result property="updatedAt" column="updated_at"/>
+    </resultMap>
+    <select id="countSuccessfulOwnedRun" resultType="int">
+        SELECT COUNT(*) FROM agent_run
+        WHERE run_id = #{runId} AND user_id = #{userId} AND status = 'SUCCEEDED'
+    </select>
+    <select id="find" resultMap="feedback">
+        SELECT run_id, user_id, rating, reason, note, version, created_at, updated_at
+        FROM answer_feedback WHERE run_id = #{runId} AND user_id = #{userId} AND deleted_at IS NULL
+    </select>
+    <insert id="insert">
+        INSERT INTO answer_feedback (run_id, user_id, rating, reason, note, version, created_at, updated_at)
+        VALUES (#{runId}, #{userId}, #{rating}, #{reason}, #{note}, #{version}, #{createdAt}, #{updatedAt})
+    </insert>
+    <update id="reactivate">
+        UPDATE answer_feedback SET rating = #{rating}, reason = #{reason}, note = #{note},
+            version = version + 1, created_at = #{createdAt}, updated_at = #{updatedAt}, deleted_at = NULL
+        WHERE run_id = #{runId} AND user_id = #{userId} AND deleted_at IS NOT NULL
+    </update>
+    <update id="update">
+        UPDATE answer_feedback SET rating = #{record.rating}, reason = #{record.reason},
+            note = #{record.note}, version = #{record.version}, updated_at = #{record.updatedAt}
+        WHERE run_id = #{record.runId} AND user_id = #{record.userId}
+            AND version = #{expectedVersion} AND deleted_at IS NULL
+    </update>
+    <update id="delete">
+        UPDATE answer_feedback SET rating = NULL, reason = NULL, note = NULL,
+            version = version + 1, updated_at = #{deletedAt}, deleted_at = #{deletedAt}
+        WHERE run_id = #{runId} AND user_id = #{userId}
+            AND version = #{expectedVersion} AND deleted_at IS NULL
+    </update>
+    <select id="countAll" resultType="long">
+        SELECT COUNT(*) FROM answer_feedback WHERE deleted_at IS NULL
+    </select>
+    <select id="countByRating" resultType="com.lawrence.supportagent.persistence.record.FeedbackCountDO">
+        SELECT rating AS category, COUNT(*) AS count FROM answer_feedback
+        WHERE deleted_at IS NULL GROUP BY rating
+    </select>
+    <select id="countByReason" resultType="com.lawrence.supportagent.persistence.record.FeedbackCountDO">
+        SELECT reason AS category, COUNT(*) AS count FROM answer_feedback
+        WHERE deleted_at IS NULL AND reason IS NOT NULL GROUP BY reason
+    </select>
+</mapper>

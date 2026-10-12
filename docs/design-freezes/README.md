@@ -30,6 +30,7 @@
 2. [二期质量、性能与稳定性冻结方案](02-phase-2-quality-stability.md)
 3. [三期用户、记忆与 LLM 安全治理冻结方案](03-phase-3-user-memory-security.md)
 4. [四期知识空间冻结方案](04-phase-4-knowledge-space.md)
+5. [用户回答反馈冻结方案](05-answer-feedback.md)（评测专项批次 1，不改变一期至四期既有边界）
 
 ## 4. 延期事项
 

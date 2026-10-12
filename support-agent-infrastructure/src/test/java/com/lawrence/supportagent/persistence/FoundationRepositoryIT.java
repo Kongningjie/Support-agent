@@ -14,6 +14,10 @@ import com.lawrence.supportagent.asynctask.AsyncTaskCreator;
 import com.lawrence.supportagent.asynctask.AsyncTaskStatus;
 import com.lawrence.supportagent.asynctask.AsyncTaskType;
 import com.lawrence.supportagent.auth.AuthenticatedUser;
+import com.lawrence.supportagent.feedback.AnswerFeedback;
+import com.lawrence.supportagent.feedback.FeedbackRating;
+import com.lawrence.supportagent.feedback.FeedbackReason;
+import com.lawrence.supportagent.feedback.port.AnswerFeedbackRepository;
 import com.lawrence.supportagent.auth.MySqlUserRepository;
 import com.lawrence.supportagent.auth.MySqlSecurityEventAdapter;
 import com.lawrence.supportagent.auth.SecurityEventType;
@@ -133,6 +137,8 @@ class FoundationRepositoryIT {
     private KnowledgeSpaceRepository knowledgeSpaceRepository;
     @Autowired
     private SpaceMembershipRepository spaceMembershipRepository;
+    @Autowired
+    private AnswerFeedbackRepository feedbackRepository;
 
     /** 把 Testcontainers 连接信息注入 Spring 数据源。 */
     @DynamicPropertySource
@@ -140,6 +146,76 @@ class FoundationRepositoryIT {
         registry.add("spring.datasource.url", MYSQL::getJdbcUrl);
         registry.add("spring.datasource.username", MYSQL::getUsername);
         registry.add("spring.datasource.password", MYSQL::getPassword);
+    }
+
+    /** 真实 MySQL 验证归属与成功状态、唯一约束、乐观锁删除及匿名聚合。 */
+    @Test
+    void shouldPersistAnswerFeedbackWithVersionAndOwnership() {
+        UUID runId = UUID.randomUUID();
+        UUID failedRunId = UUID.randomUUID();
+        UUID otherUser = UUID.randomUUID();
+        long baselineTotal = feedbackRepository.summary().total();
+        long baselineHelpful = feedbackRepository.summary().byRating().get(FeedbackRating.HELPFUL);
+        JdbcTemplate jdbc = new JdbcTemplate(dataSource);
+        jdbc.update("INSERT INTO agent_run(run_id,user_id,conversation_id,client_message_id,status,created_at,finished_at) "
+                        + "VALUES (?,?,?,?,?, ?,?)",
+                uuidBytes(runId), uuidBytes(ACTOR.userId()), uuidBytes(UUID.randomUUID()),
+                uuidBytes(UUID.randomUUID()), "SUCCEEDED", NOW, NOW);
+        jdbc.update("INSERT INTO agent_run(run_id,user_id,conversation_id,client_message_id,status,created_at) "
+                        + "VALUES (?,?,?,?,?, ?)",
+                uuidBytes(failedRunId), uuidBytes(ACTOR.userId()), uuidBytes(UUID.randomUUID()),
+                uuidBytes(UUID.randomUUID()), "FAILED", NOW);
+
+        assertTrue(feedbackRepository.isSuccessfulOwnedRun(runId, ACTOR.userId()));
+        assertTrue(!feedbackRepository.isSuccessfulOwnedRun(runId, otherUser));
+        assertTrue(!feedbackRepository.isSuccessfulOwnedRun(failedRunId, ACTOR.userId()));
+        AnswerFeedback created = new AnswerFeedback(runId, ACTOR.userId(), FeedbackRating.NOT_HELPFUL,
+                FeedbackReason.INCOMPLETE, "缺少步骤", 0, NOW, NOW);
+        assertTrue(feedbackRepository.insert(created));
+        assertTrue(!feedbackRepository.insert(created));
+        assertEquals(created, feedbackRepository.find(runId, ACTOR.userId()).orElseThrow());
+        assertTrue(feedbackRepository.find(runId, otherUser).isEmpty());
+        assertTrue(!feedbackRepository.update(new AnswerFeedback(runId, ACTOR.userId(),
+                FeedbackRating.HELPFUL, null, null, 1, NOW, NOW), 1));
+        assertTrue(feedbackRepository.update(new AnswerFeedback(runId, ACTOR.userId(),
+                FeedbackRating.HELPFUL, null, null, 1, NOW, NOW), 0));
+        assertEquals(baselineHelpful + 1, feedbackRepository.summary().byRating().get(FeedbackRating.HELPFUL));
+        assertTrue(!feedbackRepository.delete(runId, ACTOR.userId(), 0, NOW));
+        assertTrue(feedbackRepository.delete(runId, ACTOR.userId(), 1, NOW));
+        assertTrue(feedbackRepository.find(runId, ACTOR.userId()).isEmpty());
+        assertEquals(baselineTotal, feedbackRepository.summary().total());
+        assertTrue(feedbackRepository.insert(created));
+        AnswerFeedback recreated = feedbackRepository.find(runId, ACTOR.userId()).orElseThrow();
+        assertEquals(3, recreated.version());
+        assertTrue(!feedbackRepository.update(new AnswerFeedback(runId, ACTOR.userId(),
+                FeedbackRating.HELPFUL, null, null, 1, NOW, NOW), 0));
+    }
+
+    /** 同一成功运行的并发首次提交只能有一个获胜，不产生重复反馈。 */
+    @Test
+    void shouldAllowOnlyOneConcurrentFirstFeedback() throws Exception {
+        UUID runId = UUID.randomUUID();
+        JdbcTemplate jdbc = new JdbcTemplate(dataSource);
+        jdbc.update("INSERT INTO agent_run(run_id,user_id,conversation_id,client_message_id,status,created_at,finished_at) "
+                        + "VALUES (?,?,?,?,?, ?,?)",
+                uuidBytes(runId), uuidBytes(ACTOR.userId()), uuidBytes(UUID.randomUUID()),
+                uuidBytes(UUID.randomUUID()), "SUCCEEDED", NOW, NOW);
+        AnswerFeedback feedback = new AnswerFeedback(runId, ACTOR.userId(), FeedbackRating.HELPFUL,
+                null, null, 0, NOW, NOW);
+        CountDownLatch start = new CountDownLatch(1);
+        try (ExecutorService workers = Executors.newFixedThreadPool(2)) {
+            Future<Boolean> first = workers.submit(() -> {
+                start.await();
+                return feedbackRepository.insert(feedback);
+            });
+            Future<Boolean> second = workers.submit(() -> {
+                start.await();
+                return feedbackRepository.insert(feedback);
+            });
+            start.countDown();
+            assertEquals(1, (first.get() ? 1 : 0) + (second.get() ? 1 : 0));
+        }
+        assertEquals(0, feedbackRepository.find(runId, ACTOR.userId()).orElseThrow().version());
     }
 
     /** 验证 V9 固定 GLOBAL、空间乐观锁和成员关系往返。 */
@@ -689,7 +765,8 @@ class FoundationRepositoryIT {
     @ComponentScan(basePackages = {
             "com.lawrence.supportagent.persistence.repository",
             "com.lawrence.supportagent.idempotency",
-            "com.lawrence.supportagent.memory"
+            "com.lawrence.supportagent.memory",
+            "com.lawrence.supportagent.feedback"
     })
     static class TestApplication {
         /** 为幂等适配器提供与生产一致的 UTC 系统时间端口。 */

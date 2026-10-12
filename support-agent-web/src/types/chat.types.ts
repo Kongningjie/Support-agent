@@ -33,6 +33,7 @@ export interface ConversationOverview {
 /** 已成功提交并可再次展示的单轮会话。 */
 export interface ConversationTurn {
   turnId: string
+  runId: string
   userMessage: string
   answer: string
   intent: ChatIntent
@@ -71,6 +72,7 @@ export interface ChatEvent {
 /** 当前界面展示的一轮用户消息和助手结果。 */
 export interface ChatMessage {
   key: string
+  runId: string | null
   clientMessageId: string | null
   spaceId: string
   userMessage: string

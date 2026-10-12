@@ -36,6 +36,7 @@ describe('chat store', () => {
     expect(store.conversation?.status).toBe('IDLE')
     expect(store.messages[0]?.answer).toBe('安全回答')
     expect(store.messages[0]?.state).toBe('completed')
+    expect(store.messages[0]?.runId).toBe('22222222-2222-2222-2222-222222222222')
   })
 
   it('失败重试复用原 clientMessageId', async () => {
@@ -106,6 +107,37 @@ describe('chat store', () => {
       overview.version,
       '44444444-4444-4444-4444-444444444444',
     )
+  })
+
+  it('历史成功轮次保留可用于本人评价的原始 runId', async () => {
+    vi.spyOn(conversationApi, 'getConversation').mockResolvedValue({
+      conversation: {
+        conversationId: '33333333-3333-3333-3333-333333333333',
+        spaceId: '00000000-0000-0000-0000-000000000001',
+        status: 'IDLE',
+        version: 1,
+        generation: 0,
+        summaryVersion: 0,
+        lastAccessAt: '2026-09-26T00:00:00Z',
+        expiresAt: '2026-10-03T00:00:00Z',
+      },
+      recentTurns: [
+        {
+          turnId: '11111111-1111-1111-1111-111111111111',
+          runId: '22222222-2222-2222-2222-222222222222',
+          userMessage: '你好',
+          answer: '您好',
+          intent: 'GREETING',
+          retrievalStatus: null,
+          citations: [],
+          completedAt: '2026-09-26T00:00:00Z',
+          conversationVersion: 1,
+        },
+      ],
+    })
+    const store = useChatStore()
+    await store.openConversation('33333333-3333-3333-3333-333333333333')
+    expect(store.messages[0]?.runId).toBe('22222222-2222-2222-2222-222222222222')
   })
 })
 

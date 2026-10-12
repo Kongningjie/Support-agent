@@ -22,5 +22,6 @@
 
 ## 当前最新记录
 
+- [用户回答反馈批次 1](2026-10-12-answer-feedback.md)：F5 后的单批次前端增量，使用真实回答反馈 API；不等于重新执行 F5 在线 E2E。
 - [F5 本地联调、质量补强与验收](2026-09-28-frontend-f5-local-acceptance.md)：前端 F1～F5 已全部完成；记录 65 项单元测试、4 项真实后端 E2E、经授权 DashScope 无知识问答和最终 Review 结果。
 - 更早记录保留对应阶段当时的范围、测试数量和未完成项，不因后续阶段完成而回写；判断当前能力时以最新记录和 [当前系统基线](../../implementation-plan/10-current-system-baseline.md) 为准。

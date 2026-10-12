@@ -60,6 +60,12 @@ public enum ErrorCode {
     MEMORY_SENSITIVE_CONTENT,
     /** 长期记忆正文与同用户同类型的现有记录重复。 */
     MEMORY_DUPLICATE_CONTENT,
+    /** 反馈或可评价的成功回答不存在，亦用于隐藏他人运行。 */
+    FEEDBACK_NOT_FOUND,
+    /** 重复创建或更正、删除时反馈版本已经变化。 */
+    FEEDBACK_VERSION_CONFLICT,
+    /** 反馈说明包含凭据或个人敏感信息。 */
+    FEEDBACK_SENSITIVE_CONTENT,
     /** 指定工单不存在。 */
     TICKET_NOT_FOUND,
     /** 工单当前状态不允许执行请求操作。 */

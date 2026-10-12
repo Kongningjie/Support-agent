@@ -1,0 +1,40 @@
+@baseUrl = http://localhost:8080
+@accessToken = replace-with-login-access-token
+@adminToken = replace-with-admin-access-token
+@runId = 22222222-2222-2222-2222-222222222222
+
+### 从成功会话轮次的 runId 或 answer.completed 事件读取本人反馈；尚未提交返回 404
+GET {{baseUrl}}/api/v1/answer-feedback/{{runId}}
+Authorization: Bearer {{accessToken}}
+
+### 首次提交无帮助反馈；runId 必须属于当前用户且运行已成功
+PUT {{baseUrl}}/api/v1/answer-feedback/{{runId}}
+Authorization: Bearer {{accessToken}}
+Content-Type: application/json
+
+{
+  "rating": "NOT_HELPFUL",
+  "reason": "INCOMPLETE",
+  "note": "缺少恢复步骤",
+  "expectedVersion": null
+}
+
+### 更正为有帮助；替换为 GET 返回的当前 version
+PUT {{baseUrl}}/api/v1/answer-feedback/{{runId}}
+Authorization: Bearer {{accessToken}}
+Content-Type: application/json
+
+{
+  "rating": "HELPFUL",
+  "reason": null,
+  "note": null,
+  "expectedVersion": 0
+}
+
+### 删除本人反馈；替换为当前 version
+DELETE {{baseUrl}}/api/v1/answer-feedback/{{runId}}?expectedVersion=1
+Authorization: Bearer {{accessToken}}
+
+### 管理员仅查看聚合计数，不查看个体说明
+GET {{baseUrl}}/api/v1/admin/answer-feedback/summary
+Authorization: Bearer {{adminToken}}

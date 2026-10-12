@@ -337,14 +337,14 @@ public class ChatUseCase {
             committed = true;
             //保存 Prompt 版本
             completedPromptVersion = outcome.promptVersion;
+            // 先写成功审计，确保客户端收到完成事件时运行已经可以被评价。
+            audits.succeed(runId, outcome.promptVersion, chatModelName, embeddingModelName,
+                    rerankModelName, elapsed(started), time.now());
             //发送 answer.completed
             emitAnswerCompleted(ownerUserId, sink, begin.conversationId(), runId, completed,
                     suggestionSequence, completedSequence);
             //记录 answer complete 指标  记录：从请求开始到完整答案完成一共多久。
             telemetry.recordDuration(Operation.ANSWER_COMPLETE, elapsed(started), true);
-            //审计标记成功
-            audits.succeed(runId, outcome.promptVersion, chatModelName, embeddingModelName,
-                    rerankModelName, elapsed(started), time.now());
             //SSE 正常结束
             sink.complete();
             //聊天成功后更新上下文  一轮聊天成功后，更新会话上下文相关内容。

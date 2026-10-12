@@ -82,7 +82,7 @@ public class ConversationLifecycleUseCase {
 
     /** 把完整成功轮次裁剪为用户可见字段。 */
     private ConversationTurnView turn(CompletedTurn turn) {
-        return new ConversationTurnView(turn.turnId(), turn.userMessage(), turn.answer(), turn.intent(),
+        return new ConversationTurnView(turn.turnId(), turn.runId(), turn.userMessage(), turn.answer(), turn.intent(),
                 turn.retrievalStatus(), turn.citations(), turn.completedAt(), turn.conversationVersion());
     }
 

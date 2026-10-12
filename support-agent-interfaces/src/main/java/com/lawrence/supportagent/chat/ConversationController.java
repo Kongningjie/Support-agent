@@ -160,6 +160,7 @@ public class ConversationController {
 
     /**
      * @param turnId 成功轮次 UUID
+     * @param runId 原始成功运行 UUID，仅用于当前认证用户关联反馈
      * @param userMessage 用户输入正文
      * @param answer 已通过安全校验的完整回答
      * @param intent 最终意图
@@ -170,6 +171,7 @@ public class ConversationController {
      */
     public record ConversationTurnResponse(
             @Schema(description = "成功轮次 UUID") UUID turnId,
+            @Schema(description = "原始成功运行 UUID，用于本人回答反馈") UUID runId,
             @Schema(description = "用户输入正文") String userMessage,
             @Schema(description = "已通过安全校验的完整回答") String answer,
             @Schema(description = "最终意图", example = "SUPPORT_QUERY") ChatIntent intent,
@@ -180,7 +182,7 @@ public class ConversationController {
             @Schema(description = "本轮提交后的会话版本", example = "3") long conversationVersion) {
         /** 将应用层轮次转换为不包含内部状态的 HTTP 响应。 */
         public static ConversationTurnResponse from(ConversationTurnView value) {
-            return new ConversationTurnResponse(value.turnId(), value.userMessage(), value.answer(), value.intent(),
+            return new ConversationTurnResponse(value.turnId(), value.runId(), value.userMessage(), value.answer(), value.intent(),
                     value.retrievalStatus(), value.citations().stream().map(CitationResponse::from).toList(),
                     value.completedAt(), value.conversationVersion());
         }

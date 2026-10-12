@@ -5,9 +5,11 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import SafeMarkdown from '@/components/content/SafeMarkdown.vue'
 import KnowledgeSpaceSelect from '@/components/knowledge-space/KnowledgeSpaceSelect.vue'
 import * as ticketApi from '@/api/ticket.api'
+import * as feedbackApi from '@/api/feedback.api'
 import { shouldLoadConversation } from '@/chat/chat.route'
 import { useChatStore } from '@/stores/chat.store'
 import type { ChatMessage } from '@/types/chat.types'
+import type { AnswerFeedback, FeedbackRating, FeedbackReason } from '@/types/feedback.types'
 import { ApiError } from '@/types/api.types'
 
 const route = useRoute()
@@ -20,6 +22,20 @@ const suggestionKeys = new Map<string, string>()
 const selectedSpaceId = ref<string | null>(null)
 const resetSpaceId = ref<string | null>(null)
 const resetVisible = ref(false)
+const feedbackVisible = ref(false)
+const feedbackBusy = ref(false)
+const feedbackRunId = ref<string | null>(null)
+const currentFeedback = ref<AnswerFeedback | null>(null)
+const feedbackRating = ref<FeedbackRating>('HELPFUL')
+const feedbackReason = ref<FeedbackReason | null>(null)
+const feedbackNote = ref('')
+const feedbackReasons: Array<{ value: FeedbackReason; label: string }> = [
+  { value: 'INCORRECT', label: '内容不正确' },
+  { value: 'UNSUPPORTED', label: '缺乏依据' },
+  { value: 'INCOMPLETE', label: '回答不完整' },
+  { value: 'UNCLEAR', label: '难以理解' },
+  { value: 'OTHER', label: '其他问题' },
+]
 const routeConversationId = computed(() =>
   typeof route.params.id === 'string' ? route.params.id : null,
 )
@@ -151,6 +167,93 @@ function isSuggestionExpired(message: ChatMessage): boolean {
   )
 }
 
+/** 打开本人反馈编辑框，并从服务端读取当前版本，未评价时使用首次创建模式。 */
+async function openFeedback(message: ChatMessage): Promise<void> {
+  if (message.state !== 'completed' || !message.runId || feedbackBusy.value) return
+  feedbackRunId.value = message.runId
+  feedbackVisible.value = true
+  feedbackBusy.value = true
+  currentFeedback.value = null
+  feedbackRating.value = 'HELPFUL'
+  feedbackReason.value = null
+  feedbackNote.value = ''
+  try {
+    const feedback = await feedbackApi.getFeedback(message.runId)
+    if (feedbackRunId.value !== message.runId) return
+    currentFeedback.value = feedback
+    feedbackRating.value = feedback.rating
+    feedbackReason.value = feedback.reason
+    feedbackNote.value = feedback.note ?? ''
+  } catch (error) {
+    if (!(error instanceof ApiError && error.status === 404)) {
+      ElMessage.error(error instanceof ApiError ? error.message : '读取反馈失败')
+      feedbackVisible.value = false
+    }
+  } finally {
+    feedbackBusy.value = false
+  }
+}
+
+/** 提交本人反馈；冲突时保留输入并刷新版本，要求用户再次确认。 */
+async function submitFeedback(): Promise<void> {
+  if (!feedbackRunId.value || feedbackBusy.value) return
+  if (feedbackRating.value === 'NOT_HELPFUL' && !feedbackReason.value) {
+    ElMessage.warning('请选择无帮助的原因')
+    return
+  }
+  feedbackBusy.value = true
+  try {
+    currentFeedback.value = await feedbackApi.putFeedback(feedbackRunId.value, {
+      rating: feedbackRating.value,
+      reason: feedbackRating.value === 'NOT_HELPFUL' ? feedbackReason.value : null,
+      note: feedbackNote.value.trim() || null,
+      expectedVersion: currentFeedback.value?.version ?? null,
+    })
+    feedbackVisible.value = false
+    ElMessage.success('反馈已保存')
+  } catch (error) {
+    if (error instanceof ApiError && error.status === 409) {
+      try {
+        currentFeedback.value = await feedbackApi.getFeedback(feedbackRunId.value)
+      } catch (refreshError) {
+        if (refreshError instanceof ApiError && refreshError.status === 404) {
+          currentFeedback.value = null
+        }
+      }
+    }
+    ElMessage.error(error instanceof ApiError ? error.message : '保存反馈失败')
+  } finally {
+    feedbackBusy.value = false
+  }
+}
+
+/** 二次确认后按当前版本删除本人反馈。 */
+async function removeFeedback(): Promise<void> {
+  if (!feedbackRunId.value || !currentFeedback.value || feedbackBusy.value) return
+  try {
+    await ElMessageBox.confirm('删除后这条反馈说明将无法恢复。是否继续？', '删除回答反馈', {
+      confirmButtonText: '删除反馈',
+      cancelButtonText: '取消',
+      type: 'warning',
+    })
+  } catch (error) {
+    if (error === 'cancel' || error === 'close') return
+    ElMessage.error('无法确认删除操作')
+    return
+  }
+  feedbackBusy.value = true
+  try {
+    await feedbackApi.deleteFeedback(feedbackRunId.value, currentFeedback.value.version)
+    currentFeedback.value = null
+    feedbackVisible.value = false
+    ElMessage.success('反馈已删除')
+  } catch (error) {
+    ElMessage.error(error instanceof ApiError ? error.message : '删除反馈失败')
+  } finally {
+    feedbackBusy.value = false
+  }
+}
+
 /** 返回检索状态的简体中文解释。 */
 function retrievalLabel(message: ChatMessage): string | null {
   const labels = {
@@ -219,6 +322,15 @@ function localTime(value: string | null): string {
           <p v-else-if="message.state === 'running'" class="stream-placeholder">
             正在准备安全回答…
           </p>
+          <el-button
+            v-if="message.state === 'completed' && message.runId"
+            size="small"
+            plain
+            :aria-label="`评价第 ${chat.messages.indexOf(message) + 1} 条回答`"
+            @click="openFeedback(message)"
+          >
+            评价回答
+          </el-button>
 
           <div v-if="message.citations.length" class="citation-list" aria-label="回答引用">
             <article
@@ -308,6 +420,50 @@ function localTime(value: string | null): string {
         </el-button>
       </div>
     </footer>
+
+    <el-dialog v-model="feedbackVisible" title="评价这次回答" width="520px">
+      <p class="form-note">反馈仅用于后续质量分析，不会自动修改知识或模型。</p>
+      <label for="feedback-rating">这次回答是否有帮助</label>
+      <el-select id="feedback-rating" v-model="feedbackRating" :disabled="feedbackBusy">
+        <el-option label="有帮助" value="HELPFUL" />
+        <el-option label="无帮助" value="NOT_HELPFUL" />
+      </el-select>
+      <template v-if="feedbackRating === 'NOT_HELPFUL'">
+        <label for="feedback-reason">无帮助的原因（必选）</label>
+        <el-select id="feedback-reason" v-model="feedbackReason" :disabled="feedbackBusy">
+          <el-option
+            v-for="reason in feedbackReasons"
+            :key="reason.value"
+            :label="reason.label"
+            :value="reason.value"
+          />
+        </el-select>
+      </template>
+      <label for="feedback-note">补充说明（可选，最多 300 字；请勿填写个人信息或密钥）</label>
+      <el-input
+        id="feedback-note"
+        v-model="feedbackNote"
+        type="textarea"
+        :rows="3"
+        maxlength="300"
+        show-word-limit
+        :disabled="feedbackBusy"
+      />
+      <template #footer>
+        <el-button
+          v-if="currentFeedback"
+          type="danger"
+          plain
+          :disabled="feedbackBusy"
+          @click="removeFeedback"
+          >删除反馈</el-button
+        >
+        <el-button :disabled="feedbackBusy" @click="feedbackVisible = false">取消</el-button>
+        <el-button type="primary" :loading="feedbackBusy" @click="submitFeedback">
+          {{ currentFeedback ? '保存更正' : '提交反馈' }}
+        </el-button>
+      </template>
+    </el-dialog>
 
     <el-dialog v-model="resetVisible" title="重置会话并选择知识空间" width="620px">
       <p class="form-note">

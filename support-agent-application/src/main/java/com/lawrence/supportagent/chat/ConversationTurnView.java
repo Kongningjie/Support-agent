@@ -10,6 +10,7 @@ import java.util.UUID;
  * 用户可见的单个成功会话轮次，不包含模型内部状态或建议冻结上下文。
  *
  * @param turnId 成功轮次 UUID
+ * @param runId 原始成功运行 UUID，可用于本人反馈
  * @param userMessage 用户输入正文
  * @param answer 已通过校验的完整回答
  * @param intent 最终意图
@@ -18,13 +19,13 @@ import java.util.UUID;
  * @param completedAt 轮次完成 UTC 时间
  * @param conversationVersion 本轮成功提交后的会话版本
  */
-public record ConversationTurnView(UUID turnId, String userMessage, String answer,
+public record ConversationTurnView(UUID turnId, UUID runId, String userMessage, String answer,
                                    ChatIntent intent, RetrievalStatus retrievalStatus,
                                    List<Citation> citations, Instant completedAt,
                                    long conversationVersion) {
     /** 复制引用并拒绝缺少用户可见内容的轮次。 */
     public ConversationTurnView {
-        if (turnId == null || userMessage == null || answer == null || intent == null
+        if (turnId == null || runId == null || userMessage == null || answer == null || intent == null
                 || completedAt == null || conversationVersion < 1) {
             throw new IllegalArgumentException("会话轮次公开字段不完整");
         }

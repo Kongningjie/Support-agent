@@ -20,6 +20,8 @@ import com.lawrence.supportagent.chat.MySqlAgentAuditAdapter;
 import com.lawrence.supportagent.chat.RedisConversationStoreAdapter;
 import com.lawrence.supportagent.chat.port.AgentAuditPort;
 import com.lawrence.supportagent.chat.port.ConversationStorePort;
+import com.lawrence.supportagent.feedback.AnswerFeedbackUseCase;
+import com.lawrence.supportagent.feedback.port.AnswerFeedbackRepository;
 import com.lawrence.supportagent.knowledge.DocumentContentPolicy;
 import com.lawrence.supportagent.knowledge.ElasticsearchKnowledgeIndexAdapter;
 import com.lawrence.supportagent.knowledge.ExactTermExtractor;
@@ -244,6 +246,11 @@ public class ChatConfiguration {
             ConversationStorePort store, TimeProvider time,
             KnowledgeSpaceAccessService access) {
         return new ConversationLifecycleUseCase(store, time, access);
+    }
+    /** 创建本人反馈及管理员聚合用例，不调用模型。 */
+    @Bean public AnswerFeedbackUseCase answerFeedbackUseCase(
+            AnswerFeedbackRepository repository, UserMemoryContentPolicy sensitiveText, TimeProvider time) {
+        return new AnswerFeedbackUseCase(repository, sensitiveText, time);
     }
     /** 创建 MySQL Agent 安全审计适配器。 */
     @Bean public AgentAuditPort agentAuditPort(AgentAuditMapper mapper, ObjectMapper json) {

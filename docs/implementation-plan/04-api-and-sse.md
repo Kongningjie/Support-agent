@@ -238,6 +238,8 @@ http/60-retrieval-evaluation.http
 | `POST /memories/{memoryId}/revoke` | 撤销注入资格 | 撤销后不再进入模型上下文 |
 | `DELETE /memories/{memoryId}` | 永久删除本人记忆 | 删除后不可恢复且不再注入 |
 
+会话详情 `recentTurns` 在用户回答反馈批次新增 `runId`（原 Agent 成功运行 UUID），用于与反馈建立稳定关联；它不包含 Prompt、模型完整原始响应或审计内部状态。
+
 认证失败返回 401，权限不足返回 403，资源不存在返回 404，版本或状态冲突返回 409，登录退避返回 429。所有普通 JSON 响应仍使用 `ApiResult<T>`。
 
 ## 12. 阶段 15 Prompt 输入安全语义
@@ -270,3 +272,16 @@ http/60-retrieval-evaluation.http
 - 工单建议沿用会话冻结的 `spaceId`，消费前重新校验；案例继承来源工单空间，客户端不得指定或改写。
 
 完整请求示例见 `http/10-knowledge-document.http`、`http/20-chat.http`、`http/29-knowledge-spaces.http` 和 `http/30-ticket.http`。
+
+## 16. 用户回答反馈批次接口
+
+本节对应[用户回答反馈冻结方案](../design-freezes/05-answer-feedback.md)，只新增质量反馈，不改变聊天 SSE 事件顺序。
+
+| 方法与路径 | 作用 | 关键约束 |
+|---|---|---|
+| `GET /answer-feedback/{runId}` | 查询本人当前反馈 | `runId` 为成功运行 UUID；未评价、非本人或非成功运行返回 404 |
+| `PUT /answer-feedback/{runId}` | 首次提交或更正 | 首次 `expectedVersion=null`，更正传当前版本；重复创建或版本冲突返回 409 |
+| `DELETE /answer-feedback/{runId}?expectedVersion=0` | 删除本人当前反馈 | 版本必填；物理删除说明，旧版本返回 409 |
+| `GET /admin/answer-feedback/summary` | 查看聚合计数 | 仅平台 `ADMIN`；不返回用户、运行、说明或回答正文 |
+
+`rating` 只能是 `HELPFUL`（有帮助）或 `NOT_HELPFUL`（无帮助）。`reason` 在无帮助时必填，取 `INCORRECT`（内容不正确）、`UNSUPPORTED`（缺乏依据）、`INCOMPLETE`（不完整）、`UNCLEAR`（难理解）、`OTHER`（其他）；有帮助时必须为空。`note` 是可选说明，规范化后最多 300 个 Unicode 字符，空白归一为空并拒绝疑似敏感信息。本人响应中的 `version` 首次创建为 0，更正、删除及删除后重建继续递增；`createdAt` 与 `updatedAt` 为 UTC 时间。管理员聚合响应仅有 `total`（总反馈数）、`byRating`（各帮助程度数）、`byReason`（各无帮助原因数）。普通 JSON 接口继续使用 `ApiResult<T>`，示例见 `http/24-answer-feedback.http`。

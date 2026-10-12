@@ -201,6 +201,7 @@ export const useChatStore = defineStore('chat', () => {
       item.suggestionId = stringValue(event.data.suggestionId)
       item.suggestionExpiresAt = stringValue(event.data.expiresAt)
     } else if (event.eventType === 'answer.completed') {
+      item.runId = event.runId
       item.answer = stringValue(event.data.answer)
       item.citations = arrayCitationValue(event.data.citations)
       item.resultStatus = stringValue(event.data.resultStatus)
@@ -228,6 +229,7 @@ export const useChatStore = defineStore('chat', () => {
     conversation.value = details.conversation
     messages.value = details.recentTurns.map((turn) => ({
       key: turn.turnId,
+      runId: turn.runId,
       clientMessageId: null,
       spaceId: details.conversation.spaceId,
       userMessage: turn.userMessage,
@@ -278,6 +280,7 @@ function createRunningMessage(
 ): ChatMessage {
   return {
     key: clientMessageId,
+    runId: null,
     clientMessageId,
     spaceId,
     userMessage,
