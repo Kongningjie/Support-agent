@@ -21,7 +21,11 @@ public class TransactionalAsyncTaskCompletionAdapter implements AsyncTaskComplet
     @Transactional
     public void complete(long taskId, String workerId, Instant now,
                          AsyncTaskBusinessMutation businessMutation) {
+        //mapper.complete(...)
+        //    → async_task：RUNNING 改为 SUCCEEDED
         requireChanged(mapper.complete(taskId, workerId, now));
+        //    → 执行刚才返回的 publishIfCurrent(...)
+        //    → managed_document：INDEXING 改为 PUBLISHED
         businessMutation.apply();
     }
 

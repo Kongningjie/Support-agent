@@ -96,11 +96,13 @@ public class ConversationContextService {
      * @return 可直接传递给模型端口的上下文窗口
      */
     public ConversationContext prepare(UUID ownerUserId, UUID conversationId, List<String> fixedSections) {
+        //读取当前会话的 MemorySnapshot
         MemorySnapshot snapshot = store.memorySnapshot(ownerUserId, conversationId);
-        List<String> userMemories = longTermMemories == null
-                ? List.of() : longTermMemories.contextFor(ownerUserId);
+        //MySQL 用户长期记忆
+        List<String> userMemories = longTermMemories == null ? List.of() : longTermMemories.contextFor(ownerUserId);
         if (requiresHardSummary(snapshot, fixedSections, userMemories)) {
             long previousSummaryVersion = snapshot.summaryVersion();
+            //从当前会话历史里挑出需要被摘要的轮次 → 生成摘要候选 → 校验摘要是否可靠 → 提交摘要并保留最近几轮原文；如果摘要失败且这次摘要是“必须的”，就直接让本次请求失败。
             summarize(ownerUserId, snapshot, true);
             snapshot = store.memorySnapshot(ownerUserId, conversationId);
             if (snapshot.summaryVersion() <= previousSummaryVersion
@@ -115,6 +117,7 @@ public class ConversationContextService {
     public void afterSuccessfulTurn(UUID ownerUserId, UUID conversationId) {
         try {
             MemorySnapshot snapshot = store.memorySnapshot(ownerUserId, conversationId);
+            //不是每轮都生成摘要，达到软阈值才异步触发。
             if (requiresSoftSummary(snapshot)) {
                 summaryExecutor.execute(() -> summarize(ownerUserId, snapshot, false));
             }
@@ -139,6 +142,7 @@ public class ConversationContextService {
 
     /** 执行一次结构化摘要、确定性实体校验和 Redis CAS 提交。 */
     private void summarize(UUID ownerUserId, MemorySnapshot snapshot, boolean required) {
+        //先挑出需要摘要的历史轮次
         List<CompletedTurn> source = sourceTurns(snapshot.turns());
         if (source.isEmpty()) {
             if (required && totalTokens(snapshot, List.of(), List.of()) > settings.availableInputTokens()) {
@@ -150,6 +154,7 @@ public class ConversationContextService {
         try {
             ConversationSummary candidate = generateSummary(snapshot, source, covered);
             validateCandidate(snapshot, source, candidate, covered);
+            //正式提交摘要
             store.commitSummary(ownerUserId, snapshot.conversationId(), snapshot.summaryVersion(),
                     snapshot.generation(), candidate, settings.recentFullTurns(), time.now());
         } catch (RuntimeException exception) {
@@ -234,14 +239,18 @@ public class ConversationContextService {
     /** 在冻结预算内按“摘要优先、最近轮次从新到旧”的顺序组装上下文。 */
     private ConversationContext assemble(MemorySnapshot snapshot, List<String> fixedSections,
                                          List<String> userMemories) {
+        //先给 fixedSections 预留 Token
         int fixedTokens = tokens.estimate(fixedSections);
         int remaining = settings.availableInputTokens() - fixedTokens;
         if (remaining < 0) {
             throw new ApplicationException(ErrorCode.COMMON_VALIDATION_FAILED,
                     "当前问题和证据超过模型输入预算");
         }
+        //创建最终上下文结果
         List<String> result = new ArrayList<>();
+        //先放长期记忆
         for (String memory : userMemories) {
+            //先做安全检查：
             if (!allowed(memory, PromptSecuritySource.MEMORY)) {
                 continue;
             }
@@ -251,6 +260,7 @@ public class ConversationContextService {
                 remaining -= memoryTokens;
             }
         }
+        //再放会话摘要
         if (snapshot.summary() != null && allowed(
                 snapshot.summary().toModelContext(), PromptSecuritySource.SUMMARY)) {
             String summary = snapshot.summary().toModelContext();
@@ -262,11 +272,14 @@ public class ConversationContextService {
             result.add(summary);
             remaining -= summaryTokens;
         }
+        //开始挑最近完整聊天轮次
         List<String> selectedNewestFirst = new ArrayList<>();
         List<CompletedTurn> turns = snapshot.turns();
         for (int index = turns.size() - 1;
              index >= 0 && selectedNewestFirst.size() < settings.recentFullTurns(); index--) {
+            //把 CompletedTurn 渲染成文本
             String value = render(turns.get(index));
+            //历史消息也做安全检查
             if (!allowed(value, PromptSecuritySource.HISTORY)) {
                 continue;
             }
@@ -277,9 +290,11 @@ public class ConversationContextService {
             selectedNewestFirst.add(value);
             remaining -= turnTokens;
         }
+        //再把顺序翻回来
         for (int index = selectedNewestFirst.size() - 1; index >= 0; index--) {
             result.add(selectedNewestFirst.get(index));
         }
+        //构造 ConversationContext
         return new ConversationContext(result, settings.availableInputTokens() - remaining,
                 snapshot.summaryVersion(), snapshot.summary() == null
                 ? 0 : snapshot.summary().coveredThroughVersion());

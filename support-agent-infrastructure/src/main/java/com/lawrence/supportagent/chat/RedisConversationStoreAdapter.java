@@ -311,13 +311,18 @@ public class RedisConversationStoreAdapter implements ConversationStorePort {
                 for _,turn in ipairs(turns) do table.insert(result,turn) end
                 return result
                 """;
+        //执行 Lua
         List<?> values = executeList(script,
                 List.of(conversationKey(conversationId), turnsKey(conversationId)), ownerUserId.toString());
+        //处理 EXPIRED
         if ("EXPIRED".equals(string(values, 0))) throw notFound();
+        //解析历史 turns
         List<CompletedTurn> turns = new ArrayList<>();
         for (int index = 5; index < values.size(); index++) turns.add(read(string(values, index), CompletedTurn.class));
+        //解析 summary
         String summaryJson = string(values, 4);
         ConversationSummary summary = summaryJson.isBlank() ? null : read(summaryJson, ConversationSummary.class);
+        //真正构造 MemorySnapshot
         return new MemorySnapshot(conversationId, UUID.fromString(string(values, 0)),
                 Long.parseLong(string(values, 1)), Long.parseLong(string(values, 2)),
                 Long.parseLong(string(values, 3)), summary, turns);

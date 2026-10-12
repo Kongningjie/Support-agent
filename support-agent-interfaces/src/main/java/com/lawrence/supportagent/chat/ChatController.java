@@ -41,6 +41,11 @@ public class ChatController {
     @PostMapping(path = "/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
     public SseEmitter stream(@AuthenticationPrincipal AuthenticatedUser actor,
                              @Valid @RequestBody ChatStreamRequest request) {
+        /*
+        prepare() 是聊天执行前的同步准备阶段，负责认证和 Prompt 安全校验、知识空间解析与权限上下文构建
+        同时通过 conversations.begin() 处理消息幂等、会话版本和运行租约
+        最后生成 PreparedChat 交给异步 SSE 聊天流程执行。
+         */
         ChatUseCase.PreparedChat prepared = useCase.prepare(request.toCommand(actor));
         SseEmitter emitter = new SseEmitter(RESPONSE_TIMEOUT.toMillis());
         BoundedSseSink sink = new BoundedSseSink(emitter);

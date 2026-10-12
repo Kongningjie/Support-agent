@@ -25,22 +25,27 @@ public class IntentRecognitionService {
         this.minimumConfidence = minimumConfidence;
     }
 
-    /** 返回规则优先且永远具有安全检索问题的最终意图。 */
+    /** 返回 规则优先 且永远具有安全检索问题的最终意图。 */
     public IntentDecision recognize(String message, List<String> recentTurns) {
+        //先规范化用户输入
         String normalized = requireMessage(message);
         String lower = normalized.toLowerCase(Locale.ROOT);
+        //问候规则
         if (GREETINGS.contains(lower)) {
             return new IntentDecision(ChatIntent.GREETING, 1, normalized, null, "RULE_GREETING");
         }
         Matcher ticket = TICKET.matcher(normalized);
+        //工单查询规则
         if (ticket.find() && !TECHNICAL.matcher(normalized).find()) {
             return new IntentDecision(ChatIntent.TICKET_QUERY, 1, normalized,
                     ticket.group(), "RULE_TICKET_NO");
         }
+        //明显越界请求
         if (OUT_OF_SCOPE.matcher(normalized).find() && !TECHNICAL.matcher(normalized).find()) {
             return new IntentDecision(ChatIntent.OUT_OF_SCOPE, 1, normalized, null,
                     "RULE_OUT_OF_SCOPE");
         }
+        //前面三个规则都没命中，才调用模型
         try {
             IntentDecision decision = model.recognize(normalized,
                     recentTurns == null ? List.of() : List.copyOf(recentTurns));

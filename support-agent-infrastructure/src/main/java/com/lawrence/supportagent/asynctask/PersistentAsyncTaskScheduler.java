@@ -64,11 +64,12 @@ public class PersistentAsyncTaskScheduler {
             return;
         }
         Instant now = timeProvider.now();
+        //主动到 MySQL 领取到期任务。
         List<AsyncTask> tasks = repository.claimDue(workerId, now,
                 now.plus(leaseDuration), Math.min(batchSize, available));
         for (AsyncTask task : tasks) {
-            capacity.acquireUninterruptibly();
-            executor.execute(() -> execute(task));
+            capacity.acquireUninterruptibly(); // 占用一个容量许可。
+            executor.execute(() -> execute(task)); // 交给线程池执行。
         }
     }
 
@@ -80,6 +81,7 @@ public class PersistentAsyncTaskScheduler {
             LOGGER.error("异步任务结果保存失败，taskId={}，workerId={}",
                     task.id(), workerId, exception);
         } finally {
+            //finally 保证这个任务结束后归还刚才占用的容量。
             capacity.release();
         }
     }

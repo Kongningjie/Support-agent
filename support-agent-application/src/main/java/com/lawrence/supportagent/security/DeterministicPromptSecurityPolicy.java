@@ -15,30 +15,37 @@ public class DeterministicPromptSecurityPolicy implements PromptSecurityPolicy {
     private static final Pattern DISCUSSION = Pattern.compile(
             "什么是|解释|说明|分析|为什么|如何(?:防御|检测|识别|避免)|防止|预防|研究|测试|示例|教程|what\\s+is|explain|detect|prevent|defen[cs]e|research|example",
             Pattern.CASE_INSENSITIVE);
+    //盖原来的系统指令
     private static final Pattern OVERRIDE = Pattern.compile(
             "(?:忽略|无视|绕过|覆盖|取消|替换|废除).{0,16}(?:之前|以上|系统|开发者|安全|规则|指令|限制)|"
                     + "(?:ignore|disregard|override|bypass|replace).{0,32}(?:previous|above|system|developer|safety|rule|instruction)",
             Pattern.CASE_INSENSITIVE);
+    //套取系统 Prompt
     private static final Pattern EXFILTRATION = Pattern.compile(
             "(?:输出|显示|展示|泄露|打印|返回|告诉).{0,24}(?:系统提示词|隐藏规则|开发者指令|内部指令|内部状态|完整prompt)|"
                     + "(?:reveal|show|print|return|leak|tell).{0,32}(?:system\\s*prompt|hidden\\s*(?:rule|instruction)|developer\\s*message|internal\\s*(?:instruction|state))",
             Pattern.CASE_INSENSITIVE);
+    //伪装系统角色
     private static final Pattern ROLE = Pattern.compile(
             "<\\|(?:system|developer|tool|assistant)\\|>|\\[(?:system|developer|tool)]|"
                     + "(?:^|\\R)\\s*(?:system|developer|tool)\\s*:|你现在是(?:系统|开发者)|扮演(?:系统|开发者)",
             Pattern.CASE_INSENSITIVE);
+    //工具越权
     private static final Pattern TOOL = Pattern.compile(
             "(?:调用|执行|使用|重复调用).{0,24}(?:未授权|任意|所有|其他)(?:工具|函数|工单)|"
                     + "(?:调用|执行|使用|重复调用).{0,24}get_ticket.{0,24}(?:其他|任意|所有)|"
                     + "(?:call|execute|use).{0,32}(?:unauthorized|arbitrary|other|all).{0,16}(?:tool|function|ticket)",
             Pattern.CASE_INSENSITIVE);
+    //编码绕过
     private static final Pattern ENCODED = Pattern.compile(
             "(?:base64|rot13|十六进制|hex|编码|解码).{0,32}(?:执行|遵循|照做|指令|execute|follow|instruction)",
             Pattern.CASE_INSENSITIVE);
+    //有没有命令语气
     private static final Pattern IMPERATIVE = Pattern.compile(
             "请|立即|现在|必须|务必|直接|执行|输出|显示|展示|告诉|调用|忽略|无视|绕过|"
                     + "please|now|must|execute|output|show|reveal|call|ignore|bypass",
             Pattern.CASE_INSENSITIVE);
+    //明确要求执行
     private static final Pattern EXPLICIT_EXECUTION = Pattern.compile(
             "不要解释|直接执行|照做|按此执行|并执行|实际执行|do\\s+not\\s+explain|execute\\s+it|follow\\s+it",
             Pattern.CASE_INSENSITIVE);
@@ -60,26 +67,37 @@ public class DeterministicPromptSecurityPolicy implements PromptSecurityPolicy {
     /** {@inheritDoc} */
     @Override
     public PromptSecurityAssessment assess(String content, PromptSecuritySource source) {
+        //安全功能关闭 / 内容为空，直接 ALLOW
         if (!settings.enabled() || content == null || content.isBlank()) {
             PromptSecurityAssessment assessment = new PromptSecurityAssessment(
                     PromptSecurityAction.ALLOW, Set.of(), source);
             telemetry.recordPromptAssessment(source, assessment.action(), assessment.signals());
             return assessment;
         }
+        //先标准化用户文本
         String normalized = Normalizer.normalize(content, Normalizer.Form.NFKC)
                 .toLowerCase(Locale.ROOT);
+        //创建攻击信号集合
         EnumSet<PromptSecuritySignal> signals = EnumSet.noneOf(PromptSecuritySignal.class);
+        //检查覆盖指令
         addIfMatches(signals, normalized, OVERRIDE, PromptSecuritySignal.INSTRUCTION_OVERRIDE);
+        //检查套取 Prompt
         addIfMatches(signals, normalized, EXFILTRATION, PromptSecuritySignal.PROMPT_EXFILTRATION);
+        //检查角色伪装
         addIfMatches(signals, normalized, ROLE, PromptSecuritySignal.ROLE_IMPERSONATION);
+        //检查工具越权
         addIfMatches(signals, normalized, TOOL, PromptSecuritySignal.TOOL_ESCALATION);
+        //检查编码攻击
         addIfMatches(signals, normalized, ENCODED, PromptSecuritySignal.ENCODED_INSTRUCTION);
+        //判断是不是正常安全讨论
         boolean discussion = SECURITY_TOPIC.matcher(normalized).find()
                 && DISCUSSION.matcher(normalized).find();
         if (discussion) {
             signals.add(PromptSecuritySignal.SECURITY_DISCUSSION);
         }
+        //根据所有信号决定动作
         PromptSecurityAction action = action(normalized, signals, discussion);
+        //配置还能把 BLOCK 降级成 GUARD
         if (action == PromptSecurityAction.BLOCK && source == PromptSecuritySource.USER_MESSAGE
                 && !settings.blockHighConfidenceInput()) {
             action = PromptSecurityAction.GUARD;
@@ -88,6 +106,7 @@ public class DeterministicPromptSecurityPolicy implements PromptSecurityPolicy {
                 && !settings.excludeHighRiskContext()) {
             action = PromptSecurityAction.GUARD;
         }
+        //创建最终 Assessment
         PromptSecurityAssessment assessment = new PromptSecurityAssessment(action, signals, source);
         telemetry.recordPromptAssessment(source, assessment.action(), assessment.signals());
         if (assessment.blocked() && source != PromptSecuritySource.USER_MESSAGE) {
@@ -110,11 +129,14 @@ public class DeterministicPromptSecurityPolicy implements PromptSecurityPolicy {
         if (signals.isEmpty()) {
             return PromptSecurityAction.ALLOW;
         }
+        //判断有没有命令语气
         boolean imperative = IMPERATIVE.matcher(content).find();
         boolean explicitlyExecute = EXPLICIT_EXECUTION.matcher(content).find();
+        //正常讨论安全问题，优先 GUARD
         if (discussion && !explicitlyExecute) {
             return PromptSecurityAction.GUARD;
         }
+        //拆出各风险信号
         boolean override = signals.contains(PromptSecuritySignal.INSTRUCTION_OVERRIDE);
         boolean exfiltration = signals.contains(PromptSecuritySignal.PROMPT_EXFILTRATION);
         boolean role = signals.contains(PromptSecuritySignal.ROLE_IMPERSONATION);

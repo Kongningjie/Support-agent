@@ -66,14 +66,19 @@ public class RetrievalService implements AutoCloseable {
                     () -> callBm25(query, allowedSpaceIds), branches);
             CompletableFuture<BranchResult> vectorTask = CompletableFuture.supplyAsync(
                     () -> callVector(query, allowedSpaceIds), branches);
+            //并行执行 BM25 和向量召回
             BranchResult bm25 = bm25Task.join();
             BranchResult vector = vectorTask.join();
+
             if (bm25.status == BranchStatus.FAILED && vector.status == BranchStatus.FAILED) {
                 return failed(started);
             }
+            //MySQL 来源有效性回查
             List<RetrievalEvidence> fused = validSources(fuse(bm25.items, vector.items),
                     allowedSpaceIds);
+            //Rerank
             RerankOutcome reranked = rerank(query, fused);
+
             List<RetrievalEvidence> selected = selectReliable(reranked.items, reranked.status);
             RetrievalStatus status = selected.isEmpty() ? RetrievalStatus.NO_RELIABLE_KNOWLEDGE
                     : RetrievalStatus.GROUNDED;
@@ -149,6 +154,7 @@ public class RetrievalService implements AutoCloseable {
     /** 安全执行向量分支并把模型或搜索异常收敛为分支失败。 */
     private BranchResult callVector(String query, Set<UUID> allowedSpaceIds) {
         try {
+            //查询向量化并执行 KNN
             List<Double> vector = embeddingModel.embedQuery(query);
             return new BranchResult(BranchStatus.SUCCEEDED, ranked(searchPort.searchVector(vector,
                     allowedSpaceIds,
@@ -217,6 +223,7 @@ public class RetrievalService implements AutoCloseable {
             List<RerankDocument> documents = rerankCandidates.stream().map(value ->
                     new RerankDocument(value.chunkId(), value.title() + "\n" + value.headingPath()
                             + "\n" + value.content())).toList();
+            //直接调用 rerankModel.rerank(...) 做重排
             List<RerankScore> scores = rerankModel.rerank(query, documents);
             Map<String, Double> byId = new HashMap<>();
             for (RerankScore score : scores) {

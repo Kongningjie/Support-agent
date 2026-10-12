@@ -44,8 +44,10 @@ public class AsyncTaskRunner {
 
     /** 执行单个已抢占任务；缺失或路由冲突时直接记录不可重试死亡。 */
     public void run(AsyncTask task, String workerId) {
-        List<AsyncTaskHandler> matches = handlers.getOrDefault(task.taskType(), List.of()).stream()
-                .filter(candidate -> candidate.supports(task)).toList();
+        List<AsyncTaskHandler> matches = handlers.getOrDefault(task.taskType(), List.of())
+                .stream()
+                .filter(candidate -> candidate.supports(task))
+                .toList();
         if (matches.isEmpty()) {
             fail(task, workerId, null, new AsyncTaskExecutionException(
                     "ASYNC_TASK_HANDLER_MISSING", "当前任务类型未注册处理器", false));
@@ -82,6 +84,7 @@ public class AsyncTaskRunner {
                     "ASYNC_TASK_UNEXPECTED_FAILURE", "异步任务执行失败", true));
             return;
         }
+        // 任务状态与业务变更由完成端口在同一事务内提交。
         completionPort.complete(task.id(), workerId, timeProvider.now(),
                 successMutation == null ? AsyncTaskBusinessMutation.NONE : successMutation);
     }

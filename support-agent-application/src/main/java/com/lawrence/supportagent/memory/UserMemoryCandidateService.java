@@ -56,6 +56,7 @@ public class UserMemoryCandidateService {
                                     UUID clientMessageId, String userMessage) {
         recordTelemetry(telemetry::recordRequest);
         try {
+            //用户没有启用长期记忆时不会生成候选。
             if (!repository.findSettings(userId).map(UserMemorySettings::enabled).orElse(false)) {
                 return;
             }

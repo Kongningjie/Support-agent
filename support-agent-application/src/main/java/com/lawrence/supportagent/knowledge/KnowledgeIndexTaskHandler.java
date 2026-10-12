@@ -66,26 +66,33 @@ public class KnowledgeIndexTaskHandler implements AsyncTaskHandler {
     /** {@inheritDoc} */
     @Override
     public AsyncTaskBusinessMutation execute(AsyncTaskExecutionContext context) {
+        //确认任务仍然有效
         AsyncTask task = requireManagedDocumentTask(context.task());
         ManagedDocument document = currentIndexingDocument(task);
         requireActiveSpace(task, document);
         try {
+            //检查正文
             contentPolicy.verifyNoSensitiveContent(document.rawContent());
+            //切块 把一篇文档拆成多个 KnowledgeChunkDraft
             List<KnowledgeChunkDraft> drafts = chunker.chunk(document.title(),
                     document.inputType(), document.rawContent());
             if (drafts.isEmpty()) {
                 throw new AsyncTaskExecutionException(
                         "KNOWLEDGE_EMPTY_CHUNKS", "文档没有产生可索引分块", false);
             }
+            //为每个分块生成向量
             List<List<Double>> embeddings = embeddingModel.embedDocuments(
                     drafts.stream().map(KnowledgeChunkDraft::content).toList(),
                     () -> requireLease(context));
             validateEmbeddings(drafts.size(), embeddings);
+            //计算发布后的版本，组装 ES 数据
             long publishedVersion = Math.addExact(task.aggregateVersion(), 1);
             Instant publicationTime = timeProvider.now();
             List<IndexedKnowledgeChunk> chunks = indexedChunks(document, publishedVersion,
                     publicationTime, drafts, embeddings);
+            //写入并核验 ES
             writeAndVerify(task, publishedVersion, chunks);
+            //最关键的一行：返回一个“待执行操作”
             return () -> publishIfCurrent(task, publicationTime);
         } catch (ModelInvocationException exception) {
             throw new AsyncTaskExecutionException(exception.errorCode(),

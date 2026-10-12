@@ -32,4 +32,7 @@
 - 最近后端业务阶段记录：[阶段 20 空间权限治理、评测与四期验收](2026-09-27-stage-20-governance-evaluation-acceptance.md)。
 - 最近前端阶段记录：[F5 本地联调、质量补强与验收](../frontend/work-logs/2026-09-28-frontend-f5-local-acceptance.md)。
 - 最近全局文档同步记录：[阶段 20 / F5 当前状态同步](2026-09-28-documentation-current-state-sync.md)。
+- 最近规划记录：[五期 Agent 能力扩展预规划](2026-09-29-phase-5-agent-capability-preplanning.md)。
+- 最新评测规划记录：[评测体系优化专项预规划](2026-10-12-evaluation-quality-loop-preplanning.md)；专项[方案](../implementation-plan/14-evaluation-quality-loop-preplan.md)尚未进入实施阶段。
+- 最近提交前 Review 记录：[注释整理与规划文档提交](2026-10-12-comment-review-and-push.md)。
 - 历史记录保留当时事实，不回写旧测试数量、范围排除或未完成项；当前能力统一以 [当前系统基线](../implementation-plan/10-current-system-baseline.md) 为准。

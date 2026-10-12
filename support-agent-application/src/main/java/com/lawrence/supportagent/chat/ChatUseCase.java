@@ -288,10 +288,12 @@ public class ChatUseCase {
         // 已完成的相同消息直接执行幂等重放，不再重复调用模型。
         if (begin.status() == ConversationStorePort.BeginStatus.REPLAY) {
             replay(ownerUserId, begin, sink);
+            //记录：这次聊天请求耗时。
             telemetry.recordDuration(Operation.CHAT_REQUEST, elapsed(started), true);
             return;
         }
 
+        //表示：当前聊天结果有没有已经成功提交到会话存储。
         boolean committed = false;
         String completedPromptVersion = "unknown";
         try {
@@ -299,53 +301,78 @@ public class ChatUseCase {
             if (begin.interruptedRunId() != null) {
                 audits.fail(begin.interruptedRunId(), "INTERRUPTED", "CHAT_RUN_LEASE_EXPIRED", 0, time.now());
             }
+            //记录当前 run 正式开始
             audits.start(runId, ownerUserId, begin.conversationId(), request.clientMessageId(), time.now());
+            //向前端发送 conversation.started
             emit(ownerUserId, sink, begin.conversationId(), runId, "conversation.started",
                     Map.of("conversationVersion", begin.version(), "replayed", false));
+            //加载模型上下文
             List<String> context = modelContext(ownerUserId, begin.conversationId(), List.of(request.message()));
+            //意图识别
             IntentDecision decision = intents.recognize(request.message(), context);
+            //记录意图识别结果
             audits.recordIntent(runId, decision);
+            //route()：真正执行业务
             Outcome outcome = route(request.actor(), prepared.accessContext(), begin.conversationId(),
                     runId, request.message(), context, decision, sink);
+            //构造 CompletedTurn  CompletedTurn pending 表示：已经生成完成，但是还没有正式提交到会话存储的一轮聊天结果。
             CompletedTurn pending = new CompletedTurn(ids.generate(), request.clientMessageId(), runId,
                     request.message().trim(), decision.standaloneQuery(), decision.intent(), outcome.answer,
                     outcome.retrievalStatus, outcome.citations, outcome.suggestionId,
                     suggestionContext(request.message(), context), outcome.resultStatus,
                     time.now(), begin.version() + 1);
+            //发送正文前再次校验空间权限
             revalidateBeforeAnswer(request.actor(), prepared.accessContext());
+            //开始把答案正文通过 SSE 发出去
             emitAnswerBody(ownerUserId, sink, begin.conversationId(), runId, pending, started);
+            //为后面的事件提前申请 sequence
             Long suggestionSequence = pending.suggestionId() == null ? null
                     : conversations.nextSequence(ownerUserId, begin.conversationId(), runId);
+
             long completedSequence = conversations.nextSequence(ownerUserId, begin.conversationId(), runId);
+            //正式提交会话
             CompletedTurn completed = conversations.complete(ownerUserId, begin.conversationId(), runId, pending,
                     outcome.agentState, time.now());
+            //标记已经提交成功
             committed = true;
+            //保存 Prompt 版本
             completedPromptVersion = outcome.promptVersion;
+            //发送 answer.completed
             emitAnswerCompleted(ownerUserId, sink, begin.conversationId(), runId, completed,
                     suggestionSequence, completedSequence);
+            //记录 answer complete 指标  记录：从请求开始到完整答案完成一共多久。
             telemetry.recordDuration(Operation.ANSWER_COMPLETE, elapsed(started), true);
+            //审计标记成功
             audits.succeed(runId, outcome.promptVersion, chatModelName, embeddingModelName,
                     rerankModelName, elapsed(started), time.now());
+            //SSE 正常结束
             sink.complete();
+            //聊天成功后更新上下文  一轮聊天成功后，更新会话上下文相关内容。
             if (contextService != null) {
                 contextService.afterSuccessfulTurn(ownerUserId, begin.conversationId());
             }
+            //生成长期记忆候选  聊天成功后，根据用户这次输入判断是否有值得长期保存的记忆候选。
             if (memoryCandidates != null) {
                 memoryCandidates.afterSuccessfulTurn(ownerUserId, begin.conversationId(),
                         request.clientMessageId(), request.message());
             }
+            //记录整个请求成功
             telemetry.recordDuration(Operation.CHAT_REQUEST, elapsed(started), true);
         } catch (RuntimeException exception) {
+            //如果已经提交成功，就不能再算失败
             if (committed) {
                 audits.succeed(runId, completedPromptVersion, chatModelName, embeddingModelName,
                         rerankModelName, elapsed(started), time.now());
                 telemetry.recordDuration(Operation.CHAT_REQUEST, elapsed(started), true);
                 return;
             }
+            //确定错误码
             String code = exception instanceof ApplicationException application
                     ? application.errorCode().name() : exception instanceof ModelInvocationException model
                     ? model.errorCode() : "COMMON_INTERNAL_ERROR";
+            //尝试把错误通过 SSE 发给前端
             try {
+                //不泄漏内部实现细节的安全错误信息。
                 emit(ownerUserId, sink, begin.conversationId(), runId, "error", Map.of(
                         "code", code, "message", safeMessage(exception),
                         "retryable", retryable(code, exception)));
@@ -353,8 +380,11 @@ public class ChatUseCase {
             } catch (RuntimeException ignored) {
                 // 客户端已经断开时只执行失败清理。
             }
+            //把会话运行标记失败
             conversations.fail(ownerUserId, begin.conversationId(), runId, time.now());
+            //审计记录失败
             audits.fail(runId, "FAILED", code, elapsed(started), time.now());
+            //Telemetry 记录失败
             telemetry.recordDuration(Operation.CHAT_REQUEST, elapsed(started), false);
         }
     }
@@ -461,45 +491,64 @@ public class ChatUseCase {
                             UUID conversationId, UUID runId,
                             String message, List<String> context,
                             IntentDecision decision, ChatEventSink sink) {
+        //先告诉前端：开始检索
         emit(ownerUserId, sink, conversationId, runId, "retrieval.started", Map.of("mode", "HYBRID"));
+        //真正执行 RAG 检索
         RetrievalResult result = secureRetrieval(retrieval.retrieve(
                 decision.standaloneQuery(), accessContext));
+        //记录检索审计
         audits.recordRetrieval(runId, decision.standaloneQuery(), result, groundedThreshold, time.now());
+        //准备 retrieval.completed 的 SSE 数据
         Map<String, Object> completed = new LinkedHashMap<>();
         completed.put("status", result.status().name());
         completed.put("bm25Status", result.bm25Status().name());
         completed.put("vectorStatus", result.vectorStatus().name());
         completed.put("rerankStatus", result.rerankStatus().name());
+        //最终选中了多少条证据。
         completed.put("selectedCount", result.evidence().size());
+        //整个检索耗时。
         completed.put("durationMs", result.durationMs());
         emit(ownerUserId, sink, conversationId, runId, "retrieval.completed", completed);
+        //检索系统本身出故障了。
         if (result.status() == RetrievalStatus.RETRIEVAL_FAILED) {
             throw new ApplicationException(ErrorCode.RETRIEVAL_FAILED, "知识检索暂时不可用");
         }
+        //检索正常完成，但没有找到足够可靠的知识。
         if (result.status() == RetrievalStatus.NO_RELIABLE_KNOWLEDGE) {
             return new Outcome(NO_KNOWLEDGE, "no-knowledge-v1", "NO_RELIABLE_KNOWLEDGE",
                     RetrievalStatus.NO_RELIABLE_KNOWLEDGE, List.of(), ids.generate(), null);
         }
+        //有可靠知识，开始构造 Citation
         List<Citation> citations = citations(result.evidence(), accessContext.allowedSpaceIds());
+        //重新准备回答模型的上下文  这次必须预留：当前用户问题+本次 RAG 检索证据
         List<String> answerContext = modelContext(ownerUserId, conversationId, fixedSections(message, result.evidence()));
+        //初始化“重生成次数”
         int regenerations = 0;
         List<String> feedback = List.of();
         while (true) {
+            //为本次模型调用创建安全上下文
             ModelInvocationSecurity invocation = outputSecurity.newInvocation(feedback);
+            //记录模型开始时间
             long modelStarted = System.nanoTime();
+            //真正调用回答模型
             ModelAnswer answer = chatModel.groundedAnswer(message, answerContext,
                     result.evidence(), firstTokenCallback(ownerUserId, conversationId, runId,
                             modelStarted), invocation);
+            //给答案补 Disclosure
             answer = answer == null ? null : withDisclosure(answer, result.evidence());
+            //对模型输出做安全校验
             ModelOutputAssessment assessment = outputSecurity.assess(
                     ModelOutputType.GROUNDED, answer == null ? null : answer.text(),
                     invocation, message, result.evidence());
+            //PASS：直接返回答案
             if (assessment.action() == ModelOutputAction.PASS) {
                 return fromModel(answer, "GROUNDED", RetrievalStatus.GROUNDED,
                         citations, null, null);
             }
+            //REGENERATE：允许的话重新生成
             if (assessment.action() == ModelOutputAction.REGENERATE
                     && outputSecurity.canRegenerate(regenerations)) {
+                //用于监控：Grounded Answer 因安全问题触发了一次重生成。
                 outputSecurity.recordRegeneration(ModelOutputType.GROUNDED);
                 regenerations++;
                 feedback = assessment.feedbackRules();
@@ -529,8 +578,10 @@ public class ChatUseCase {
     /** 使用阶段 10 服务组装模型上下文；旧构造器仅供既有隔离测试保留原行为。 */
     private List<String> modelContext(UUID ownerUserId, UUID conversationId, List<String> fixedSections) {
         if (contextService == null) {
+            //从会话存储中读取最近的聊天历史。
             return conversations.recentContext(ownerUserId, conversationId,
                             MODEL_CONTEXT_TURNS, MODEL_CONTEXT_CHARACTERS).stream()
+                    //过滤掉历史记录里可能存在的 Prompt Injection。
                     .filter(value -> !promptSecurity.assess(
                             value, PromptSecuritySource.HISTORY).blocked())
                     .toList();
@@ -540,13 +591,17 @@ public class ChatUseCase {
 
     /** 排除本次检索中携带高置信度注入指令的证据并重新确定检索三态。 */
     private RetrievalResult secureRetrieval(RetrievalResult result) {
+        //不是 GROUNDED，直接原样返回
         if (result.status() != RetrievalStatus.GROUNDED) {
             return result;
         }
+        //开始过滤 Evidence
         List<RetrievalEvidence> evidence = result.evidence().stream()
+                //只保留没有被 Prompt Security 判定为 BLOCK 的证据。
                 .filter(item -> !promptSecurity.assess(
                         evidenceSecurityText(item), PromptSecuritySource.EVIDENCE).blocked())
                 .toList();
+        //重新计算最终 RetrievalStatus
         RetrievalStatus status = evidence.isEmpty()
                 ? RetrievalStatus.NO_RELIABLE_KNOWLEDGE : RetrievalStatus.GROUNDED;
         return new RetrievalResult(status, result.bm25Status(), result.vectorStatus(),

@@ -73,8 +73,11 @@ public class AsyncTaskMyBatisRepository implements AsyncTaskRepository {
     @Transactional
     public List<AsyncTask> claimDue(String workerId, Instant now,
                                     Instant lockedUntil, int limit) {
+        //查询 PENDING、到期的 RETRY_WAIT，或租约过期的 RUNNING 任务
         List<Long> ids = workflowMapper.findClaimableIds(now, limit);
-        return ids.stream().filter(id -> workflowMapper.claim(id, workerId, lockedUntil, now) == 1)
+        // 抢占成功时记录 RUNNING 状态、worker 和租约截止时间。
+        return ids.stream()
+                .filter(id -> workflowMapper.claim(id, workerId, lockedUntil, now) == 1)
                 .map(mapper::findTask).map(AggregateRecordMapper::toDomain).toList();
     }
 

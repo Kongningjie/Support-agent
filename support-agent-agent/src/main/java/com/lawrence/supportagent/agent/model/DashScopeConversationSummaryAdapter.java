@@ -71,8 +71,11 @@ public class DashScopeConversationSummaryAdapter implements ConversationSummaryP
                 "PREVIOUS_SUMMARY", previousSummary == null ? "无" : PromptDataBoundary.wrap(
                         "previous_summary", write(previousSummary)),
                 "SOURCE_TURNS", renderTurns(sourceTurns)));
+        //构造模型消息
         Msg request = Msg.builder().role(MsgRole.USER).textContent(rendered).build();
+        //准备接收模型输出
         StringBuilder output = new StringBuilder();
+        //保存 Usage 信息  ChatUsage 可以理解成：一次大模型调用的“用量统计信息”。
         AtomicReference<ChatUsage> usage = new AtomicReference<>();
         long started = System.nanoTime();
         try {
@@ -87,8 +90,10 @@ public class DashScopeConversationSummaryAdapter implements ConversationSummaryP
                                 .forEach(output::append);
                     })
                     .blockLast(timeout);
+            //解析模型输出
             ConversationSummary result = parse(output.toString(), nextSummaryVersion,
                     coveredThroughVersion);
+            //记录模型使用情况
             recordUsage(usage.get(), rendered.length(), output.length(), started, true);
             return result;
         } catch (ModelInvocationException exception) {

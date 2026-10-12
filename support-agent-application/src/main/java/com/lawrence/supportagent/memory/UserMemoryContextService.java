@@ -35,6 +35,7 @@ public class UserMemoryContextService {
         }
         List<String> selected = new ArrayList<>();
         int used = 0;
+        //查询当前用户最多 100 条“仍然有效的长期记忆”，然后逐条处理。
         for (UserMemory memory : repository.findActive(userId, time.now(), 100)) {
             String rendered = "[长期记忆|" + memory.memoryType().name() + "] " + memory.content();
             int required = tokens.estimate(rendered);

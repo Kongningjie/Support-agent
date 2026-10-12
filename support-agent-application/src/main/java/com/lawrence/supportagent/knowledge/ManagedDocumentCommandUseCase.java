@@ -119,17 +119,23 @@ public class ManagedDocumentCommandUseCase {
     public ManagedDocumentActionResult publish(AuthenticatedUser actor, long documentId, long version,
                                                String idempotencyKey) {
         ManagedDocument authorized = queryUseCase.requireDocument(documentId);
+        //当前用户 actor 必须在这份文档所属的知识空间里拥有 MANAGER 权限。
         spaceAccess.requireRole(actor, authorized.spaceId(), SpaceRole.MANAGER);
+        //创建一个幂等命令。
         IdempotencyCommand command = command("KNOWLEDGE_PUBLISH", idempotencyKey,
                 RequestFingerprint.sha256(Long.toString(documentId), Long.toString(version)));
         return idempotentExecutor.execute(command, () -> {
+            //重新查文档并检查版本
             ManagedDocument current = requireVersion(queryUseCase.requireDocument(documentId), version);
             contentPolicy.verifyNoSensitiveContent(current.rawContent());
             requireUniqueContent(current.spaceId(), current.contentHash(), current.id());
+            //startIndexing() 根据当前文档创建状态为 INDEXING、版本递增后的文档；repository.save() 才将它保存到 MySQL。
             ManagedDocument indexing = repository.save(current.startIndexing(operator(), timeProvider.now()));
+            //创建后台任务
             AsyncTask task = taskCreator.create(AsyncTaskType.KNOWLEDGE_INDEX,
                     AggregateType.MANAGED_DOCUMENT, indexing.id(), indexing.version(),
                     "knowledge-index:" + indexing.id() + ":" + indexing.version(), operator());
+            //组装返回给调用方的结果
             ManagedDocumentActionResult result = new ManagedDocumentActionResult(
                     queryUseCase.details(indexing), task.id());
             return new IdempotentResource<>("ASYNC_TASK", task.id(), result);
