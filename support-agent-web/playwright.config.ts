@@ -23,7 +23,7 @@ export default defineConfig({
     ...devices['Desktop Chrome'],
   },
   webServer: {
-    command: 'npm run dev -- --host 127.0.0.1',
+    command: `npm run dev -- --host 127.0.0.1 --port ${target.port || '5173'}`,
     url: baseURL,
     reuseExistingServer: true,
     timeout: 30_000,

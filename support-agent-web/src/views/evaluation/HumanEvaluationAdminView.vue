@@ -1,9 +1,10 @@
 <script setup lang="ts">
 import { onMounted, reactive, ref } from 'vue'
-import { ElMessage, ElMessageBox } from 'element-plus'
+import { ElMessage, ElMessageBox, ElTable, ElTableColumn } from 'element-plus'
 import * as api from '@/api/human-evaluation.api'
 import { getConversation } from '@/api/conversation.api'
 import { ApiError } from '@/types/api.types'
+import JudgePanel from '@/components/evaluation/JudgePanel.vue'
 import type { ConversationTurn } from '@/types/chat.types'
 import type {
   HumanCreateInput,
@@ -24,6 +25,7 @@ const sourcePreview = ref<ConversationTurn | null>(null)
 const candidatePage = ref(1)
 const samplePage = ref(1)
 const busy = ref(false)
+const fixedCaseSelection = ref('')
 const createForm = reactive<HumanCreateInput>({
   sourceType: 'FIXED',
   sourceRef: '',
@@ -73,7 +75,9 @@ function selectFixed(item: HumanFixedCandidate): void {
 }
 
 /** 选择反馈候选，仅设置最小来源标识；原始会话需再次显式查看。 */
-function selectFeedback(item: HumanFeedbackCandidate): void {
+function selectFeedback(runId: string): void {
+  const item = candidates.value.find((candidate) => candidate.runId === runId)
+  if (!item) return
   createForm.sourceType = 'FEEDBACK'
   createForm.sourceRef = item.runId
   createForm.question = ''
@@ -84,7 +88,9 @@ function selectFeedback(item: HumanFeedbackCandidate): void {
 }
 
 /** 显式读取仍可访问的会话回答，供管理员手工脱敏，不自动写入表单或数据库。 */
-async function previewFeedback(item: HumanFeedbackCandidate): Promise<void> {
+async function previewFeedback(runId: string): Promise<void> {
+  const item = candidates.value.find((candidate) => candidate.runId === runId)
+  if (!item) return
   try {
     const details = await getConversation(item.conversationId)
     sourcePreview.value = details.recentTurns.find((turn) => turn.runId === item.runId) || null
@@ -117,9 +123,9 @@ async function create(): Promise<void> {
 }
 
 /** 查询一份样本和按当前评审人权限裁剪的评分。 */
-async function selectSample(item: HumanSample): Promise<void> {
+async function selectSample(sampleId: string): Promise<void> {
   try {
-    selected.value = await api.getSample(item.id)
+    selected.value = await api.getSample(sampleId)
   } catch (error) {
     showError(error, '读取样本失败')
   }
@@ -201,6 +207,12 @@ function datasetStateLabel(value: HumanDatasetState): string {
 function reviewRoleLabel(value: string): string {
   return { FIRST: '首评', SECOND: '次评', ARBITER: '第三人复核' }[value] || value
 }
+
+/** 固定用例选择只使用已由后端返回的用例，避免任意输入预填。 */
+function selectFixedById(id: string): void {
+  const item = fixed.value.find((row) => row.caseId === id)
+  if (item) selectFixed(item)
+}
 </script>
 
 <template>
@@ -216,24 +228,17 @@ function reviewRoleLabel(value: string): string {
     <el-card shadow="never">
       <h2>固定用例候选</h2>
       <p class="muted-copy">选择已有用例后，仍需手工提供被评回答和允许展示的证据。</p>
-      <el-select
+      <select
+        v-model="fixedCaseSelection"
         aria-label="选择固定用例"
-        placeholder="选择 30 条固定回答用例之一"
         style="width: 100%"
-        @change="
-          (id: string) => {
-            const item = fixed.find((row) => row.caseId === id)
-            if (item) selectFixed(item)
-          }
-        "
+        @change="selectFixedById(fixedCaseSelection)"
       >
-        <el-option
-          v-for="item in fixed"
-          :key="item.caseId"
-          :label="`${item.caseId} · ${item.question}`"
-          :value="item.caseId"
-        />
-      </el-select>
+        <option value="" disabled>选择固定回答用例</option>
+        <option v-for="item in fixed" :key="item.caseId" :value="item.caseId">
+          {{ item.caseId }} · {{ item.question }}
+        </option>
+      </select>
     </el-card>
 
     <el-card shadow="never">
@@ -247,8 +252,8 @@ function reviewRoleLabel(value: string): string {
         </el-table-column>
         <el-table-column label="操作" width="180">
           <template #default="scope">
-            <el-button size="small" @click="selectFeedback(scope.row)">选择</el-button>
-            <el-button size="small" @click="previewFeedback(scope.row)">查看原会话</el-button>
+            <el-button size="small" @click="selectFeedback(scope.row.runId)">选择</el-button>
+            <el-button size="small" @click="previewFeedback(scope.row.runId)">查看原会话</el-button>
           </template>
         </el-table-column>
       </el-table>
@@ -334,7 +339,7 @@ function reviewRoleLabel(value: string): string {
         </el-table-column>
         <el-table-column label="操作" width="110"
           ><template #default="scope"
-            ><el-button size="small" @click="selectSample(scope.row)">查看</el-button></template
+            ><el-button size="small" @click="selectSample(scope.row.id)">查看</el-button></template
           ></el-table-column
         >
       </el-table>
@@ -349,6 +354,7 @@ function reviewRoleLabel(value: string): string {
 
     <el-card v-if="selected" shadow="never">
       <h2>样本 {{ selected.sample.sourceRef }}</h2>
+      <JudgePanel :sample-id="selected.sample.id" />
       <p>
         状态：{{ reviewStatusLabel(selected.sample.status) }}；数据集：{{
           datasetStateLabel(selected.sample.datasetState)

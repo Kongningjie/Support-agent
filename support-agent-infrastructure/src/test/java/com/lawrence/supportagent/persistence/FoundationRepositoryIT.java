@@ -148,6 +148,31 @@ class FoundationRepositoryIT {
     private AnswerFeedbackRepository feedbackRepository;
     @Autowired
     private HumanEvaluationRepository humanEvaluations;
+    @Autowired
+    private com.lawrence.supportagent.evaluation.JudgeRunRepository judgeRuns;
+
+    /** 真实MySQL验证占用、幂等、结构化JSON往返以及完成后释放占用。 */
+    @Test void shouldPersistJudgeClaimsAndResults() {
+        UUID sampleId = UUID.randomUUID(), actorId = UUID.randomUUID(), key = UUID.randomUUID();
+        humanEvaluations.create(new Sample(sampleId,"FIXED","judge-"+sampleId,
+                UUID.fromString("00000000-0000-0000-0000-000000000001"),"问题","回答","证据",actorId,
+                ReviewStatus.FIRST_PENDING,DatasetState.NONE,0,NOW));
+        var run = new com.lawrence.supportagent.evaluation.JudgeRunRepository.Run(UUID.randomUUID(),sampleId,
+                actorId,key,"judge-test","prompt-v1","RUNNING",100,NOW,NOW.plusSeconds(240),List.of());
+        judgeRuns.claim(run);
+        assertEquals(run.id(),judgeRuns.find(actorId,key).orElseThrow().id());
+        assertThrows(ApplicationException.class,()->judgeRuns.claim(run));
+        var second = new com.lawrence.supportagent.evaluation.JudgeRunRepository.Run(UUID.randomUUID(),sampleId,
+                actorId,UUID.randomUUID(),"judge-test","prompt-v1","RUNNING",100,NOW,NOW.plusSeconds(240),List.of());
+        assertThrows(ApplicationException.class,()->judgeRuns.claim(second));
+        var score = new com.lawrence.supportagent.evaluation.JudgeModelPort.Result(java.util.Collections.nCopies(5,
+                new com.lawrence.supportagent.evaluation.JudgeModelPort.Dimension(2,"理由",0,1)),10L,20L);
+        judgeRuns.complete(run.id(),List.of(new com.lawrence.supportagent.evaluation.JudgeRunRepository.Attempt(1,score,null,42)),NOW.plusSeconds(1));
+        assertEquals(score,judgeRuns.find(actorId,key).orElseThrow().attempts().getFirst().result());
+        judgeRuns.claim(second);
+        assertEquals(2,judgeRuns.list(sampleId).size());
+        assertThrows(ApplicationException.class,()->judgeRuns.complete(second.id(),List.of(),NOW.plusSeconds(241)));
+    }
 
     /** 真实 MySQL 校验独立评分、分歧复核、同人限制与数据集版本晋升。 */
     @Test
@@ -843,6 +868,11 @@ class FoundationRepositoryIT {
             "com.lawrence.supportagent.feedback"
     })
     static class TestApplication {
+        /** 显式装配Judge结果存储并启用真实事务代理。 */
+        @Bean com.lawrence.supportagent.evaluation.JudgeRunRepository judgeRunRepository(
+                com.lawrence.supportagent.persistence.mapper.JudgeRunMapper mapper) {
+            return new com.lawrence.supportagent.evaluation.MySqlJudgeRunRepository(mapper,new tools.jackson.databind.ObjectMapper());
+        }
         /** 显式装配人工评测 Repository，复用当前测试 MyBatis 与事务基础设施。 */
         @Bean HumanEvaluationRepository humanEvaluationRepository(HumanEvaluationMapper mapper) {
             return new MySqlHumanEvaluationRepository(mapper);

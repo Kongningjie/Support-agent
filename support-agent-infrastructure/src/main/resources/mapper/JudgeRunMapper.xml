@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.lawrence.supportagent.persistence.mapper.JudgeRunMapper">
+    <resultMap id="run" type="com.lawrence.supportagent.persistence.record.JudgeRunDO">
+        <id property="runId" column="run_id"/>
+        <result property="sampleId" column="sample_id"/>
+        <result property="actorId" column="actor_id"/>
+        <result property="requestKey" column="request_key"/>
+        <result property="modelName" column="model_name"/>
+        <result property="promptVersion" column="prompt_version"/>
+        <result property="status" column="status"/>
+        <result property="estimatedInputTokens" column="estimated_input_tokens"/>
+        <result property="startedAt" column="started_at"/>
+        <result property="expiresAt" column="expires_at"/>
+        <result property="attemptsJson" column="attempts_json"/>
+    </resultMap>
+    <sql id="columns">run_id, sample_id, actor_id, request_key, model_name, prompt_version,
+        status, estimated_input_tokens, started_at, expires_at, attempts_json</sql>
+    <select id="lockSample" resultType="string">
+        SELECT source_ref FROM human_evaluation_sample WHERE sample_id=UUID_TO_BIN(#{id}) FOR UPDATE
+    </select>
+    <select id="find" resultMap="run">
+        SELECT <include refid="columns"/> FROM judge_run WHERE actor_id=#{actor} AND request_key=#{key}
+    </select>
+    <update id="expire">
+        UPDATE judge_run SET status='FAILED', active_sample=NULL, completed_at=#{now}
+        WHERE sample_id=#{sample} AND status='RUNNING' AND expires_at &lt;= #{now}
+    </update>
+    <insert id="insert">
+        INSERT INTO judge_run (run_id,sample_id,actor_id,request_key,active_sample,model_name,
+            prompt_version,status,estimated_input_tokens,started_at,expires_at,attempts_json)
+        VALUES (#{runId},#{sampleId},#{actorId},#{requestKey},#{sampleId},#{modelName},
+            #{promptVersion},#{status},#{estimatedInputTokens},#{startedAt},#{expiresAt},#{attemptsJson})
+    </insert>
+    <update id="complete">
+        UPDATE judge_run SET attempts_json=#{json},status=#{status},active_sample=NULL,completed_at=#{now}
+        WHERE run_id=#{id} AND status='RUNNING' AND expires_at &gt; #{now}
+    </update>
+    <select id="list" resultMap="run">
+        SELECT <include refid="columns"/> FROM judge_run WHERE sample_id=#{sample}
+        ORDER BY started_at DESC,run_id LIMIT 20
+    </select>
+    <select id="calibrationRuns" resultMap="run">
+        SELECT <include refid="columns"/> FROM judge_run
+        WHERE sample_id IN (SELECT BIN_TO_UUID(sample_id) FROM human_evaluation_sample WHERE review_status='DECIDED')
+        ORDER BY started_at DESC,run_id DESC LIMIT 1001
+    </select>
+</mapper>

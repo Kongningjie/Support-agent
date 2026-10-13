@@ -1,0 +1,20 @@
+CREATE TABLE judge_run (
+    run_id CHAR(36) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT 'Judge 运行 UUID',
+    sample_id CHAR(36) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT '脱敏人工样本 UUID',
+    actor_id CHAR(36) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT '操作管理员 UUID',
+    request_key CHAR(36) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT '操作者范围内的幂等 UUID',
+    active_sample CHAR(36) CHARACTER SET ascii COLLATE ascii_bin NULL COMMENT '活动占用的样本 UUID，完成或过期后置空',
+    model_name VARCHAR(100) NOT NULL COMMENT '实际评审模型名称',
+    prompt_version VARCHAR(100) NOT NULL COMMENT '评审 Prompt 和 Schema 版本',
+    status VARCHAR(16) NOT NULL COMMENT 'RUNNING COMPLETED FAILED，失败不自动再调用',
+    estimated_input_tokens INT UNSIGNED NOT NULL COMMENT '每次输入保守预估 Token',
+    started_at DATETIME(6) NOT NULL COMMENT 'UTC 开始时间',
+    expires_at DATETIME(6) NOT NULL COMMENT '执行租约 UTC 过期时间',
+    completed_at DATETIME(6) NULL COMMENT 'UTC 完成或过期终止时间',
+    attempts_json JSON NOT NULL COMMENT '仅存三次结构化评审或安全失败分类，不存原始响应',
+    PRIMARY KEY (run_id),
+    UNIQUE KEY uk_judge_actor_request (actor_id, request_key),
+    UNIQUE KEY uk_judge_active_sample (active_sample),
+    KEY idx_judge_sample_started (sample_id, started_at),
+    CONSTRAINT chk_judge_status CHECK (status IN ('RUNNING','COMPLETED','FAILED'))
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='Judge 独立运行、幂等与结构化结果';

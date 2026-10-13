@@ -38,6 +38,9 @@ mybatis:
     map-underscore-to-camel-case: true
 
 support-agent:
+  judge:
+    enabled: ${SUPPORT_AGENT_JUDGE_ENABLED:false}
+    model: ${SUPPORT_AGENT_JUDGE_MODEL:}
   security:
     llm:
       # 阶段 15 输入与阶段 16 输出安全总开关；生产环境不得关闭。

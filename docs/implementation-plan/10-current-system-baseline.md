@@ -1,6 +1,6 @@
 # Support Agent 当前系统基线
 
-> 基线日期：2026-10-12；对应代码：后端阶段 20、前端阶段 F5 已完成，用户回答反馈批次 1 与人工评测批次 2 已实施；用途：后续规划、开发、Review 和 AI Coding 的现状入口。
+> 基线日期：2026-10-13；对应代码：后端阶段 20、前端阶段 F5 已完成，回答反馈批次 1、人工评测批次 2 和 Judge 批次 3 已实施；用途：后续规划、开发、Review 和 AI Coding 的现状入口。
 
 ## 1. 完成状态
 
@@ -12,9 +12,11 @@
 - 前端阶段 F1～F5 已完成；管理员用户、知识空间及成员、托管知识、案例、异步任务和可选评测页面均已实现，真实知识与案例发布归档、受控 DEAD 任务重试以及 Playwright 真实后端核心链路验收通过。
 - 人工评测批次前端通过 19 个测试文件、72 个单元测试、Lint、格式、严格类型检查及生产构建；F5 历史上通过 4 个 Playwright 真实后端 E2E 和高危漏洞审计，但不能把它计入本次人工评测的真实浏览器验收。
 - F5 在线 E2E 在用户明确授权后验证了真实 DashScope `GLOBAL` 无知识问答、建议建单和会话清理。该结果不覆盖阶段 10 在线摘要质量、阶段 17 在线模型对抗或阶段 19 非 `GLOBAL` 空间真实模型问答，完整 `mvn verify -Ponline-test` 仍未执行。
-- 评测体系优化专项批次 1 新增本人对成功回答的反馈、版本化更正/删除及管理员匿名聚合；批次 2 新增管理员脱敏样本、双人盲评、分歧第三人复核与独立开发/回归集晋升。LLM-as-Judge 仍未实施。本批次没有调用真实模型，验证细节以[人工评测工作记录](../work-logs/2026-10-12-human-evaluation.md)为准。
+- 评测体系优化专项批次 1 新增本人对成功回答的反馈、版本化更正/删除及管理员匿名聚合；批次 2 新增管理员脱敏样本、双人盲评、分歧第三人复核与独立开发/回归集晋升。Judge 已实现独立模型适配、三次复测、管理员操作、盲评隔离和人工一致性报告，默认关闭；在线质量校准与来源模型偏差尚未验证。本批次没有调用真实模型，验证细节以[人工评测工作记录](../work-logs/2026-10-12-human-evaluation.md)为准。
 
 ## 2. 当前能力
+
+Judge专项最新结果见[2026-10-13工作记录](../work-logs/2026-10-13-llm-judge.md)。管理员可对脱敏样本显式执行三次模型复测，人工未决时隐藏结果；报告按模型/模板版本分组、每份样本只计最新运行，提供一致率、MAE、高估/低估、失败、耗时及实际Token。默认关闭，未选定在线评审模型，30份人工校准及来源模型偏差未验证。真实浏览器验证仅覆盖无需在线模型的入口和失败提示。
 
 用户回答反馈使用 `agent_run.run_id` 关联本人已成功的回答；会话详情公开最近成功轮次的 `runId`。MySQL 只保存帮助程度、预定义原因与经过敏感内容校验的可选说明，不复制回答正文。删除会清空评分、原因及说明，只保留不可见的递增版本标记，避免删除后重建发生旧请求误覆盖；管理员仅能读取分类计数。反馈不会自动修改知识、模型或评测集。
 
@@ -30,7 +32,7 @@
 
 - 仍为 Java 21、Spring Boot 4.1.1 的 Maven 六模块单体，依赖方向为领域层 ← 应用层 ← 适配层，由 Bootstrap 装配。
 - 仓库包含独立 `support-agent-web/`：Node.js 24、npm 11、Vue 3、TypeScript、Vite、Vue Router、Pinia、Element Plus、Axios、Vitest 和 Playwright 1.63.0；不加入 Maven Reactor，本地通过 Vite `/api` 代理访问后端。
-- MySQL 8.4.11 保存业务事实、用户、长期记忆、知识空间与成员、回答反馈、人工评测、幂等、任务和安全审计；当前 Flyway 版本为 V11。
+- MySQL 8.4.11 保存业务事实、用户、长期记忆、知识空间与成员、回答反馈、人工评测、幂等、任务和安全审计；当前 Flyway 版本为 V12。
 - Redis 保存会话、滚动摘要、运行租约、建议、登录失败状态和不透明 Token 哈希索引。
 - Elasticsearch 9.5.2 + ICU 承担 BM25、向量、RRF 和 Rerank 前的候选召回。
 - 当前知识别名 `support_knowledge_current` 指向 `support_knowledge_v2`；v2 分块携带强制 `spaceId`，旧 v1 索引只在冻结回滚窗口内保留。
@@ -69,6 +71,7 @@
 | 聊天与会话 | `/api/v1/chat/stream`、`/api/v1/conversations*` | 已认证且校验所有者 |
 | 用户回答反馈 | `/api/v1/answer-feedback/{runId}`、`/api/v1/admin/answer-feedback/summary` | 本人仅操作本人成功回答；平台管理员只读匿名聚合 |
 | 管理员人工评测 | `/api/v1/admin/human-evaluations*` | 仅平台 `ADMIN`；候选、脱敏样本、盲评、复核与独立数据集晋升 |
+| Judge辅助评测 | `/api/v1/admin/human-evaluations/{sampleId}/judge-runs`、`/api/v1/admin/judge-reports` | 仅平台`ADMIN`；默认关闭，未决人工样本隐藏评分，不能覆盖人工结论 |
 | 长期记忆 | `/api/v1/users/me/memory-settings`、`/api/v1/memories*` | 本人 |
 | 工单 | `/api/v1/tickets*` | 普通用户仅本人，管理员可查看全部 |
 | 知识、案例、任务、评测 | `/api/v1/knowledge*`、`/api/v1/resolved-cases*`、`/api/v1/async-tasks*`、`/api/v1/retrieval-evaluations*` | 已认证后由应用层校验空间角色；`CASE_GENERATION` 和评测仍受更严格边界 |

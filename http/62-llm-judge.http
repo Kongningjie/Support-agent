@@ -1,0 +1,19 @@
+@baseUrl = http://localhost:8080
+@adminToken = replace-with-admin-token
+@sampleId = replace-with-sanitized-sample-uuid
+@requestKey = replace-with-fixed-request-uuid
+
+### 管理员显式执行三次复测；同次操作重试复用requestKey，服务端默认关闭Judge
+POST {{baseUrl}}/api/v1/admin/human-evaluations/{{sampleId}}/judge-runs
+Authorization: Bearer {{adminToken}}
+Content-Type: application/json
+
+{"idempotencyKey":"{{requestKey}}"}
+
+### 最近二十次运行；人工未决时模型分数和理由隐藏
+GET {{baseUrl}}/api/v1/admin/human-evaluations/{{sampleId}}/judge-runs
+Authorization: Bearer {{adminToken}}
+
+### 按模型/模板版本分别报告人工一致性、复测稳定性、样本不足与失败
+GET {{baseUrl}}/api/v1/admin/judge-reports
+Authorization: Bearer {{adminToken}}
