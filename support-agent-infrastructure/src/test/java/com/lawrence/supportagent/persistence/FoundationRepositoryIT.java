@@ -139,6 +139,32 @@ class FoundationRepositoryIT {
     @Autowired
     private DataSource dataSource;
     @Autowired
+    private com.lawrence.supportagent.persistence.mapper.AgentAuditMapper agentAuditMapper;
+
+    /** 真实 MySQL 验证成功与失败审计不能互相覆盖，重复终结也不改写原因。 */
+    @Test void shouldFenceTerminalAgentAuditUpdates() {
+        for (boolean succeedFirst : new boolean[] {true, false}) {
+            UUID runId = UUID.randomUUID();
+            byte[] run = uuidBytes(runId);
+            agentAuditMapper.insertRun(run, uuidBytes(ACTOR.userId()), uuidBytes(UUID.randomUUID()),
+                    uuidBytes(UUID.randomUUID()), NOW);
+            if (succeedFirst) {
+                assertEquals(1, agentAuditMapper.succeed(run, "test-v1", "chat", "embedding", "rerank", 1, NOW));
+                assertEquals(0, agentAuditMapper.fail(run, "FAILED", "CHAT_CLIENT_DISCONNECTED", 2, NOW));
+                assertEquals(0, agentAuditMapper.succeed(run, "changed", "chat", "embedding", "rerank", 3, NOW));
+            } else {
+                assertEquals(1, agentAuditMapper.fail(run, "FAILED", "CHAT_RESPONSE_TIMEOUT", 1, NOW));
+                assertEquals(0, agentAuditMapper.succeed(run, "test-v1", "chat", "embedding", "rerank", 2, NOW));
+                assertEquals(0, agentAuditMapper.fail(run, "FAILED", "CHAT_CLIENT_DISCONNECTED", 3, NOW));
+            }
+            var row = new JdbcTemplate(dataSource).queryForMap(
+                    "SELECT status,error_code,prompt_version,duration_ms FROM agent_run WHERE run_id=?", run);
+            assertEquals(succeedFirst ? "SUCCEEDED" : "FAILED", row.get("status"));
+            assertEquals(succeedFirst ? null : "CHAT_RESPONSE_TIMEOUT", row.get("error_code"));
+            assertEquals(1L, ((Number) row.get("duration_ms")).longValue());
+        }
+    }
+    @Autowired
     private UserMemoryRepository userMemoryRepository;
     @Autowired
     private KnowledgeSpaceRepository knowledgeSpaceRepository;

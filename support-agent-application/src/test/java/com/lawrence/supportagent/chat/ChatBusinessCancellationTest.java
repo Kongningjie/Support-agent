@@ -62,6 +62,102 @@ class ChatBusinessCancellationTest {
     private ChatUseCase useCase;
     private ChatUseCase.PreparedChat prepared;
 
+    /** 明确围栏拒绝保持原冲突错误语义，不发起核实或修改新运行。 */
+    @Test void shouldPreserveExplicitCommitRejection() {
+        when(store.complete(any(), any(), any(), any(), any(), any())).thenThrow(
+                new com.lawrence.supportagent.sharedkernel.error.ApplicationException(
+                        com.lawrence.supportagent.sharedkernel.error.ErrorCode.CHAT_CONVERSATION_BUSY, "运行权失效"));
+        execute();
+        verify(store, never()).resolveCommitOrFail(any(), any(), any(), any(), anyLong(), any());
+        verify(store, never()).fail(any(), any(), any(), any());
+        verify(audits).fail(any(), eq("FAILED"), eq("CHAT_CONVERSATION_BUSY"), anyLong(), any());
+        assertThat(sink.events).filteredOn(event -> "error".equals(event.eventType()))
+                .singleElement().satisfies(event -> assertThat(event.data().get("code")).isEqualTo("CHAT_CONVERSATION_BUSY"));
+    }
+
+    /** complete 明确成功期间断连仍保留提交并写成功审计，不发送完成或回滚。 */
+    @Test void shouldKeepCommitThatWonBeforeCancellation() {
+        when(store.complete(any(), any(), any(), any(), any(), any())).thenAnswer(call -> {
+            cancel();
+            return call.getArgument(3);
+        });
+        execute();
+        verify(audits).succeed(any(), any(), any(), any(), any(), anyLong(), any());
+        verify(store, never()).fail(any(), any(), any(), any());
+        verify(store, never()).resolveCommitOrFail(any(), any(), any(), any(), anyLong(), any());
+        assertThat(sink.events).noneMatch(event -> "answer.completed".equals(event.eventType()));
+    }
+
+    /** 提交响应丢失后核实为成功，只写成功审计且继续发送原结果。 */
+    @Test void shouldResolveLostCommitResponseAsSuccess() {
+        var begin = prepared.begin();
+        prepared = new ChatUseCase.PreparedChat(prepared.request(), prepared.runId(),
+                new BeginResult(begin.status(), begin.conversationId(), begin.version(), begin.spaceId(),
+                        null, null, 7), prepared.accessContext());
+        when(store.complete(any(), any(), any(), any(), any(), any())).thenAnswer(call -> {
+            CompletedTurn saved = call.getArgument(3);
+            when(store.resolveCommitOrFail(any(), any(), any(), any(), anyLong(), any()))
+                    .thenReturn(new ConversationStorePort.CommitResolution(ConversationStorePort.CommitStatus.COMMITTED, saved));
+            throw new IllegalStateException("synthetic response lost");
+        });
+        execute();
+        verify(audits).succeed(any(), any(), any(), any(), any(), anyLong(), any());
+        verify(store).resolveCommitOrFail(eq(prepared.request().actor().userId()), eq(begin.conversationId()),
+                eq(prepared.request().clientMessageId()), eq(prepared.runId()), eq(7L), any());
+        verify(audits, never()).fail(any(), any(), any(), anyLong(), any());
+        verify(store, never()).fail(any(), any(), any(), any());
+        assertThat(sink.events).anyMatch(event -> "answer.completed".equals(event.eventType()));
+    }
+
+    /** 核实明确失败后不再普通 fail，即使错误发送又发生取消也只能终结一次。 */
+    @Test void shouldNotRepeatFailureAfterAtomicResolution() {
+        when(store.complete(any(), any(), any(), any(), any(), any())).thenThrow(new IllegalStateException());
+        when(store.resolveCommitOrFail(any(), any(), any(), any(), anyLong(), any())).thenReturn(
+                new ConversationStorePort.CommitResolution(ConversationStorePort.CommitStatus.FAILED, null));
+        sink.onSend = event -> { if ("error".equals(event.eventType())) { cancel(); throw new IllegalStateException(); } };
+        execute();
+        verify(audits).fail(any(), eq("FAILED"), eq("DEPENDENCY_UNAVAILABLE"), anyLong(), any());
+        verify(store, never()).fail(any(), any(), any(), any());
+        verify(audits, never()).succeed(any(), any(), any(), any(), any(), anyLong(), any());
+    }
+
+    /** 存储核实不可用不得伪造失败、成功或开始摘要/记忆。 */
+    @Test void shouldLeaveUnavailableCommitOutcomeUnknown() {
+        ConversationContextService contexts = mock(ConversationContextService.class);
+        when(contexts.prepare(any(), any(), any())).thenReturn(new ConversationContext(List.of(), 0, 0, 0));
+        useCase = createUseCase(contexts, memories);
+        when(store.complete(any(), any(), any(), any(), any(), any())).thenThrow(new IllegalStateException());
+        when(store.resolveCommitOrFail(any(), any(), any(), any(), anyLong(), any())).thenThrow(new IllegalStateException());
+        execute();
+        verify(store, never()).fail(any(), any(), any(), any());
+        verify(audits, never()).fail(any(), any(), any(), anyLong(), any());
+        verify(audits, never()).succeed(any(), any(), any(), any(), any(), anyLong(), any());
+        verify(contexts, never()).afterSuccessfulTurn(any(), any());
+        verifyNoInteractions(memories);
+        assertThat(sink.events).noneMatch(event -> List.of("answer.completed", "error").contains(event.eventType()));
+    }
+
+    /** 核实已不拥有目标代际或运行时同样不能改写终态。 */
+    @Test void shouldNotCleanUpUnownedRun() {
+        when(store.complete(any(), any(), any(), any(), any(), any())).thenThrow(new IllegalStateException());
+        when(store.resolveCommitOrFail(any(), any(), any(), any(), anyLong(), any())).thenReturn(
+                new ConversationStorePort.CommitResolution(ConversationStorePort.CommitStatus.NOT_OWNED, null));
+        execute();
+        verify(store, never()).fail(any(), any(), any(), any());
+        verify(audits, never()).fail(any(), any(), any(), anyLong(), any());
+        assertThat(sink.events).noneMatch(event -> "answer.completed".equals(event.eventType()));
+    }
+
+    /** MySQL 成功审计抛异常不能抹掉 Redis 已保存轮次，也不重复写审计。 */
+    @Test void shouldKeepSuccessWhenAuditUnavailable() {
+        doThrow(new IllegalStateException()).when(audits).succeed(any(), any(), any(), any(), any(), anyLong(), any());
+        execute();
+        verify(audits).succeed(any(), any(), any(), any(), any(), anyLong(), any());
+        verify(audits, never()).fail(any(), any(), any(), anyLong(), any());
+        verify(store, never()).fail(any(), any(), any(), any());
+        assertThat(sink.events).anyMatch(event -> "answer.completed".equals(event.eventType()));
+    }
+
     /** 默认走问候分支，所有持久化与模型均为确定性隔离桩。 */
     @BeforeEach
     void setUp() {

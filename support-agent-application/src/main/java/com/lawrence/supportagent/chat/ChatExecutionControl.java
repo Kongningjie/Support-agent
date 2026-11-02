@@ -10,6 +10,16 @@ public final class ChatExecutionControl {
     private final AtomicReference<CancellationReason> reason = new AtomicReference<>();
     private static final System.Logger LOGGER = System.getLogger(ChatExecutionControl.class.getName());
     private final List<Registration> registrations = new ArrayList<>();
+    private boolean commitEntered;
+
+    /** 与首次取消共用短锁竞争一次提交权；获胜后连接仍可取消发送，但不撤销提交权。 */
+    public boolean tryEnterCommit() {
+        synchronized (registrations) {
+            if (commitEntered || isCancelled()) return false;
+            commitEntered = true;
+            return true;
+        }
+    }
 
     /** 首次取消生效，在锁外执行本请求的快速取消动作，不执行存储操作。 */
     public void cancel(CancellationReason cancellationReason) {

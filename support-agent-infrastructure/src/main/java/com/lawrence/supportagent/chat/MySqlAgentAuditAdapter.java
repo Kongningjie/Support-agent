@@ -17,6 +17,7 @@ import tools.jackson.databind.ObjectMapper;
 
 /** 通过 MyBatis 持久化不含用户原文、知识正文和模型输出的审计摘要。 */
 public class MySqlAgentAuditAdapter implements AgentAuditPort {
+    private static final System.Logger LOGGER = System.getLogger(MySqlAgentAuditAdapter.class.getName());
     private final AgentAuditMapper mapper;
     private final ObjectMapper json;
 
@@ -48,11 +49,17 @@ public class MySqlAgentAuditAdapter implements AgentAuditPort {
     /** {@inheritDoc} */
     @Override public void succeed(UUID runId, String promptVersion, String chatModel, String embeddingModel,
                                   String rerankModel, long durationMs, Instant now) {
-        mapper.succeed(toBytes(runId), promptVersion, chatModel, embeddingModel, rerankModel, durationMs, now);
+        checkTerminalUpdate(mapper.succeed(toBytes(runId), promptVersion, chatModel, embeddingModel, rerankModel, durationMs, now));
     }
     /** {@inheritDoc} */
     @Override public void fail(UUID runId, String status, String errorCode, long durationMs, Instant now) {
-        mapper.fail(toBytes(runId), status, errorCode, durationMs, now);
+        checkTerminalUpdate(mapper.fail(toBytes(runId), status, errorCode, durationMs, now));
+    }
+
+    /** 只允许更新一个 RUNNING 记录；零行表示终态已存在或记录缺失，不能再覆盖。 */
+    private void checkTerminalUpdate(int changed) {
+        if (changed < 0 || changed > 1) throw new IllegalStateException("运行审计更新数量异常");
+        if (changed == 0) LOGGER.log(System.Logger.Level.WARNING, "Chat audit stage=terminal result=not_updated");
     }
 
     /** 创建单个候选的不敏感分数摘要。 */

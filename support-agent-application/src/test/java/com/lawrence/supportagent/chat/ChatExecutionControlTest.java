@@ -8,6 +8,49 @@ import org.junit.jupiter.api.Test;
 
 /** 验证连接终止标记只属于单次请求，保留第一次原因而不伪造下游停止状态。 */
 class ChatExecutionControlTest {
+    /** 取消先取得执行权时永远不能再进入提交。 */
+    @Test void shouldRejectCommitAfterCancellation() {
+        ChatExecutionControl control = new ChatExecutionControl();
+        control.cancel(CancellationReason.CHAT_CLIENT_DISCONNECTED);
+        assertThat(control.tryEnterCommit()).isFalse();
+    }
+
+    /** 提交只能进入一次；提交获胜不阻止连接继续报告取消。 */
+    @Test void shouldKeepCommitOwnershipAfterDisconnect() {
+        ChatExecutionControl control = new ChatExecutionControl();
+        assertThat(control.tryEnterCommit()).isTrue();
+        control.cancel(CancellationReason.CHAT_CLIENT_DISCONNECTED);
+        assertThat(control.isCancelled()).isTrue();
+        assertThat(control.tryEnterCommit()).isFalse();
+    }
+
+    /** 同时竞争时结果必须符合锁内线性化顺序，取消先完成绝不能进入提交。 */
+    @Test void shouldLinearizeCommitAndCancellation() throws Exception {
+        try (var threads = java.util.concurrent.Executors.newVirtualThreadPerTaskExecutor()) {
+            for (int attempt = 0; attempt < 100; attempt++) {
+                ChatExecutionControl control = new ChatExecutionControl();
+                var ready = new java.util.concurrent.CountDownLatch(1);
+                var cancelled = new java.util.concurrent.atomic.AtomicBoolean();
+                var commit = threads.submit(() -> {
+                    ready.await();
+                    boolean cancellationAlreadyReturned = cancelled.get();
+                    boolean entered = control.tryEnterCommit();
+                    assertThat(cancellationAlreadyReturned && entered).isFalse();
+                    return entered;
+                });
+                var cancel = threads.submit(() -> {
+                    ready.await();
+                    control.cancel(CancellationReason.CHAT_RESPONSE_TIMEOUT);
+                    cancelled.set(true);
+                    return null;
+                });
+                ready.countDown();
+                commit.get(1, java.util.concurrent.TimeUnit.SECONDS);
+                cancel.get(1, java.util.concurrent.TimeUnit.SECONDS);
+                assertThat(control.tryEnterCommit()).isFalse();
+            }
+        }
+    }
     /** 先取消后注册也执行一次，重复通知和关闭不能重复执行。 */
     @Test
     void shouldInvokeLateRegistrationOnce() {

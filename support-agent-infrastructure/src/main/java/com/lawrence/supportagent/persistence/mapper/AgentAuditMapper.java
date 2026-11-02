@@ -21,12 +21,12 @@ public interface AgentAuditMapper {
                         @Param("threshold") double threshold, @Param("scoresJson") String scoresJson,
                         @Param("selectedCount") int selectedCount, @Param("retrievalStatus") String retrievalStatus,
                         @Param("durationMs") long durationMs, @Param("createdAt") Instant createdAt);
-    /** 标记运行成功。 */
+    /** 仅终结 RUNNING 记录；返回一行成功或零行未修改，禁止覆盖既有终态。 */
     int succeed(@Param("runId") byte[] runId, @Param("promptVersion") String promptVersion,
                 @Param("chatModel") String chatModel, @Param("embeddingModel") String embeddingModel,
                 @Param("rerankModel") String rerankModel, @Param("durationMs") long durationMs,
                 @Param("finishedAt") Instant finishedAt);
-    /** 标记运行失败或中断。 */
+    /** 仅将 RUNNING 记录标为失败或中断；零行不重写原终止原因。 */
     int fail(@Param("runId") byte[] runId, @Param("status") String status,
              @Param("errorCode") String errorCode, @Param("durationMs") long durationMs,
              @Param("finishedAt") Instant finishedAt);

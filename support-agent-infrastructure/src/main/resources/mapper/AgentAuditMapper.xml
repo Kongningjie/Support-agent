@@ -19,10 +19,10 @@
     <update id="succeed">
         UPDATE agent_run SET prompt_version=#{promptVersion},chat_model=#{chatModel},
             embedding_model=#{embeddingModel},rerank_model=#{rerankModel},status='SUCCEEDED',
-            duration_ms=#{durationMs},finished_at=#{finishedAt} WHERE run_id=#{runId}
+            duration_ms=#{durationMs},finished_at=#{finishedAt} WHERE run_id=#{runId} AND status='RUNNING'
     </update>
     <update id="fail">
         UPDATE agent_run SET status=#{status},error_code=#{errorCode},duration_ms=#{durationMs},
-            finished_at=#{finishedAt} WHERE run_id=#{runId}
+            finished_at=#{finishedAt} WHERE run_id=#{runId} AND status='RUNNING'
     </update>
 </mapper>

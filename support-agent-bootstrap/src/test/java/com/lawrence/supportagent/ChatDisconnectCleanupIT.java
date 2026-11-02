@@ -5,10 +5,15 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
+import static org.mockito.Mockito.doAnswer;
+import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.never;
+import static org.mockito.ArgumentMatchers.anyLong;
 
 import com.lawrence.supportagent.agent.model.DashScopeChatModelAdapter;
 import com.lawrence.supportagent.chat.ChatExecutionControl;
 import com.lawrence.supportagent.chat.port.ConversationStorePort;
+import com.lawrence.supportagent.chat.port.AgentAuditPort;
 import com.lawrence.supportagent.model.ChatModelPort;
 import com.lawrence.supportagent.model.ModelInvocationSecurity;
 import java.io.InputStream;
@@ -37,6 +42,7 @@ import org.springframework.test.annotation.DirtiesContext;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
+import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
 import org.testcontainers.containers.GenericContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
@@ -61,9 +67,107 @@ class ChatDisconnectCleanupIT {
     @LocalServerPort private int port;
     @Autowired private JdbcTemplate jdbc;
     @Autowired private ObjectMapper json;
-    @Autowired private ConversationStorePort conversations;
+    @MockitoSpyBean private ConversationStorePort conversations;
+    @MockitoSpyBean private AgentAuditPort audits;
     @Autowired private StringRedisTemplate redis;
     @MockitoBean(name = "chatModelPort") private ChatModelPort model;
+
+    /** 真实 Lua 保存后丢失响应，HTTP 仍应完成且原结果只保存一次。 */
+    @Test void shouldRecoverActuallyCommittedResultAfterLostResponse() throws Exception {
+        UUID message = UUID.randomUUID();
+        doAnswer(call -> { call.callRealMethod(); throw new IllegalStateException("synthetic response lost"); })
+                .when(conversations).complete(any(), any(), any(), any(), any(), any());
+        var response = greeting(message);
+        assertThat(response.body()).contains("event:answer.completed", "\"conversationVersion\":1");
+        assertThat(response.body()).doesNotContain("event:error");
+        var row = runRow(message);
+        assertThat(row.get("status")).isEqualTo("SUCCEEDED");
+        var snapshot = conversations.memorySnapshot(UUID.fromString(row.get("user_id").toString()),
+                UUID.fromString(row.get("conversation_id").toString()));
+        assertThat(snapshot.turns()).hasSize(1);
+        assertThat(snapshot.conversationVersion()).isEqualTo(1);
+        verify(conversations).resolveCommitOrFail(any(), any(), any(), any(), anyLong(), any());
+        verify(conversations, never()).fail(any(), any(), any(), any());
+        verify(model).greeting(any(), any(), any(), any(), any());
+    }
+
+    /** 提交尚未执行就报连接异常时，真实核实脚本应终结运行而不保存正文。 */
+    @Test void shouldAtomicallyTerminateCommitThatNeverExecuted() throws Exception {
+        UUID message = UUID.randomUUID();
+        doThrow(new IllegalStateException("synthetic command not sent")).when(conversations)
+                .complete(any(), any(), any(), any(), any(), any());
+        var response = greeting(message);
+        assertThat(response.body()).contains("event:error").doesNotContain("event:answer.completed");
+        var row = runRow(message);
+        assertThat(row.get("status")).isEqualTo("FAILED");
+        UUID owner = UUID.fromString(row.get("user_id").toString());
+        UUID conversation = UUID.fromString(row.get("conversation_id").toString());
+        assertThat(conversations.memorySnapshot(owner, conversation).conversationVersion()).isZero();
+        assertThat(conversations.memorySnapshot(owner, conversation).turns()).isEmpty();
+        assertThat(redis.opsForHash().get("support-agent:chat:conversation:{" + conversation + "}", "status"))
+                .isEqualTo("IDLE");
+        verify(conversations, never()).fail(any(), any(), any(), any());
+    }
+
+    /** 提交和核实均不可访问时不得伪造终态；已有运行仍由租约恢复。 */
+    @Test void shouldKeepOutcomeUnknownWhenResolutionUnavailable() throws Exception {
+        UUID message = UUID.randomUUID();
+        doThrow(new IllegalStateException("synthetic connection unavailable")).when(conversations)
+                .complete(any(), any(), any(), any(), any(), any());
+        doThrow(new IllegalStateException("synthetic resolution unavailable")).when(conversations)
+                .resolveCommitOrFail(any(), any(), any(), any(), anyLong(), any());
+        var response = greeting(message);
+        assertThat(response.body()).doesNotContain("event:answer.completed", "event:error");
+        var row = runRow(message);
+        assertThat(row.get("status")).isEqualTo("RUNNING");
+        String key = "support-agent:chat:conversation:{" + row.get("conversation_id") + "}";
+        assertThat(redis.opsForHash().get(key, "status")).isEqualTo("RUNNING");
+        assertThat(redis.opsForHash().hasKey(key, "runLeaseUntil")).isTrue();
+        verify(conversations, never()).fail(any(), any(), any(), any());
+        verify(audits, never()).succeed(any(), any(), any(), any(), any(), anyLong(), any());
+        verify(audits, never()).fail(any(), any(), any(), anyLong(), any());
+    }
+
+    /** 真实 Redis 已保存后 MySQL 审计故障不能回滚结果或写失败。 */
+    @Test void shouldPreserveRedisSuccessWhenSuccessAuditFails() throws Exception {
+        UUID message = UUID.randomUUID();
+        doThrow(new IllegalStateException("synthetic audit unavailable")).when(audits)
+                .succeed(any(), any(), any(), any(), any(), anyLong(), any());
+        var response = greeting(message);
+        assertThat(response.body()).contains("event:answer.completed");
+        var row = runRow(message);
+        assertThat(row.get("status")).isEqualTo("RUNNING");
+        var snapshot = conversations.memorySnapshot(UUID.fromString(row.get("user_id").toString()),
+                UUID.fromString(row.get("conversation_id").toString()));
+        assertThat(snapshot.conversationVersion()).isEqualTo(1);
+        assertThat(snapshot.turns()).hasSize(1);
+        verify(conversations, never()).fail(any(), any(), any(), any());
+        verify(audits, never()).fail(any(), any(), any(), anyLong(), any());
+        verify(audits).succeed(any(), any(), any(), any(), any(), anyLong(), any());
+    }
+
+    /** 经真实认证和 HTTP SSE 发送固定安全问候，隔离真实供应商调用。 */
+    private HttpResponse<String> greeting(UUID message) throws Exception {
+        when(model.greeting(any(), any(), any(), any(), any()))
+                .thenReturn(new ChatModelPort.ModelAnswer("你好，请问需要什么技术支持？", "test-v1"));
+        try (HttpClient client = HttpClient.newHttpClient()) {
+            String token = login(client);
+            var response = client.send(HttpRequest.newBuilder(URI.create("http://127.0.0.1:" + port + "/api/v1/chat/stream"))
+                    .timeout(Duration.ofSeconds(15)).header("Content-Type", "application/json")
+                    .header("Authorization", "Bearer " + token)
+                    .POST(HttpRequest.BodyPublishers.ofString("{\"spaceId\":\"00000000-0000-0000-0000-000000000001\","
+                            + "\"clientMessageId\":\"" + message + "\",\"message\":\"你好\"}")).build(),
+                    HttpResponse.BodyHandlers.ofString());
+            assertThat(response.statusCode()).isEqualTo(200);
+            return response;
+        }
+    }
+
+    /** 读取真实持久化审计，不用响应正文推断存储提交结果。 */
+    private java.util.Map<String, Object> runRow(UUID message) {
+        return jdbc.queryForMap("SELECT BIN_TO_UUID(user_id) AS user_id,BIN_TO_UUID(conversation_id) AS conversation_id,"
+                + "status,error_code FROM agent_run WHERE client_message_id=UUID_TO_BIN(?)", message.toString());
+    }
 
     /** 全部存储绑定临时容器，认证凭据仅用于本测试。 */
     @DynamicPropertySource

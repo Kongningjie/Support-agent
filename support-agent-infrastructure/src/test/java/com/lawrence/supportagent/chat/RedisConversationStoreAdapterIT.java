@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.lawrence.supportagent.chat.port.ConversationStorePort.CompletedTurn;
+import com.lawrence.supportagent.chat.port.ConversationStorePort;
 import com.lawrence.supportagent.knowledgespace.KnowledgeSpace;
 import com.lawrence.supportagent.retrieval.RetrievalStatus;
 import com.lawrence.supportagent.sharedkernel.error.ApplicationException;
@@ -37,6 +38,127 @@ class RedisConversationStoreAdapterIT {
     private RedisConversationStoreAdapter store;
     private LettuceConnectionFactory connectionFactory;
     private StringRedisTemplate redisTemplate;
+
+    /** 已提交响应丢失可读回原轮次，且不能释放随后另一条消息的新运行。 */
+    @Test void shouldResolveCommittedTurnWithoutTouchingNextRun() {
+        CommitFixture fixture = commitFixture();
+        store.complete(OWNER_ID, fixture.conversationId(), fixture.runId(), fixture.turn(), "agent", Instant.now());
+        UUID nextRun = UUID.randomUUID();
+        store.begin(OWNER_ID, fixture.conversationId(), UUID.randomUUID(), "下一条", 1L, nextRun, Instant.now());
+        var result = resolve(fixture);
+        assertThat(result.status()).isEqualTo(ConversationStorePort.CommitStatus.COMMITTED);
+        assertThat(result.turn()).isEqualTo(fixture.turn());
+        assertThat(resolve(fixture)).isEqualTo(result);
+        assertThat(store.renew(OWNER_ID, fixture.conversationId(), nextRun, Instant.now())).isTrue();
+        assertThat(store.memorySnapshot(OWNER_ID, fixture.conversationId()).turns()).hasSize(1);
+    }
+
+    /** 核实先终结时迟到提交必须被拒绝，不产生轮次、建议或 Agent 状态。 */
+    @Test void shouldAtomicallyFailBeforeLateComplete() {
+        CommitFixture fixture = commitFixture();
+        assertThat(resolve(fixture).status()).isEqualTo(ConversationStorePort.CommitStatus.FAILED);
+        assertThat(resolve(fixture).status()).isEqualTo(ConversationStorePort.CommitStatus.FAILED);
+        assertThatThrownBy(() -> store.complete(OWNER_ID, fixture.conversationId(), fixture.runId(),
+                fixture.turn(), "late-agent", Instant.now())).isInstanceOf(ApplicationException.class);
+        var snapshot = store.memorySnapshot(OWNER_ID, fixture.conversationId());
+        assertThat(snapshot.conversationVersion()).isZero();
+        assertThat(snapshot.turns()).isEmpty();
+        assertThat(redisTemplate.opsForHash().get("support-agent:chat:conversation:{" + fixture.conversationId() + "}",
+                "agentState")).isNull();
+        assertThat(redisTemplate.keys("support-agent:chat:suggestion:*")).isEmpty();
+    }
+
+    /** 代际重置后旧核实不能读取或终结当前代际，即使复用消息 UUID。 */
+    @Test void shouldFenceResolutionByCapturedGeneration() {
+        CommitFixture fixture = commitFixture();
+        store.fail(OWNER_ID, fixture.conversationId(), fixture.runId(), Instant.now());
+        store.reset(OWNER_ID, fixture.conversationId(), 0, Instant.now());
+        UUID nextRun = UUID.randomUUID();
+        var next = store.begin(OWNER_ID, fixture.conversationId(), fixture.messageId(), "原问题", 0L, nextRun, Instant.now());
+        assertThat(next.generation()).isEqualTo(1);
+        assertThat(resolve(fixture).status()).isEqualTo(ConversationStorePort.CommitStatus.NOT_OWNED);
+        assertThat(store.renew(OWNER_ID, fixture.conversationId(), nextRun, Instant.now())).isTrue();
+    }
+
+    /** 同一代际相同消息已经由新 runId 接管，旧核实不能终结新执行。 */
+    @Test void shouldFenceResolutionByMessageAttempt() {
+        CommitFixture fixture = commitFixture();
+        store.fail(OWNER_ID, fixture.conversationId(), fixture.runId(), Instant.now());
+        UUID nextRun = UUID.randomUUID();
+        store.begin(OWNER_ID, fixture.conversationId(), fixture.messageId(), "原问题", 0L, nextRun, Instant.now());
+        assertThat(resolve(fixture).status()).isEqualTo(ConversationStorePort.CommitStatus.NOT_OWNED);
+        assertThat(store.renew(OWNER_ID, fixture.conversationId(), nextRun, Instant.now())).isTrue();
+    }
+
+    /** 未授权所有者、错误消息或删除后的核实均不能写数据。 */
+    @Test void shouldRejectUnownedMissingAndDeletedResolution() {
+        CommitFixture fixture = commitFixture();
+        assertThat(store.resolveCommitOrFail(UUID.randomUUID(), fixture.conversationId(), fixture.messageId(),
+                fixture.runId(), fixture.generation(), Instant.now()).status())
+                .isEqualTo(ConversationStorePort.CommitStatus.NOT_OWNED);
+        assertThat(store.resolveCommitOrFail(OWNER_ID, fixture.conversationId(), UUID.randomUUID(),
+                fixture.runId(), fixture.generation(), Instant.now()).status())
+                .isEqualTo(ConversationStorePort.CommitStatus.NOT_OWNED);
+        assertThat(store.renew(OWNER_ID, fixture.conversationId(), fixture.runId(), Instant.now())).isTrue();
+        store.fail(OWNER_ID, fixture.conversationId(), fixture.runId(), Instant.now());
+        store.delete(OWNER_ID, fixture.conversationId(), 0, Instant.now());
+        assertThat(resolve(fixture).status()).isEqualTo(ConversationStorePort.CommitStatus.NOT_OWNED);
+        assertThat(redisTemplate.keys("support-agent:chat:*")).isEmpty();
+    }
+
+    /** 真实 Redis 同时执行 complete 与核实，最终只能保存一次成功或保持失败零版本。 */
+    @Test void shouldLinearizeRedisCommitAndResolution() throws Exception {
+        try (var threads = Executors.newVirtualThreadPerTaskExecutor()) {
+            for (int attempt = 0; attempt < 20; attempt++) {
+                CommitFixture fixture = commitFixture();
+                CountDownLatch ready = new CountDownLatch(1);
+                var complete = threads.submit(() -> {
+                    ready.await();
+                    try {
+                        return store.complete(OWNER_ID, fixture.conversationId(), fixture.runId(), fixture.turn(), null, Instant.now());
+                    } catch (ApplicationException exception) {
+                        assertThat(exception.errorCode()).isEqualTo(ErrorCode.CHAT_CONVERSATION_BUSY);
+                        return null;
+                    }
+                });
+                var resolution = threads.submit(() -> { ready.await(); return resolve(fixture); });
+                ready.countDown();
+                var resolved = resolution.get(5, java.util.concurrent.TimeUnit.SECONDS);
+                var committed = complete.get(5, java.util.concurrent.TimeUnit.SECONDS);
+                var snapshot = store.memorySnapshot(OWNER_ID, fixture.conversationId());
+                if (resolved.status() == ConversationStorePort.CommitStatus.COMMITTED) {
+                    assertThat(committed).isEqualTo(fixture.turn());
+                    assertThat(snapshot.conversationVersion()).isEqualTo(1);
+                    assertThat(snapshot.turns()).containsExactly(fixture.turn());
+                } else {
+                    assertThat(resolved.status()).isEqualTo(ConversationStorePort.CommitStatus.FAILED);
+                    assertThat(committed).isNull();
+                    assertThat(snapshot.conversationVersion()).isZero();
+                    assertThat(snapshot.turns()).isEmpty();
+                }
+            }
+        }
+    }
+
+    /** 创建包含建议的待提交轮次，用于验证完整结果只原子保存一次。 */
+    private CommitFixture commitFixture() {
+        UUID message = UUID.randomUUID();
+        UUID run = UUID.randomUUID();
+        var begin = store.begin(OWNER_ID, null, message, "原问题", null, run, Instant.now());
+        CompletedTurn turn = new CompletedTurn(UUID.randomUUID(), message, run, "原问题", "原问题",
+                ChatIntent.SUPPORT_QUERY, "安全答案", null, List.of(), UUID.randomUUID(), "建议上下文", "NO_RELIABLE_KNOWLEDGE",
+                Instant.now().truncatedTo(java.time.temporal.ChronoUnit.MILLIS), 1);
+        return new CommitFixture(begin.conversationId(), message, run, begin.generation(), turn);
+    }
+
+    /** 按开始时快照核实同一运行，不通过 begin 间接查询。 */
+    private ConversationStorePort.CommitResolution resolve(CommitFixture fixture) {
+        return store.resolveCommitOrFail(OWNER_ID, fixture.conversationId(), fixture.messageId(),
+                fixture.runId(), fixture.generation(), Instant.now());
+    }
+
+    /** 保存测试运行的不可变代际与标识，不用于生产契约。 */
+    private record CommitFixture(UUID conversationId, UUID messageId, UUID runId, long generation, CompletedTurn turn) { }
 
     /** 旧运行已释放后取得新运行，迟到的清理、续租和提交都不能修改新运行。 */
     @Test

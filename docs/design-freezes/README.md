@@ -33,7 +33,7 @@
 5. [用户回答反馈冻结方案](05-answer-feedback.md)（评测专项批次 1，不改变一期至四期既有边界）
 6. [人工评测冻结方案](06-human-evaluation.md)（评测专项批次 2；不授权 LLM-as-Judge）
 7. [LLM-as-Judge冻结方案](07-llm-judge.md)（评测专项批次3；真实模型调用另行授权）
-8. [聊天断连取消与结果重放冻结方案](08-chat-disconnect-cancellation.md)（独立补强，已确认设计；[实施计划](../implementation-plan/18-chat-disconnect-cancellation-implementation-plan.md)步骤一至三已完成，提交/重放治理仍待后续步骤）
+8. [聊天断连取消与结果重放冻结方案](08-chat-disconnect-cancellation.md)（独立补强，已确认设计；[实施计划](../implementation-plan/18-chat-disconnect-cancellation-implementation-plan.md)步骤一至四已完成，重放/前端兼容及批次指标仍待步骤五）
 
 ## 4. 延期事项
 

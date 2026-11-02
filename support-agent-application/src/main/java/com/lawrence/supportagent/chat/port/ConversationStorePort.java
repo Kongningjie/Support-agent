@@ -38,6 +38,33 @@ public interface ConversationStorePort {
     /** 释放仍属于指定运行的租约，不保存半轮或递增版本。 */
     void fail(UUID ownerUserId, UUID conversationId, UUID runId, Instant now);
 
+    /** 按开始时取得的代际快照原子核实同一次提交或终结尚未提交的运行，不修改后续运行。 */
+    CommitResolution resolveCommitOrFail(UUID ownerUserId, UUID conversationId, UUID clientMessageId,
+                                         UUID runId, long generation, Instant now);
+
+    /** 内部提交核实结果；不是持久化状态或对外事件。 */
+    enum CommitStatus {
+        /** 原运行已提交，附带原安全轮次。 */ COMMITTED,
+        /** 同一运行已失败或已被本次原子终结。 */ FAILED,
+        /** complete 明确拒绝当前运行围栏，未执行提交，无需核实网络结果。 */ REJECTED,
+        /** 归属、代际、消息或活动运行不符，未修改任何数据。 */ NOT_OWNED,
+        /** 存储不可访问或无法可靠解码，上层不得推断成功或失败。 */ UNKNOWN
+    }
+
+    /**
+     * @param status 内部提交结论；UNKNOWN 表示核实不可用或存储结果缺失，REJECTED 由应用层识别明确围栏拒绝
+     * @param turn 仅 COMMITTED 时提供已经保存的完整轮次
+     */
+    record CommitResolution(CommitStatus status, CompletedTurn turn) {
+        /** 拒绝不完整的成功结论或混入非成功结果的正文。 */
+        public CommitResolution {
+            java.util.Objects.requireNonNull(status);
+            if ((status == CommitStatus.COMMITTED) != (turn != null)) {
+                throw new IllegalArgumentException("提交核实状态与轮次不一致");
+            }
+        }
+    }
+
     /** 原子取得建议消费租约或返回已创建工单编号。 */
     SuggestionClaim claimSuggestion(UUID ownerUserId, UUID conversationId,
                                     UUID suggestionId, Instant now);
@@ -89,9 +116,15 @@ public interface ConversationStorePort {
      * @param spaceId 当前代际绑定的知识空间 UUID
      * @param replayTurn 重放轮次，非重放时为空
      * @param interruptedRunId 被过期租约接管的旧运行，可为空
+     * @param generation 开始时原子取得的会话代际，仅供内部提交核实使用
      */
     record BeginResult(BeginStatus status, UUID conversationId, long version, UUID spaceId,
-                       CompletedTurn replayTurn, UUID interruptedRunId) {
+                       CompletedTurn replayTurn, UUID interruptedRunId, long generation) {
+        /** 兼容原零代际的隔离测试；真实存储必须显式返回实际代际。 */
+        public BeginResult(BeginStatus status, UUID conversationId, long version, UUID spaceId,
+                           CompletedTurn replayTurn, UUID interruptedRunId) {
+            this(status, conversationId, version, spaceId, replayTurn, interruptedRunId, 0);
+        }
         /** 将阶段 18 以前的历史测试和快照明确解释为 GLOBAL。 */
         public BeginResult(BeginStatus status, UUID conversationId, long version,
                            CompletedTurn replayTurn, UUID interruptedRunId) {

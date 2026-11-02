@@ -85,7 +85,7 @@ public class RedisConversationStoreAdapter implements ConversationStorePort {
                   redis.call('ZADD',KEYS[2],ARGV[5],ARGV[10])
                   redis.call('EXPIRE',KEYS[1],ARGV[7]); redis.call('EXPIRE',messageKey,ARGV[7])
                   redis.call('EXPIRE',KEYS[2],ARGV[7]); redis.call('EXPIRE',KEYS[3],ARGV[7]); redis.call('EXPIRE',KEYS[4],ARGV[7])
-                  return {'REPLAY',redis.call('HGET',KEYS[1],'version') or '0',redis.call('HGET',messageKey,'result'),redis.call('HGET',KEYS[1],'spaceId')}
+                  return {'REPLAY',redis.call('HGET',KEYS[1],'version') or '0',redis.call('HGET',messageKey,'result'),redis.call('HGET',KEYS[1],'spaceId'),generation}
                 end
                 local active=redis.call('HGET',KEYS[1],'activeRunId')
                 local lease=tonumber(redis.call('HGET',KEYS[1],'runLeaseUntil') or '0')
@@ -98,7 +98,7 @@ public class RedisConversationStoreAdapter implements ConversationStorePort {
                 redis.call('ZADD',KEYS[2],ARGV[5],ARGV[10])
                 redis.call('EXPIRE',KEYS[1],ARGV[7]); redis.call('EXPIRE',messageKey,ARGV[7])
                 redis.call('EXPIRE',KEYS[2],ARGV[7]); redis.call('EXPIRE',KEYS[3],ARGV[7]); redis.call('EXPIRE',KEYS[4],ARGV[7])
-                return {'ACQUIRED',redis.call('HGET',KEYS[1],'version'),interrupted,redis.call('HGET',KEYS[1],'spaceId')}
+                return {'ACQUIRED',redis.call('HGET',KEYS[1],'version'),interrupted,redis.call('HGET',KEYS[1],'spaceId'),generation}
                 """;
         List<?> result = executeList(script, List.of(conversationKey(actualConversationId),
                         userIndexKey(ownerUserId), turnsKey(actualConversationId), auxiliaryKey(actualConversationId)),
@@ -122,12 +122,12 @@ public class RedisConversationStoreAdapter implements ConversationStorePort {
         if ("REPLAY".equals(status)) {
             return new BeginResult(BeginStatus.REPLAY, conversationId,
                     Long.parseLong(string(result, 1)), UUID.fromString(string(result, 3)),
-                    read(string(result, 2), CompletedTurn.class), null);
+                    read(string(result, 2), CompletedTurn.class), null, Long.parseLong(string(result, 4)));
         }
         UUID interrupted = string(result, 2).isBlank() ? null : UUID.fromString(string(result, 2));
         return new BeginResult(BeginStatus.ACQUIRED, conversationId,
                 Long.parseLong(string(result, 1)), UUID.fromString(string(result, 3)),
-                null, interrupted);
+                null, interrupted, Long.parseLong(string(result, 4)));
     }
 
     /** {@inheritDoc} */
@@ -170,10 +170,14 @@ public class RedisConversationStoreAdapter implements ConversationStorePort {
     @Override
     public CompletedTurn complete(UUID ownerUserId, UUID conversationId, UUID runId, CompletedTurn turn,
                                   String serializedAgentState, Instant now) {
+        if (!runId.equals(turn.runId())) throw new IllegalArgumentException("提交轮次不属于当前运行");
         String script = """
                 if redis.call('HGET',KEYS[1],'ownerUserId')~=ARGV[1] or redis.call('HGET',KEYS[1],'activeRunId')~=ARGV[2] then return 0 end
                 local generation=redis.call('HGET',KEYS[1],'generation') or '0'
                 local messageKey=ARGV[13]..generation..':'..ARGV[11]
+                if redis.call('HGET',KEYS[1],'activeMessageKey')~=messageKey or
+                  redis.call('HGET',messageKey,'runId')~=ARGV[2] or
+                  redis.call('HGET',messageKey,'status')~='PROCESSING' then return 0 end
                 redis.call('RPUSH',KEYS[3],ARGV[3])
                 redis.call('HSET',KEYS[1],'version',ARGV[4],'status','IDLE','lastAccessAt',ARGV[5])
                 redis.call('HDEL',KEYS[1],'activeRunId','runLeaseUntil','activeMessageKey')
@@ -203,6 +207,43 @@ public class RedisConversationStoreAdapter implements ConversationStorePort {
                 Long.toString(suggestionTtl.toSeconds()));
         if (!Long.valueOf(1).equals(result)) throw busy();
         return turn;
+    }
+
+    /** {@inheritDoc} */
+    @Override
+    public CommitResolution resolveCommitOrFail(UUID ownerUserId, UUID conversationId, UUID clientMessageId,
+                                                UUID runId, long generation, Instant now) {
+        if (generation < 0) throw new IllegalArgumentException("会话代际不能为负数");
+        String script = """
+                if redis.call('HGET',KEYS[1],'ownerUserId')~=ARGV[1] or
+                  (redis.call('HGET',KEYS[1],'generation') or '0')~=ARGV[3] then return {'NOT_OWNED'} end
+                if redis.call('HGET',KEYS[3],'runId')~=ARGV[2] then return {'NOT_OWNED'} end
+                local status=redis.call('HGET',KEYS[3],'status')
+                if status=='COMPLETED' then
+                  local result=redis.call('HGET',KEYS[3],'result')
+                  if not result then return {'UNKNOWN'} end
+                  return {'COMMITTED',result}
+                end
+                if status=='FAILED' then return {'FAILED'} end
+                if status~='PROCESSING' or redis.call('HGET',KEYS[1],'activeRunId')~=ARGV[2] or
+                  redis.call('HGET',KEYS[1],'activeMessageKey')~=KEYS[3] then return {'NOT_OWNED'} end
+                redis.call('HSET',KEYS[3],'status','FAILED')
+                redis.call('HSET',KEYS[1],'status','IDLE','lastAccessAt',ARGV[4])
+                redis.call('HDEL',KEYS[1],'activeRunId','runLeaseUntil','activeMessageKey')
+                redis.call('ZADD',KEYS[2],ARGV[4],ARGV[6])
+                redis.call('EXPIRE',KEYS[1],ARGV[5]); redis.call('EXPIRE',KEYS[2],ARGV[5]); redis.call('EXPIRE',KEYS[3],ARGV[5])
+                return {'FAILED'}
+                """;
+        List<?> result = executeList(script, List.of(conversationKey(conversationId), userIndexKey(ownerUserId),
+                        messageKeyPrefix(conversationId) + generation + ":" + clientMessageId),
+                ownerUserId.toString(), runId.toString(), Long.toString(generation), Long.toString(now.toEpochMilli()),
+                Long.toString(conversationTtl.toSeconds()), conversationId.toString());
+        CommitStatus status = CommitStatus.valueOf(string(result, 0));
+        CompletedTurn turn = status == CommitStatus.COMMITTED ? read(string(result, 1), CompletedTurn.class) : null;
+        if (turn != null && (!runId.equals(turn.runId()) || !clientMessageId.equals(turn.clientMessageId()))) {
+            throw error(ErrorCode.DEPENDENCY_UNAVAILABLE, "提交核实结果无法确认");
+        }
+        return new CommitResolution(status, turn);
     }
 
     /** {@inheritDoc} */

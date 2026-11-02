@@ -5,6 +5,8 @@ import com.lawrence.supportagent.chat.port.ConversationStorePort;
 import com.lawrence.supportagent.chat.port.ConversationStorePort.BeginResult;
 import com.lawrence.supportagent.chat.port.ConversationStorePort.Citation;
 import com.lawrence.supportagent.chat.port.ConversationStorePort.CompletedTurn;
+import com.lawrence.supportagent.chat.port.ConversationStorePort.CommitResolution;
+import com.lawrence.supportagent.chat.port.ConversationStorePort.CommitStatus;
 import com.lawrence.supportagent.auth.AuthenticatedUser;
 import com.lawrence.supportagent.model.ChatModelPort;
 import com.lawrence.supportagent.model.ChatModelPort.ModelAnswer;
@@ -323,7 +325,7 @@ public class ChatUseCase {
         stream(prepared, sink, new ChatExecutionControl());
     }
 
-    /** 在业务阶段边界检查连接取消；最终提交的原子竞争由后续步骤补齐。 */
+    /** 在业务阶段边界检查取消，并原子协调最终提交与响应不确定的核实。 */
     public void stream(PreparedChat prepared, ChatEventSink sink, ChatExecutionControl control) {
         long started = System.nanoTime();
 
@@ -347,7 +349,8 @@ public class ChatUseCase {
 
         //表示：当前聊天结果有没有已经成功提交到会话存储。
         boolean committed = false;
-        String completedPromptVersion = "unknown";
+        boolean commitEntered = false;
+        CommitStatus commitStatus = CommitStatus.UNKNOWN;
         try {
             // 记录因租约过期而被当前请求接管的旧运行。
             if (begin.interruptedRunId() != null) {
@@ -389,17 +392,33 @@ public class ChatUseCase {
                     : conversations.nextSequence(ownerUserId, begin.conversationId(), runId);
             control.checkCancelled();
             long completedSequence = conversations.nextSequence(ownerUserId, begin.conversationId(), runId);
-            control.checkCancelled();
-            //正式提交会话
-            CompletedTurn completed = conversations.complete(ownerUserId, begin.conversationId(), runId, pending,
-                    outcome.agentState, time.now());
+            if (!control.tryEnterCommit()) {
+                control.checkCancelled();
+                throw new IllegalStateException("当前请求已经使用提交权");
+            }
+            commitEntered = true;
+            // 门闩后不再以连接取消中断存储；网络异常先原子核实，不盲目 fail。
+            CommitResolution resolution = commitOrResolve(prepared, pending, outcome.agentState);
+            commitStatus = resolution.status();
+            if (resolution.status() != CommitStatus.COMMITTED) {
+                if (resolution.status() == CommitStatus.FAILED || resolution.status() == CommitStatus.REJECTED) {
+                    boolean rejected = resolution.status() == CommitStatus.REJECTED;
+                    ErrorCode code = rejected ? ErrorCode.CHAT_CONVERSATION_BUSY : ErrorCode.DEPENDENCY_UNAVAILABLE;
+                    auditResolvedFailure(prepared, control, started, code);
+                    if (!control.isCancelled()) {
+                        emitPrepared(sink, begin.conversationId(), runId, completedSequence, "error", Map.of(
+                                "code", code.name(), "message", rejected ? "会话运行权已经失效" : "会话结果未能保存，请稍后重试",
+                                "retryable", !rejected), control);
+                    }
+                }
+                telemetry.recordDuration(Operation.CHAT_REQUEST, elapsed(started), false);
+                return;
+            }
+            CompletedTurn completed = resolution.turn();
             //标记已经提交成功
             committed = true;
-            //保存 Prompt 版本
-            completedPromptVersion = outcome.promptVersion;
-            // 先写成功审计，确保客户端收到完成事件时运行已经可以被评价。
-            audits.succeed(runId, outcome.promptVersion, chatModelName, embeddingModelName,
-                    rerankModelName, elapsed(started), time.now());
+            // 先尝试成功审计；故障告警不能抹掉 Redis 已保存的成功结果。
+            auditCommittedSuccess(runId, outcome.promptVersion, started);
             control.checkCancelled();
             //发送 answer.completed
             emitAnswerCompleted(ownerUserId, sink, begin.conversationId(), runId, completed,
@@ -422,15 +441,21 @@ public class ChatUseCase {
         } catch (ChatCancellationException exception) {
             if (committed) {
                 telemetry.recordDuration(Operation.CHAT_REQUEST, elapsed(started), true);
+            } else if (commitEntered) {
+                // 提交协调已处理或尚不可确认，不重复执行普通失败清理。
+                telemetry.recordDuration(Operation.CHAT_REQUEST, elapsed(started), false);
             } else {
                 finishFailure(prepared, control, exception, started);
             }
         } catch (RuntimeException exception) {
             //如果已经提交成功，就不能再算失败
             if (committed) {
-                audits.succeed(runId, completedPromptVersion, chatModelName, embeddingModelName,
-                        rerankModelName, elapsed(started), time.now());
                 telemetry.recordDuration(Operation.CHAT_REQUEST, elapsed(started), true);
+                return;
+            }
+            if (commitEntered) {
+                LOGGER.log(System.Logger.Level.WARNING, "Chat commit stage=finalize result=failed outcome={0}", commitStatus.name());
+                telemetry.recordDuration(Operation.CHAT_REQUEST, elapsed(started), false);
                 return;
             }
             if (!control.isCancelled()) {
@@ -446,6 +471,52 @@ public class ChatUseCase {
             finishFailure(prepared, control, exception, started);
         } finally {
             closeSink(sink);
+        }
+    }
+
+    /** 提交异常时仅执行一次原子核实；核实不可用或归属不符时不猜测业务终态。 */
+    private CommitResolution commitOrResolve(PreparedChat prepared, CompletedTurn pending, String agentState) {
+        UUID owner = prepared.request().actor().userId();
+        UUID conversationId = prepared.begin().conversationId();
+        try {
+            return new CommitResolution(CommitStatus.COMMITTED,
+                    conversations.complete(owner, conversationId, prepared.runId(), pending, agentState, time.now()));
+        } catch (RuntimeException exception) {
+            if (exception instanceof ApplicationException application
+                    && application.errorCode() == ErrorCode.CHAT_CONVERSATION_BUSY) {
+                return new CommitResolution(CommitStatus.REJECTED, null);
+            }
+            LOGGER.log(System.Logger.Level.WARNING, "Chat commit stage=complete result=unconfirmed");
+        }
+        CommitResolution resolution;
+        try {
+            resolution = Objects.requireNonNull(conversations.resolveCommitOrFail(owner, conversationId,
+                    prepared.request().clientMessageId(), prepared.runId(), prepared.begin().generation(), time.now()));
+        } catch (RuntimeException exception) {
+            resolution = new CommitResolution(CommitStatus.UNKNOWN, null);
+        }
+        LOGGER.log(System.Logger.Level.WARNING, "Chat commit stage=resolve result={0}", resolution.status().name());
+        return resolution;
+    }
+
+    /** Redis 已经确认成功，审计故障仅告警，不能覆盖会话结果或再次尝试失败清理。 */
+    private void auditCommittedSuccess(UUID runId, String promptVersion, long started) {
+        try {
+            audits.succeed(runId, promptVersion, chatModelName, embeddingModelName,
+                    rerankModelName, elapsed(started), time.now());
+        } catch (RuntimeException exception) {
+            LOGGER.log(System.Logger.Level.WARNING, "Chat commit stage=success_audit result=failed");
+        }
+    }
+
+    /** Redis 已原子终结当前运行，只尝试失败审计，不再调用普通 fail。 */
+    private void auditResolvedFailure(PreparedChat prepared, ChatExecutionControl control, long started, ErrorCode failureCode) {
+        String code = control.cancellationReason() == null ? failureCode.name()
+                : control.cancellationReason().name();
+        try {
+            audits.fail(prepared.runId(), "FAILED", code, elapsed(started), time.now());
+        } catch (RuntimeException exception) {
+            LOGGER.log(System.Logger.Level.WARNING, "Chat commit stage=failure_audit result=failed");
         }
     }
 
