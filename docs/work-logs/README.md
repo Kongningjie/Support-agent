@@ -29,6 +29,12 @@
 
 ## 当前状态入口
 
+- 最近聊天治理实施：[步骤一：SSE 生命周期与发送队列](2026-11-02-chat-sse-lifecycle-step-one.md)；仅本步骤，完整模型取消链路尚未完成。
+
+- 最近聊天治理实施规划：[断连取消具体实施方案](2026-10-30-chat-cancellation-implementation-planning.md)；待确认、待执行，未编码。
+
+- 最近聊天治理设计记录：[断连取消与结果重放](2026-10-17-chat-cancellation-design.md)；仅冻结设计，尚未实施。
+
 - 最近评测批次：[Judge辅助评测](2026-10-13-llm-judge.md)；真实质量校准与来源偏差验证未执行。
 
 - 最近后端业务阶段记录：[阶段 20 空间权限治理、评测与四期验收](2026-09-27-stage-20-governance-evaluation-acceptance.md)。

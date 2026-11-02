@@ -273,6 +273,26 @@ public class ChatUseCase {
     }
 
     /**
+     * 终结已准备但从未进入 stream 的运行；重放没有取得运行权，不能修改原结果。
+     *
+     * @param prepared 同步准备结果，只能由未启动任务的唯一处理路径调用
+     * @param reason 连接取消原因；调度初始化失败但未报告连接取消时为空
+     */
+    public void failBeforeStart(PreparedChat prepared, ChatExecutionControl.CancellationReason reason) {
+        if (prepared.begin().status() == ConversationStorePort.BeginStatus.REPLAY) return;
+        UUID ownerUserId = prepared.request().actor().userId();
+        String code = reason == null ? ErrorCode.COMMON_INTERNAL_ERROR.name() : reason.name();
+        try {
+            conversations.fail(ownerUserId, prepared.begin().conversationId(), prepared.runId(), time.now());
+        } finally {
+            // 独立尝试审计，Redis 故障不能使审计直接跳过；异常交给调度入口记录安全告警。
+            audits.start(prepared.runId(), ownerUserId, prepared.begin().conversationId(),
+                    prepared.request().clientMessageId(), time.now());
+            audits.fail(prepared.runId(), "FAILED", code, 0, time.now());
+        }
+    }
+
+    /**
      * 执行已完成同步准备的聊天运行。
      *
      * @param prepared 同步准备结果
