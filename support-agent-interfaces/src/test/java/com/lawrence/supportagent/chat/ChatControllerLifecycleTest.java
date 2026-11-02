@@ -29,6 +29,21 @@ import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 /** 验证异步工作启动之前绑定回调，以及未启动运行和调度失败的唯一清理路径。 */
 class ChatControllerLifecycleTest {
+    /** 传给在线用例的必须是连接回调操作的同一个控制对象。 */
+    @Test
+    void shouldPassConnectionControlToBusiness() {
+        Fixture fixture = new Fixture();
+        AtomicReference<ChatExecutionControl> current = new AtomicReference<>();
+        doAnswer(invocation -> {
+            current.set(invocation.getArgument(2));
+            return null;
+        }).when(fixture.useCase).stream(eq(fixture.prepared), any(), any(ChatExecutionControl.class));
+        fixture.controller.stream(fixture.actor, fixture.request);
+        fixture.business.get().run();
+        assertThat(current.get().isCancelled()).isFalse();
+        fixture.emitter.error.accept(new IllegalStateException("synthetic disconnect"));
+        assertThat(current.get().cancellationReason()).isEqualTo(CancellationReason.CHAT_CLIENT_DISCONNECTED);
+    }
     /** 连接先断开时，晚返回的发送/心跳句柄立即停止，业务任务只释放占用。 */
     @Test
     void shouldBindCallbacksBeforeSchedulingAndCleanCancelledBeforeStart() {
@@ -44,7 +59,7 @@ class ChatControllerLifecycleTest {
         verify(fixture.heartbeat).cancel(true);
         verify(fixture.useCase).failBeforeStart(fixture.prepared,
                 CancellationReason.CHAT_CLIENT_DISCONNECTED);
-        verify(fixture.useCase, never()).stream(eq(fixture.prepared), any());
+        verify(fixture.useCase, never()).stream(eq(fixture.prepared), any(), any(ChatExecutionControl.class));
     }
 
     /** 心跳回调超时保持专用原因，即使随后收到完成和错误回调也不覆盖。 */
@@ -113,7 +128,7 @@ class ChatControllerLifecycleTest {
         Fixture fixture = new Fixture();
         fixture.controller.stream(fixture.actor, fixture.request);
         fixture.business.get().run();
-        verify(fixture.useCase).stream(eq(fixture.prepared), any());
+        verify(fixture.useCase).stream(eq(fixture.prepared), any(), any(ChatExecutionControl.class));
         verify(fixture.useCase, never()).failBeforeStart(any(), any());
     }
 

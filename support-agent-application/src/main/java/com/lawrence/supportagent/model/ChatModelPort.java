@@ -2,10 +2,25 @@ package com.lawrence.supportagent.model;
 
 import com.lawrence.supportagent.retrieval.RetrievalEvidence;
 import com.lawrence.supportagent.ticket.TicketDetails;
+import com.lawrence.supportagent.chat.ChatExecutionControl;
 import java.util.List;
 
 /** 隔离问候、知识回答和工单草稿等 Chat 模型能力。 */
 public interface ChatModelPort {
+    /** 在线 SSE 问候必须显式传入当前请求控制，适配器不得忽略取消。 */
+    ModelAnswer greeting(String message, List<String> recentTurns, Runnable firstTokenCallback,
+                         ModelInvocationSecurity security, ChatExecutionControl control);
+
+    /** 在线 SSE 知识回答必须显式传入当前请求控制，包含重生成的每次调用。 */
+    ModelAnswer groundedAnswer(String message, List<String> recentTurns, List<RetrievalEvidence> evidence,
+                               Runnable firstTokenCallback, ModelInvocationSecurity security,
+                               ChatExecutionControl control);
+
+    /** 在线 SSE 工单 Agent 必须取消本次执行和后续工具调用，不关闭共享模型。 */
+    ModelAnswer ticketAnswer(String message, String allowedTicketNo, TicketDetails ticket,
+                             List<String> recentTurns, Runnable firstTokenCallback,
+                             ModelInvocationSecurity security, ChatExecutionControl control);
+
     /** 生成简短问候，并在内部流式接收但只返回完整结果。 */
     ModelAnswer greeting(String message, List<String> recentTurns, Runnable firstTokenCallback);
 

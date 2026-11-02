@@ -27,6 +27,12 @@ public class IntentRecognitionService {
 
     /** 返回 规则优先 且永远具有安全检索问题的最终意图。 */
     public IntentDecision recognize(String message, List<String> recentTurns) {
+        return recognize(message, recentTurns, new ChatExecutionControl());
+    }
+
+    /** 在线意图调用保留当前取消上下文，专用取消异常不得转成技术检索降级。 */
+    public IntentDecision recognize(String message, List<String> recentTurns, ChatExecutionControl control) {
+        control.checkCancelled();
         //先规范化用户输入
         String normalized = requireMessage(message);
         String lower = normalized.toLowerCase(Locale.ROOT);
@@ -48,7 +54,8 @@ public class IntentRecognitionService {
         //前面三个规则都没命中，才调用模型
         try {
             IntentDecision decision = model.recognize(normalized,
-                    recentTurns == null ? List.of() : List.copyOf(recentTurns));
+                    recentTurns == null ? List.of() : List.copyOf(recentTurns), control);
+            control.checkCancelled();
             if (decision == null || decision.intent() == null
                     || !Double.isFinite(decision.confidence())
                     || decision.confidence() < minimumConfidence) {
@@ -63,7 +70,10 @@ public class IntentRecognitionService {
                     || decision.standaloneQuery().isBlank() ? normalized : decision.standaloneQuery().trim();
             return new IntentDecision(decision.intent(), decision.confidence(), query,
                     decision.ticketNo(), "MODEL_CLASSIFIED");
+        } catch (ChatCancellationException exception) {
+            throw exception;
         } catch (RuntimeException exception) {
+            control.checkCancelled();
             return fallback(normalized, "MODEL_FAILURE_FALLBACK");
         }
     }

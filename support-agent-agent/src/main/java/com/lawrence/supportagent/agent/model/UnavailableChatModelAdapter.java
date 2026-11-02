@@ -4,10 +4,25 @@ import com.lawrence.supportagent.model.ChatModelPort;
 import com.lawrence.supportagent.model.ModelInvocationException;
 import com.lawrence.supportagent.retrieval.RetrievalEvidence;
 import com.lawrence.supportagent.ticket.TicketDetails;
+import com.lawrence.supportagent.chat.ChatExecutionControl;
+import com.lawrence.supportagent.model.ModelInvocationSecurity;
 import java.util.List;
 
 /** 在开发环境未配置密钥时延迟报告模型能力不可用，使固定分支仍可启动。 */
 public class UnavailableChatModelAdapter implements ChatModelPort {
+    /** {@inheritDoc} */
+    @Override public ModelAnswer greeting(String message, List<String> turns, Runnable callback,
+                                          ModelInvocationSecurity security, ChatExecutionControl control) {
+        control.checkCancelled(); throw unavailable();
+    }
+    /** {@inheritDoc} */
+    @Override public ModelAnswer groundedAnswer(String message, List<String> turns,
+            List<RetrievalEvidence> evidence, Runnable callback, ModelInvocationSecurity security,
+            ChatExecutionControl control) { control.checkCancelled(); throw unavailable(); }
+    /** {@inheritDoc} */
+    @Override public ModelAnswer ticketAnswer(String message, String ticketNo, TicketDetails ticket,
+            List<String> turns, Runnable callback, ModelInvocationSecurity security,
+            ChatExecutionControl control) { control.checkCancelled(); throw unavailable(); }
     /** {@inheritDoc} */ @Override public ModelAnswer greeting(String message, List<String> turns, Runnable callback) { throw unavailable(); }
     /** {@inheritDoc} */ @Override public ModelAnswer groundedAnswer(String message, List<String> turns,
             List<RetrievalEvidence> evidence, String feedback, Runnable callback) { throw unavailable(); }

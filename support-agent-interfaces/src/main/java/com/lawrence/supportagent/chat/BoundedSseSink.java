@@ -177,7 +177,6 @@ final class BoundedSseSink implements ChatEventSink {
             if (closed) return;
             closed = true;
             normallyCompleted = reason == null;
-            if (reason != null) control.cancel(reason);
             IllegalStateException failure = new IllegalStateException("SSE 连接已经关闭");
             unconfirmed.forEach(pending -> pending.sent().completeExceptionally(failure));
             unconfirmed.clear();
@@ -187,6 +186,7 @@ final class BoundedSseSink implements ChatEventSink {
             resources.clear();
             interrupt = reason != null && Thread.currentThread() != drainThread;
         }
+        if (reason != null) control.cancel(reason);
         stopped.forEach(resource -> stopResource(resource, interrupt));
         try {
             emitter.complete();

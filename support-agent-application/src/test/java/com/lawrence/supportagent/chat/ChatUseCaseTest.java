@@ -144,7 +144,7 @@ class ChatUseCaseTest {
                 .thenReturn(context)
                 .thenThrow(new ApplicationException(ErrorCode.KNOWLEDGE_SPACE_NOT_FOUND,
                         "知识空间不存在"));
-        IntentRecognitionPort intentModel = (message, turns) -> {
+        IntentRecognitionPort intentModel = (message, turns, control) -> {
             throw new AssertionError("越界规则不应调用意图模型");
         };
         ChatUseCase useCase = new ChatUseCase(new IntentRecognitionService(intentModel, 0.70),
@@ -175,7 +175,7 @@ class ChatUseCaseTest {
 
     /** 使用指定 Prompt 安全策略创建不允许实际模型调用的聊天用例。 */
     private ChatUseCase useCase(ConversationStorePort store, PromptSecurityPolicy promptSecurity) {
-        IntentRecognitionPort intentModel = (message, turns) -> { throw new AssertionError("不应调用意图模型"); };
+        IntentRecognitionPort intentModel = (message, turns, control) -> { throw new AssertionError("不应调用意图模型"); };
         return new ChatUseCase(new IntentRecognitionService(intentModel, 0.70),
                 mock(RetrievalService.class), mock(ChatModelPort.class), mock(TicketQueryUseCase.class),
                 store, mock(AgentAuditPort.class), mock(AnswerValidator.class), UUID::randomUUID,

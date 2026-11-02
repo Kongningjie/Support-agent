@@ -7,6 +7,9 @@ import com.lawrence.supportagent.observability.OptimizationTelemetryPort;
 import com.lawrence.supportagent.observability.OptimizationTelemetryPort.ModelOperation;
 import com.lawrence.supportagent.retrieval.RetrievalEvidence;
 import com.lawrence.supportagent.ticket.TicketDetails;
+import com.lawrence.supportagent.chat.ChatExecutionControl;
+import com.lawrence.supportagent.chat.ChatCancellationException;
+import io.agentscope.core.model.ExecutionConfig;
 import io.agentscope.core.ReActAgent;
 import io.agentscope.core.message.Msg;
 import io.agentscope.core.message.MsgRole;
@@ -81,6 +84,7 @@ public class DashScopeChatModelAdapter implements ChatModelPort {
         this.settings = settings;
         this.grounded = new PromptTemplate(groundedPromptVariant.resource());
         this.model = OpenAIChatModel.builder().apiKey(apiKey).modelName(modelName)
+                .httpTransport(CancellableModelHttpTransport.shared())
                 .baseUrl(AgentScopeDashScopeBaseUrl.openAiCompatible(baseUrl)).stream(true)
                 .generateOptions(options(settings.chatMaxOutputTokens())).build();
         this.objectMapper = objectMapper;
@@ -97,9 +101,17 @@ public class DashScopeChatModelAdapter implements ChatModelPort {
     @Override
     public ModelAnswer greeting(String message, List<String> recentTurns,
                                 Runnable firstTokenCallback, ModelInvocationSecurity security) {
+        return greeting(message, recentTurns, firstTokenCallback, security, new ChatExecutionControl());
+    }
+
+    /** {@inheritDoc} */
+    @Override
+    public ModelAnswer greeting(String message, List<String> recentTurns, Runnable firstTokenCallback,
+                                 ModelInvocationSecurity security, ChatExecutionControl control) {
+        control.checkCancelled();
         return generate(secureSystemPrompt(greeting.render(Map.of()), security),
                 PromptDataBoundary.wrap("current_user_message", message), recentTurns,
-                firstTokenCallback, greeting.version());
+                firstTokenCallback, greeting.version(), control);
     }
 
     /** {@inheritDoc} */
@@ -119,6 +131,16 @@ public class DashScopeChatModelAdapter implements ChatModelPort {
                                       List<RetrievalEvidence> evidence,
                                       Runnable firstTokenCallback,
                                       ModelInvocationSecurity security) {
+        return groundedAnswer(message, recentTurns, evidence, firstTokenCallback, security,
+                new ChatExecutionControl());
+    }
+
+    /** {@inheritDoc} */
+    @Override
+    public ModelAnswer groundedAnswer(String message, List<String> recentTurns,
+                                      List<RetrievalEvidence> evidence, Runnable firstTokenCallback,
+                                      ModelInvocationSecurity security, ChatExecutionControl control) {
+        control.checkCancelled();
         String sources = evidence.stream().map(item -> PromptDataBoundary.wrap(
                 "evidence_" + (evidence.indexOf(item) + 1),
                 "[S" + (evidence.indexOf(item) + 1) + "] 来源类型=" + item.sourceType()
@@ -126,7 +148,7 @@ public class DashScopeChatModelAdapter implements ChatModelPort {
                 .reduce("", (left, right) -> left.isEmpty() ? right : left + "\n" + right);
         return generate(secureSystemPrompt(grounded.render(Map.of("VALIDATION_FEEDBACK", "")), security),
                 PromptDataBoundary.wrap("current_user_message", message) + "\n" + sources, recentTurns,
-                firstTokenCallback, grounded.version());
+                firstTokenCallback, grounded.version(), control);
     }
 
     /** {@inheritDoc} */
@@ -142,24 +164,35 @@ public class DashScopeChatModelAdapter implements ChatModelPort {
     public ModelAnswer ticketAnswer(String message, String allowedTicketNo, TicketDetails ticket,
                                     List<String> recentTurns, Runnable firstTokenCallback,
                                     ModelInvocationSecurity security) {
-        TicketLookupTool tool = new TicketLookupTool(allowedTicketNo, ticket);
+        return ticketAnswer(message, allowedTicketNo, ticket, recentTurns, firstTokenCallback,
+                security, new ChatExecutionControl());
+    }
+
+    /** {@inheritDoc} */
+    @Override
+    public ModelAnswer ticketAnswer(String message, String allowedTicketNo, TicketDetails ticket,
+                                    List<String> recentTurns, Runnable firstTokenCallback,
+                                    ModelInvocationSecurity security, ChatExecutionControl control) {
+        control.checkCancelled();
+        TicketLookupTool tool = new TicketLookupTool(allowedTicketNo, ticket, control);
         Toolkit toolkit = new Toolkit();
         toolkit.registerTool(tool);
         ReActAgent agent = ReActAgent.builder()
                 .name("ticket-reader")
-                .model(model)
+                .model(new CancellationAwareModel(model, control))
                 .toolkit(toolkit)
                 .maxIters(TICKET_AGENT_MAX_ITERATIONS)
-                .generateOptions(options(settings.chatMaxOutputTokens()))
+                .generateOptions(cancellableOptions(settings.chatMaxOutputTokens()))
                 .sysPrompt(secureSystemPrompt(
                         ticketPrompt.render(Map.of("TICKET_NO", allowedTicketNo)), security))
                 .build();
         String history = PromptDataBoundary.wrapAll("conversation_history", recentTurns);
         try (agent) {
-            Msg response = agent.call(history
+            Msg response = CancellableModelCall.awaitLast(() -> agent.call(history
                             + "\n" + PromptDataBoundary.wrap("current_user_message", message)
-                            + "\n" + PromptDataBoundary.wrap("authorized_ticket_number", allowedTicketNo))
-                    .block(settings.chatTimeout());
+                            + "\n" + PromptDataBoundary.wrap("authorized_ticket_number", allowedTicketNo)),
+                    control, settings.chatTimeout());
+            control.checkCancelled();
             if (response == null || response.getTextContent() == null || response.getTextContent().isBlank()
                     || tool.calls() != 1) {
                 throw unavailable(null);
@@ -170,7 +203,10 @@ public class DashScopeChatModelAdapter implements ChatModelPort {
             String serializedState = security.canary() == null
                     ? agent.getAgentState().toJson() : null;
             return new ModelAnswer(response.getTextContent(), ticketPrompt.version(), serializedState);
+        } catch (ChatCancellationException exception) {
+            throw exception;
         } catch (RuntimeException exception) {
+            control.checkCancelled();
             throw unavailable(exception);
         }
     }
@@ -232,15 +268,25 @@ public class DashScopeChatModelAdapter implements ChatModelPort {
 
     /** 内部消费原始流，只在完整响应生成后返回应用层。 */
     private ModelAnswer generate(String system, String user, List<String> recentTurns,
-                                 Runnable firstTokenCallback, String promptVersion) {
+                                 Runnable firstTokenCallback, String promptVersion,
+                                 ChatExecutionControl control) {
         return generate(system, user, recentTurns, firstTokenCallback, promptVersion,
-                settings.chatMaxOutputTokens(), settings.chatTimeout());
+                settings.chatMaxOutputTokens(), settings.chatTimeout(), control, false);
     }
 
     /** 使用指定输出上限和超时完整消费模型流。 */
     private ModelAnswer generate(String system, String user, List<String> recentTurns,
                                  Runnable firstTokenCallback, String promptVersion,
                                  int maximumOutputTokens, Duration timeout) {
+        return generate(system, user, recentTurns, firstTokenCallback, promptVersion,
+                maximumOutputTokens, timeout, new ChatExecutionControl(), true);
+    }
+
+    /** 使用请求取消控制消费模型流，完整成功后才返回正文与用量。 */
+    private ModelAnswer generate(String system, String user, List<String> recentTurns,
+                                 Runnable firstTokenCallback, String promptVersion,
+                                 int maximumOutputTokens, Duration timeout, ChatExecutionControl control,
+                                 boolean preserveStructuredRetry) {
         AtomicBoolean first = new AtomicBoolean();
         AtomicReference<ChatUsage> usage = new AtomicReference<>();
         String history = PromptDataBoundary.wrapAll("conversation_history", recentTurns);
@@ -248,7 +294,8 @@ public class DashScopeChatModelAdapter implements ChatModelPort {
                 Msg.builder().role(MsgRole.USER).textContent(history + user).build());
         StringBuilder complete = new StringBuilder();
         try {
-            model.stream(messages, List.of(), options(maximumOutputTokens))
+            CancellableModelCall.awaitLast(() -> model.stream(messages, List.of(), preserveStructuredRetry
+                            ? options(maximumOutputTokens) : cancellableOptions(maximumOutputTokens))
                     .doOnNext(response -> {
                 if (response.getUsage() != null) usage.set(response.getUsage());
                 for (TextBlock block : response.getContent().stream()
@@ -258,8 +305,11 @@ public class DashScopeChatModelAdapter implements ChatModelPort {
                         complete.append(block.getText());
                     }
                 }
-            }).blockLast(timeout);
+            }), control, timeout);
+        } catch (ChatCancellationException exception) {
+            throw exception;
         } catch (RuntimeException exception) {
+            control.checkCancelled();
             throw unavailable(exception);
         }
         if (complete.isEmpty()) throw unavailable(null);
@@ -316,6 +366,13 @@ public class DashScopeChatModelAdapter implements ChatModelPort {
                 .additionalBodyParam("enable_thinking", false).build();
     }
 
+    /** 在线回答关闭 SDK 隐式重试；独立结构化草稿保持既有重试配置。 */
+    private GenerateOptions cancellableOptions(int maximumOutputTokens) {
+        return GenerateOptions.builder().temperature(0.0).maxTokens(maximumOutputTokens)
+                .executionConfig(ExecutionConfig.builder().maxAttempts(1).build())
+                .additionalBodyParam("enable_thinking", false).build();
+    }
+
     /** 记录 Chat Token 与字符聚合量，不保存任何正文。 */
     private void recordChatUsage(ChatUsage usage, long inputCharacters, long outputCharacters) {
         long inputTokens = usage == null ? 0 : usage.getInputTokens();
@@ -330,20 +387,23 @@ public class DashScopeChatModelAdapter implements ChatModelPort {
     }
 
     /** 只允许读取构造时绑定的单个工单公开视图。 */
-    private static final class TicketLookupTool {
+    static final class TicketLookupTool {
         private final String allowedTicketNo;
         private final TicketDetails ticket;
+        private final ChatExecutionControl control;
         private final AtomicInteger calls = new AtomicInteger();
 
         /** 绑定当前路由已由应用层验证的唯一工单。 */
-        private TicketLookupTool(String allowedTicketNo, TicketDetails ticket) {
+        TicketLookupTool(String allowedTicketNo, TicketDetails ticket, ChatExecutionControl control) {
             this.allowedTicketNo = allowedTicketNo; this.ticket = ticket;
+            this.control = control;
         }
 
         /** 返回指定工单的公开字段，并拒绝第二次或越权查询。 */
         @Tool(name = "get_ticket", description = "按已授权工单编号读取公开工单字段", readOnly = true)
         public String getTicket(@ToolParam(name = "ticketNo", description = "T 加 12 位数字的已授权工单编号")
                                 String ticketNo) {
+            control.checkCancelled();
             int attempt = calls.incrementAndGet();
             if (attempt != 1 || !allowedTicketNo.equals(ticketNo)) {
                 throw new IllegalArgumentException("不允许读取该工单或重复调用工具");

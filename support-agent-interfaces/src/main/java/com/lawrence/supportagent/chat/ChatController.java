@@ -84,7 +84,7 @@ public class ChatController {
             return;
         }
         try {
-            useCase.stream(prepared, sink);
+            useCase.stream(prepared, sink, control);
         } catch (RuntimeException exception) {
             // 用例负责已启动运行的清理；这里仅兜底关闭传输，不推断提交结果。
             sink.abort(CancellationReason.CHAT_CLIENT_DISCONNECTED);

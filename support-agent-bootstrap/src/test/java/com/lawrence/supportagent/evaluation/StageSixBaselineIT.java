@@ -298,6 +298,26 @@ class StageSixBaselineIT {
 
     /** 只返回可通过引用校验的固定答案，并模拟可观测的首 Token 与 Token 用量。 */
     private static final class DeterministicChatModel implements ChatModelPort {
+        /** 同步合成问候没有网络订阅，但仍遵守请求取消。 */
+        @Override public ModelAnswer greeting(String message, List<String> turns, Runnable callback,
+                com.lawrence.supportagent.model.ModelInvocationSecurity security,
+                com.lawrence.supportagent.chat.ChatExecutionControl control) {
+            control.checkCancelled(); return answer(callback);
+        }
+        /** 同步合成知识回答保留取消参数，不假冒真实供应商取消能力。 */
+        @Override public ModelAnswer groundedAnswer(String message, List<String> turns,
+                List<RetrievalEvidence> evidence, Runnable callback,
+                com.lawrence.supportagent.model.ModelInvocationSecurity security,
+                com.lawrence.supportagent.chat.ChatExecutionControl control) {
+            control.checkCancelled(); return answer(callback);
+        }
+        /** 同步合成工单回答不创建 Agent，取消后拒绝执行。 */
+        @Override public ModelAnswer ticketAnswer(String message, String ticketNo,
+                com.lawrence.supportagent.ticket.TicketDetails ticket, List<String> turns, Runnable callback,
+                com.lawrence.supportagent.model.ModelInvocationSecurity security,
+                com.lawrence.supportagent.chat.ChatExecutionControl control) {
+            control.checkCancelled(); return answer(callback);
+        }
         private final OptimizationTelemetryPort telemetry;
 
         /** 注入测试运行使用的低基数遥测端口。 */

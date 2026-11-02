@@ -37,6 +37,24 @@ import org.mockito.ArgumentCaptor;
 
 /** 验证输出失败正文不可见、单次完整重生成和随机标记立即拒绝。 */
 class ChatUseCaseOutputSecurityTest {
+    /** 模型入口收到在线连接的同一个控制，取消异常不能进入第二次生成。 */
+    @Test
+    void shouldPropagateControlWithoutRegeneratingCancellation() {
+        ConversationStorePort store = preparedStore();
+        ChatExecutionControl control = new ChatExecutionControl();
+        ChatModelPort model = mock(ChatModelPort.class);
+        when(model.greeting(any(), any(), any(), any(ModelInvocationSecurity.class), any(ChatExecutionControl.class)))
+                .thenAnswer(invocation -> {
+                    assertThat(invocation.getArgument(4, ChatExecutionControl.class)).isSameAs(control);
+                    control.cancel(ChatExecutionControl.CancellationReason.CHAT_CLIENT_DISCONNECTED);
+                    throw new ChatCancellationException(control.cancellationReason());
+                });
+        ChatUseCase useCase = useCase(store, model);
+        useCase.stream(useCase.prepare(request()), new RecordingSink(), control);
+        verify(model).greeting(any(), any(), any(), any(ModelInvocationSecurity.class),
+                org.mockito.ArgumentMatchers.same(control));
+        verify(store, never()).complete(any(), any(), any(), any(), any(), any());
+    }
     private static final AuthenticatedUser ACTOR = new AuthenticatedUser(
             UUID.fromString("20000000-0000-0000-0000-000000000001"), "tester", UserRole.USER);
 
@@ -44,7 +62,7 @@ class ChatUseCaseOutputSecurityTest {
     @Test
     void shouldRegenerateOnceWithoutExposingFirstBody() {
         ChatModelPort model = mock(ChatModelPort.class);
-        when(model.greeting(any(), any(), any(), any(ModelInvocationSecurity.class)))
+        when(model.greeting(any(), any(), any(), any(ModelInvocationSecurity.class), any(ChatExecutionControl.class)))
                 .thenReturn(new ModelAnswer("", "greeting-v1"))
                 .thenReturn(new ModelAnswer("你好，请问需要什么技术支持？", "greeting-v1"));
         RecordingSink sink = new RecordingSink();
@@ -54,7 +72,7 @@ class ChatUseCaseOutputSecurityTest {
         assertThat(deltaTexts(sink)).containsExactly("你好，请问需要什么技术支持？");
         ArgumentCaptor<ModelInvocationSecurity> invocations =
                 ArgumentCaptor.forClass(ModelInvocationSecurity.class);
-        verify(model, times(2)).greeting(any(), any(), any(), invocations.capture());
+        verify(model, times(2)).greeting(any(), any(), any(), invocations.capture(), any(ChatExecutionControl.class));
         assertThat(invocations.getAllValues().get(0).canary())
                 .isNotEqualTo(invocations.getAllValues().get(1).canary());
         assertThat(invocations.getAllValues().get(1).feedbackRules())
@@ -66,7 +84,7 @@ class ChatUseCaseOutputSecurityTest {
     void shouldReturnOnlyErrorWhenSecondOutputStillFails() {
         ConversationStorePort store = preparedStore();
         ChatModelPort model = mock(ChatModelPort.class);
-        when(model.greeting(any(), any(), any(), any(ModelInvocationSecurity.class)))
+        when(model.greeting(any(), any(), any(), any(ModelInvocationSecurity.class), any(ChatExecutionControl.class)))
                 .thenReturn(new ModelAnswer("", "greeting-v1"));
         RecordingSink sink = new RecordingSink();
 
@@ -76,7 +94,7 @@ class ChatUseCaseOutputSecurityTest {
         assertThat(sink.events).filteredOn(event -> "error".equals(event.eventType()))
                 .singleElement().satisfies(event -> assertThat(event.data().get("code"))
                         .isEqualTo("CHAT_ANSWER_VALIDATION_FAILED"));
-        verify(model, times(2)).greeting(any(), any(), any(), any(ModelInvocationSecurity.class));
+        verify(model, times(2)).greeting(any(), any(), any(), any(ModelInvocationSecurity.class), any(ChatExecutionControl.class));
         verify(store, never()).complete(any(), any(), any(), any(), any(), any());
     }
 
@@ -85,7 +103,7 @@ class ChatUseCaseOutputSecurityTest {
     void shouldRejectCanaryLeakWithoutRegeneration() {
         ConversationStorePort store = preparedStore();
         ChatModelPort model = mock(ChatModelPort.class);
-        when(model.greeting(any(), any(), any(), any(ModelInvocationSecurity.class)))
+        when(model.greeting(any(), any(), any(), any(ModelInvocationSecurity.class), any(ChatExecutionControl.class)))
                 .thenAnswer(invocation -> new ModelAnswer(
                         "泄漏 " + invocation.<ModelInvocationSecurity>getArgument(3).canary(),
                         "greeting-v1"));
@@ -95,7 +113,7 @@ class ChatUseCaseOutputSecurityTest {
 
         assertThat(deltaTexts(sink)).isEmpty();
         assertThat(sink.events).filteredOn(event -> "error".equals(event.eventType())).hasSize(1);
-        verify(model).greeting(any(), any(), any(), any(ModelInvocationSecurity.class));
+        verify(model).greeting(any(), any(), any(), any(ModelInvocationSecurity.class), any(ChatExecutionControl.class));
         verify(store, never()).complete(any(), any(), any(), any(), any(), any());
     }
 
@@ -104,7 +122,7 @@ class ChatUseCaseOutputSecurityTest {
         AnswerValidator validator = new AnswerValidator(
                 new ExactTermExtractor(), new DocumentContentPolicy());
         return new ChatUseCase(new IntentRecognitionService(
-                (message, turns) -> new IntentDecision(ChatIntent.GREETING, 1,
+                (message, turns, control) -> new IntentDecision(ChatIntent.GREETING, 1,
                         message, null, "TEST"), 0.70), mock(RetrievalService.class), model,
                 mock(TicketQueryUseCase.class), store, mock(AgentAuditPort.class), validator,
                 UUID::randomUUID, () -> Instant.parse("2026-09-21T00:00:00Z"),

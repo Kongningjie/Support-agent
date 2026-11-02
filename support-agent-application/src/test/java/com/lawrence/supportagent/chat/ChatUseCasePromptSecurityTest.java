@@ -68,7 +68,7 @@ class ChatUseCasePromptSecurityTest {
                 "Redis 连接报错怎么处理？", null), sink);
 
         verify(model, never()).groundedAnswer(any(), any(), any(),
-                any(Runnable.class), any(ModelInvocationSecurity.class));
+                any(Runnable.class), any(ModelInvocationSecurity.class), any(ChatExecutionControl.class));
         assertThat(sink.events).filteredOn(event -> "answer.delta".equals(event.eventType()))
                 .singleElement().satisfies(event -> assertThat(event.data().get("text").toString())
                         .contains("没有找到足够可靠的依据"));
@@ -93,7 +93,7 @@ class ChatUseCasePromptSecurityTest {
                 "Redis 连接报错怎么处理？", null), new RecordingSink());
 
         verify(model, never()).groundedAnswer(any(), any(), any(),
-                any(Runnable.class), any(ModelInvocationSecurity.class));
+                any(Runnable.class), any(ModelInvocationSecurity.class), any(ChatExecutionControl.class));
     }
 
     /** 可疑工单自由文本只在模型调用副本中隐藏，不得改变稳定编号和状态。 */
@@ -109,7 +109,7 @@ class ChatUseCasePromptSecurityTest {
                 null, null);
         when(tickets.get(eq(ACTOR), eq("T123456789012"))).thenReturn(ticket);
         when(model.ticketAnswer(any(), any(), any(), any(), any(),
-                any(ModelInvocationSecurity.class))).thenReturn(
+                any(ModelInvocationSecurity.class), any(ChatExecutionControl.class))).thenReturn(
                 new ModelAnswer("工单仍在处理中。", "ticket-v1"));
         ChatUseCase useCase = useCase(store, retrieval, model, tickets);
 
@@ -119,7 +119,7 @@ class ChatUseCasePromptSecurityTest {
 
         ArgumentCaptor<TicketDetails> captured = ArgumentCaptor.forClass(TicketDetails.class);
         verify(model).ticketAnswer(any(), eq("T123456789012"), captured.capture(), any(),
-                any(), any(ModelInvocationSecurity.class));
+                any(), any(ModelInvocationSecurity.class), any(ChatExecutionControl.class));
         assertThat(captured.getValue().title()).isEqualTo("[内容已因安全策略隐藏]");
         assertThat(captured.getValue().ticketNo()).isEqualTo("T123456789012");
         assertThat(captured.getValue().status()).isEqualTo(TicketStatus.OPEN);
@@ -142,7 +142,7 @@ class ChatUseCasePromptSecurityTest {
                 .isInstanceOf(IllegalStateException.class);
 
         verify(store, never()).begin(any(), any(), any(), any(), any(), any(), any(), any());
-        verify(model, never()).greeting(any(), any(), any(), any(ModelInvocationSecurity.class));
+        verify(model, never()).greeting(any(), any(), any(), any(ModelInvocationSecurity.class), any(ChatExecutionControl.class));
     }
 
     /** 创建具备稳定会话生命周期行为的测试存储端口。 */
@@ -171,7 +171,7 @@ class ChatUseCasePromptSecurityTest {
                                 ChatModelPort model, TicketQueryUseCase tickets,
                                 PromptSecurityPolicy promptSecurity) {
         return new ChatUseCase(new IntentRecognitionService(
-                (message, turns) -> new IntentDecision(ChatIntent.SUPPORT_QUERY, 1,
+                (message, turns, control) -> new IntentDecision(ChatIntent.SUPPORT_QUERY, 1,
                         message, null, "TEST"), 0.70), retrieval, model, tickets, store,
                 mock(AgentAuditPort.class), mock(AnswerValidator.class), UUID::randomUUID,
                 () -> Instant.parse("2026-09-21T00:00:00Z"), "chat", "embedding", "rerank",

@@ -3,13 +3,14 @@ package com.lawrence.supportagent.agent.model;
 import com.lawrence.supportagent.chat.ChatIntent;
 import com.lawrence.supportagent.chat.IntentDecision;
 import com.lawrence.supportagent.model.IntentRecognitionPort;
+import com.lawrence.supportagent.chat.ChatExecutionControl;
+import io.agentscope.core.model.ExecutionConfig;
 import io.agentscope.core.message.Msg;
 import io.agentscope.core.message.MsgRole;
 import io.agentscope.core.message.TextBlock;
 import io.agentscope.core.model.Model;
 import io.agentscope.core.model.GenerateOptions;
 import io.agentscope.extensions.model.openai.OpenAIChatModel;
-import java.time.Duration;
 import java.util.List;
 import java.util.Map;
 import java.util.regex.Matcher;
@@ -33,19 +34,21 @@ public class DashScopeIntentRecognitionAdapter implements IntentRecognitionPort 
                                               ModelGenerationSettings settings) {
         this.settings = settings;
         this.model = OpenAIChatModel.builder().apiKey(apiKey).modelName(modelName)
+                .httpTransport(CancellableModelHttpTransport.shared())
                 .baseUrl(AgentScopeDashScopeBaseUrl.openAiCompatible(baseUrl)).stream(false)
                 .generateOptions(options()).build();
     }
 
     /** {@inheritDoc} */
     @Override
-    public IntentDecision recognize(String message, List<String> recentTurns) {
+    public IntentDecision recognize(String message, List<String> recentTurns, ChatExecutionControl control) {
+        control.checkCancelled();
         String rendered = prompt.render(Map.of(
                 "HISTORY", PromptDataBoundary.wrapAll("conversation_history", recentTurns),
                 "MESSAGE", PromptDataBoundary.wrap("current_user_message", message)));
         Msg request = Msg.builder().role(MsgRole.USER).textContent(rendered).build();
         StringBuilder output = new StringBuilder();
-        model.stream(List.of(request), List.of(), options())
+        CancellableModelCall.awaitLast(() -> model.stream(List.of(request), List.of(), options())
                 .doOnNext(response ->
                         response.getContent()
                                 .stream()
@@ -53,8 +56,7 @@ public class DashScopeIntentRecognitionAdapter implements IntentRecognitionPort 
                                 .map(TextBlock.class::cast)
                                 .map(TextBlock::getText)
                                 .filter(text -> text != null && !text.isEmpty())
-                                .forEach(output::append))
-                .blockLast(settings.intentTimeout());
+                                .forEach(output::append)), control, settings.intentTimeout());
         Matcher matcher = OUTPUT.matcher(output.toString().trim());
         if (!matcher.matches()) throw new IllegalStateException("意图模型输出结构无效");
         String ticket = "NONE".equals(matcher.group(4)) ? null : matcher.group(4);
@@ -65,6 +67,7 @@ public class DashScopeIntentRecognitionAdapter implements IntentRecognitionPort 
     /** 创建关闭思考模式且带意图输出上限的生成参数。 */
     private GenerateOptions options() {
         return GenerateOptions.builder().maxTokens(settings.intentMaxOutputTokens())
+                .executionConfig(ExecutionConfig.builder().maxAttempts(1).build())
                 .additionalBodyParam("enable_thinking", false).build();
     }
 }

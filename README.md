@@ -116,6 +116,8 @@ mvn verify -Ponline-test
 
 聊天接口 `POST /api/v1/chat/stream` 使用 SSE。服务端在检索和生成期间发送进度事件或注释心跳；模型原始 delta 不会直接下发。完整答案通过引用与精确值校验后，才发送 `answer.started -> answer.delta -> answer.completed`；两次生成均未通过时只发送 `error`。各分支请求样例和事件顺序见 `http/20-chat.http`。
 
+断连治理目前完成连接层与模型取消传播：检测到断连后可取消正在执行的 Chat/Intent/工单 Agent 请求，且不关闭共享客户端。全面业务阶段检查、取消清理与提交/重放协调仍在后续实施范围；关闭上游连接不代表供应商立即停止计算或计费。进展见 [独立实施计划](docs/implementation-plan/18-chat-disconnect-cancellation-implementation-plan.md)。
+
 除登录和健康检查外，业务接口均要求 Redis 不透明 Bearer Token。普通用户只能访问自己的会话、工单和长期记忆；新会话、知识草稿和手工工单要求显式知识空间，会话重置可保留原空间或显式切换。案例继承来源工单的空间归属。空间角色固定为 `READER`、`EDITOR`、`MANAGER`，平台管理员负责空间生命周期、用户和异步任务治理。账号安全示例见 `http/27-account-security.http`，知识空间示例见 `http/29-knowledge-spaces.http`。
 
 ## 固定检索评测

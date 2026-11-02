@@ -299,6 +299,11 @@ public class ChatUseCase {
      * @param sink SSE 事件接收端
      */
     public void stream(PreparedChat prepared, ChatEventSink sink) {
+        stream(prepared, sink, new ChatExecutionControl());
+    }
+
+    /** 在线入口显式传播连接控制；全面业务取消与提交协调在后续步骤补齐。 */
+    public void stream(PreparedChat prepared, ChatEventSink sink, ChatExecutionControl control) {
         long started = System.nanoTime();
 
         ChatRequest request = prepared.request();
@@ -329,12 +334,12 @@ public class ChatUseCase {
             //加载模型上下文
             List<String> context = modelContext(ownerUserId, begin.conversationId(), List.of(request.message()));
             //意图识别
-            IntentDecision decision = intents.recognize(request.message(), context);
+            IntentDecision decision = intents.recognize(request.message(), context, control);
             //记录意图识别结果
             audits.recordIntent(runId, decision);
             //route()：真正执行业务
             Outcome outcome = route(request.actor(), prepared.accessContext(), begin.conversationId(),
-                    runId, request.message(), context, decision, sink);
+                    runId, request.message(), context, decision, sink, control);
             //构造 CompletedTurn  CompletedTurn pending 表示：已经生成完成，但是还没有正式提交到会话存储的一轮聊天结果。
             CompletedTurn pending = new CompletedTurn(ids.generate(), request.clientMessageId(), runId,
                     request.message().trim(), decision.standaloneQuery(), decision.intent(), outcome.answer,
@@ -427,26 +432,26 @@ public class ChatUseCase {
     private Outcome route(com.lawrence.supportagent.auth.AuthenticatedUser actor,
                           RetrievalAccessContext accessContext,
                           UUID conversationId, UUID runId, String message, List<String> context,
-                          IntentDecision decision, ChatEventSink sink) {
+                          IntentDecision decision, ChatEventSink sink, ChatExecutionControl control) {
         return switch (decision.intent()) {
             case OUT_OF_SCOPE -> fixed(OUT_OF_SCOPE, "OUT_OF_SCOPE");
-            case GREETING -> greeting(actor.userId(), conversationId, runId, message, context);
-            case TICKET_QUERY -> ticket(actor, conversationId, runId, message, context, decision);
+            case GREETING -> greeting(actor.userId(), conversationId, runId, message, context, control);
+            case TICKET_QUERY -> ticket(actor, conversationId, runId, message, context, decision, control);
             case SUPPORT_QUERY -> support(actor.userId(), accessContext, conversationId, runId,
-                    message, context, decision, sink);
+                    message, context, decision, sink, control);
         };
     }
 
     /** 调用问候模型并记录真实首 Token 回调耗时。 */
     private Outcome greeting(UUID ownerUserId, UUID conversationId, UUID runId,
-                             String message, List<String> context) {
+                             String message, List<String> context, ChatExecutionControl control) {
         int regenerations = 0;
         List<String> feedback = List.of();
         while (true) {
             ModelInvocationSecurity invocation = outputSecurity.newInvocation(feedback);
             long modelStarted = System.nanoTime();
             ModelAnswer answer = chatModel.greeting(message, context,
-                    firstTokenCallback(ownerUserId, conversationId, runId, modelStarted), invocation);
+                    firstTokenCallback(ownerUserId, conversationId, runId, modelStarted), invocation, control);
             ModelOutputAssessment assessment = outputSecurity.assess(
                     ModelOutputType.GREETING, answer == null ? null : answer.text(),
                     invocation, message, List.of());
@@ -468,7 +473,7 @@ public class ChatUseCase {
     /** 执行仅允许一次指定工单读取的 AgentScope 分支。 */
     private Outcome ticket(com.lawrence.supportagent.auth.AuthenticatedUser actor,
                            UUID conversationId, UUID runId, String message, List<String> context,
-                           IntentDecision decision) {
+                           IntentDecision decision, ChatExecutionControl control) {
         if (decision.ticketNo() == null) return fixed(TICKET_REQUIRED, "TICKET_NUMBER_REQUIRED");
         try {
             TicketDetails ticket = secureTicket(tickets.get(actor, decision.ticketNo()));
@@ -479,7 +484,7 @@ public class ChatUseCase {
             while (true) {
                 ModelInvocationSecurity invocation = outputSecurity.newInvocation(feedback);
                 ModelAnswer answer = chatModel.ticketAnswer(message, decision.ticketNo(), ticket,
-                        answerContext, () -> renew(actor.userId(), conversationId, runId), invocation);
+                        answerContext, () -> renew(actor.userId(), conversationId, runId), invocation, control);
                 ModelOutputAssessment assessment = outputSecurity.assess(
                         ModelOutputType.TICKET_ANSWER, answer == null ? null : answer.text(),
                         invocation, message, List.of());
@@ -510,7 +515,7 @@ public class ChatUseCase {
     private Outcome support(UUID ownerUserId, RetrievalAccessContext accessContext,
                             UUID conversationId, UUID runId,
                             String message, List<String> context,
-                            IntentDecision decision, ChatEventSink sink) {
+                            IntentDecision decision, ChatEventSink sink, ChatExecutionControl control) {
         //先告诉前端：开始检索
         emit(ownerUserId, sink, conversationId, runId, "retrieval.started", Map.of("mode", "HYBRID"));
         //真正执行 RAG 检索
@@ -553,7 +558,7 @@ public class ChatUseCase {
             //真正调用回答模型
             ModelAnswer answer = chatModel.groundedAnswer(message, answerContext,
                     result.evidence(), firstTokenCallback(ownerUserId, conversationId, runId,
-                            modelStarted), invocation);
+                            modelStarted), invocation, control);
             //给答案补 Disclosure
             answer = answer == null ? null : withDisclosure(answer, result.evidence());
             //对模型输出做安全校验

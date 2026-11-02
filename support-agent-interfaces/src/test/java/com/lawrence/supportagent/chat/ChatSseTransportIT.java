@@ -180,7 +180,7 @@ class ChatSseTransportIT {
                     disconnected.countDown();
                 }
                 return null;
-            }).when(useCase).stream(any(ChatUseCase.PreparedChat.class), any());
+            }).when(useCase).stream(any(ChatUseCase.PreparedChat.class), any(), any(ChatExecutionControl.class));
             return useCase;
         }
 
