@@ -57,8 +57,8 @@ class ChatControllerLifecycleTest {
         fixture.business.get().run();
         verify(fixture.drain).cancel(true);
         verify(fixture.heartbeat).cancel(true);
-        verify(fixture.useCase).failBeforeStart(fixture.prepared,
-                CancellationReason.CHAT_CLIENT_DISCONNECTED);
+        verify(fixture.useCase).failBeforeStart(eq(fixture.prepared),
+                eq(CancellationReason.CHAT_CLIENT_DISCONNECTED), any(ChatExecutionControl.class));
         verify(fixture.useCase, never()).stream(eq(fixture.prepared), any(), any(ChatExecutionControl.class));
     }
 
@@ -71,7 +71,7 @@ class ChatControllerLifecycleTest {
         fixture.emitter.completion.run();
         fixture.emitter.error.accept(new IllegalStateException("later error"));
         fixture.business.get().run();
-        verify(fixture.useCase).failBeforeStart(fixture.prepared, CancellationReason.CHAT_RESPONSE_TIMEOUT);
+        verify(fixture.useCase).failBeforeStart(eq(fixture.prepared), eq(CancellationReason.CHAT_RESPONSE_TIMEOUT), any(ChatExecutionControl.class));
         verify(fixture.drain).cancel(true);
     }
 
@@ -82,7 +82,7 @@ class ChatControllerLifecycleTest {
         when(fixture.streams.submit(any(Runnable.class))).thenThrow(new RejectedExecutionException());
         assertThatThrownBy(() -> fixture.controller.stream(fixture.actor, fixture.request))
                 .isInstanceOf(RejectedExecutionException.class);
-        verify(fixture.useCase).failBeforeStart(fixture.prepared, null);
+        verify(fixture.useCase).failBeforeStart(eq(fixture.prepared), org.mockito.ArgumentMatchers.isNull(), any(ChatExecutionControl.class));
         verify(fixture.streams, never()).execute(any());
     }
 
@@ -95,7 +95,7 @@ class ChatControllerLifecycleTest {
         assertThatThrownBy(() -> fixture.controller.stream(fixture.actor, fixture.request))
                 .isInstanceOf(RejectedExecutionException.class);
         verify(fixture.drain).cancel(true);
-        verify(fixture.useCase).failBeforeStart(fixture.prepared, null);
+        verify(fixture.useCase).failBeforeStart(eq(fixture.prepared), org.mockito.ArgumentMatchers.isNull(), any(ChatExecutionControl.class));
         verify(fixture.streams, never()).execute(any());
     }
 
@@ -108,7 +108,7 @@ class ChatControllerLifecycleTest {
                 .isInstanceOf(RejectedExecutionException.class);
         verify(fixture.drain).cancel(true);
         verify(fixture.heartbeat).cancel(true);
-        verify(fixture.useCase).failBeforeStart(fixture.prepared, null);
+        verify(fixture.useCase).failBeforeStart(eq(fixture.prepared), org.mockito.ArgumentMatchers.isNull(), any(ChatExecutionControl.class));
     }
 
     /** prepare 失败仍同步返回，不能创建响应或调度任务。 */
@@ -119,7 +119,7 @@ class ChatControllerLifecycleTest {
         assertThatThrownBy(() -> fixture.controller.stream(fixture.actor, fixture.request))
                 .isInstanceOf(IllegalStateException.class).hasMessage("权限拒绝");
         verify(fixture.streams, never()).submit(any(Runnable.class));
-        verify(fixture.useCase, never()).failBeforeStart(any(), any());
+        verify(fixture.useCase, never()).failBeforeStart(any(), any(), any());
     }
 
     /** 正常执行交给原用例，不触发未启动清理。 */
@@ -129,7 +129,7 @@ class ChatControllerLifecycleTest {
         fixture.controller.stream(fixture.actor, fixture.request);
         fixture.business.get().run();
         verify(fixture.useCase).stream(eq(fixture.prepared), any(), any(ChatExecutionControl.class));
-        verify(fixture.useCase, never()).failBeforeStart(any(), any());
+        verify(fixture.useCase, never()).failBeforeStart(any(), any(), any());
     }
 
     /** 无网络、无真实线程的可控调度夹具；通过捕获任务验证实际顺序。 */

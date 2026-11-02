@@ -5,6 +5,9 @@ import type { ApiResult } from '@/types/api.types'
 import { ApiError } from '@/types/api.types'
 import type { ChatEvent, ChatStreamRequest } from '@/types/chat.types'
 
+/** 传输中断不能证明服务端未提交，统一要求显式确认恢复。 */
+export const CHAT_RESULT_UNCERTAIN = '连接已中断，结果状态待确认；可重新加载会话或重试'
+
 /** 浏览器主动取消聊天时使用的可识别异常。 */
 export class ChatCancelledError extends Error {
   /** 创建不应弹出系统错误的取消异常。 */
@@ -61,7 +64,7 @@ export async function streamChat(
     })
   } catch (error) {
     if (signal.aborted || isAbortError(error)) throw new ChatCancelledError()
-    throw new ChatStreamError('无法连接聊天服务，请确认后端已启动', 'NETWORK_ERROR', true)
+    throw new ChatStreamError(CHAT_RESULT_UNCERTAIN, 'NETWORK_ERROR', true)
   }
   if (!response.ok) {
     throw await responseError(response)
@@ -88,12 +91,13 @@ export async function streamChat(
   } catch (error) {
     if (signal.aborted || isAbortError(error)) throw new ChatCancelledError()
     if (error instanceof ChatStreamError) throw error
-    throw new ChatStreamError('聊天连接意外中断，可重试同一条消息', 'SSE_INTERRUPTED', true)
+    throw new ChatStreamError(CHAT_RESULT_UNCERTAIN, 'SSE_INTERRUPTED', true)
   } finally {
+    await reader.cancel().catch(() => undefined)
     reader.releaseLock()
   }
   if (!terminal) {
-    throw new ChatStreamError('聊天连接在完成前中断，可重试同一条消息', 'SSE_INCOMPLETE', true)
+    throw new ChatStreamError(CHAT_RESULT_UNCERTAIN, 'SSE_INCOMPLETE', true)
   }
 }
 

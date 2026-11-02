@@ -8,6 +8,7 @@ import org.reactivestreams.Subscription;
 import java.util.concurrent.atomic.AtomicReference;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Sinks;
+import com.lawrence.supportagent.observability.OptimizationTelemetryPort.UpstreamResult;
 
 /** 将独立取消异常接入真实流订阅，取消不是空响应或普通完成。 */
 final class CancellableModelCall {
@@ -21,9 +22,14 @@ final class CancellableModelCall {
         Sinks.One<Object> cancellation = Sinks.one();
         AtomicReference<Subscription> subscription = new AtomicReference<>();
         try (var registration = control.register(() -> {
+            control.noteUpstreamCancellation(UpstreamResult.REQUESTED);
             try {
                 Subscription active = subscription.getAndSet(null);
                 if (active != null) active.cancel();
+                control.noteUpstreamCancellation(UpstreamResult.LOCAL_RELEASED);
+            } catch (RuntimeException exception) {
+                control.noteUpstreamCancellation(UpstreamResult.RELEASE_FAILED);
+                throw exception;
             } finally {
                 try { control.checkCancelled(); }
                 catch (com.lawrence.supportagent.chat.ChatCancellationException exception) {

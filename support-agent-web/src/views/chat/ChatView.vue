@@ -86,6 +86,16 @@ async function submit(): Promise<void> {
   }
 }
 
+/** 读取服务端会话事实，保留同代际尚未确认的原消息标识。 */
+async function reloadConversation(): Promise<void> {
+  if (!chat.conversation || chat.streaming) return
+  try {
+    await chat.openConversation(chat.conversation.conversationId)
+  } catch (error) {
+    ElMessage.error(error instanceof ApiError ? error.message : '无法重新加载会话')
+  }
+}
+
 /** 二次确认后重置当前会话的上下文和轮次。 */
 function openReset(): void {
   if (!chat.conversation) return
@@ -282,6 +292,11 @@ function localTime(value: string | null): string {
         </p>
       </div>
       <div class="heading-actions">
+        <el-button
+          :disabled="!chat.conversation || chat.streaming || chat.loading"
+          @click="reloadConversation"
+          >重新加载会话</el-button
+        >
         <el-button @click="router.push('/conversations')">会话记录</el-button>
         <el-button :disabled="!chat.conversation || chat.streaming" @click="openReset"
           >重置</el-button
@@ -347,7 +362,10 @@ function localTime(value: string | null): string {
             </article>
           </div>
 
-          <div v-if="message.suggestionId" class="ticket-suggestion">
+          <div
+            v-if="message.state === 'completed' && message.suggestionId"
+            class="ticket-suggestion"
+          >
             <div>
               <strong>可以创建工单草稿</strong>
               <span>建议有效至 {{ localTime(message.suggestionExpiresAt) }}</span>
@@ -364,7 +382,7 @@ function localTime(value: string | null): string {
 
           <el-alert
             v-if="message.errorMessage"
-            :title="message.state === 'cancelled' ? '本轮已取消' : '本轮未完成'"
+            :title="message.state === 'cancelled' ? '已停止接收' : '本轮未完成'"
             :description="message.errorMessage"
             :type="message.state === 'cancelled' ? 'info' : 'error'"
             :closable="false"
@@ -424,20 +442,18 @@ function localTime(value: string | null): string {
     <el-dialog v-model="feedbackVisible" title="评价这次回答" width="520px">
       <p class="form-note">反馈仅用于后续质量分析，不会自动修改知识或模型。</p>
       <label for="feedback-rating">这次回答是否有帮助</label>
-      <el-select id="feedback-rating" v-model="feedbackRating" :disabled="feedbackBusy">
-        <el-option label="有帮助" value="HELPFUL" />
-        <el-option label="无帮助" value="NOT_HELPFUL" />
-      </el-select>
+      <select id="feedback-rating" v-model="feedbackRating" :disabled="feedbackBusy">
+        <option value="HELPFUL">有帮助</option>
+        <option value="NOT_HELPFUL">无帮助</option>
+      </select>
       <template v-if="feedbackRating === 'NOT_HELPFUL'">
         <label for="feedback-reason">无帮助的原因（必选）</label>
-        <el-select id="feedback-reason" v-model="feedbackReason" :disabled="feedbackBusy">
-          <el-option
-            v-for="reason in feedbackReasons"
-            :key="reason.value"
-            :label="reason.label"
-            :value="reason.value"
-          />
-        </el-select>
+        <select id="feedback-reason" v-model="feedbackReason" :disabled="feedbackBusy">
+          <option :value="null" disabled>请选择原因</option>
+          <option v-for="reason in feedbackReasons" :key="reason.value" :value="reason.value">
+            {{ reason.label }}
+          </option>
+        </select>
       </template>
       <label for="feedback-note">补充说明（可选，最多 300 字；请勿填写个人信息或密钥）</label>
       <el-input

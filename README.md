@@ -116,7 +116,7 @@ mvn verify -Ponline-test
 
 聊天接口 `POST /api/v1/chat/stream` 使用 SSE。服务端在检索和生成期间发送进度事件或注释心跳；模型原始 delta 不会直接下发。完整答案通过引用与精确值校验后，才发送 `answer.started -> answer.delta -> answer.completed`；两次生成均未通过时只发送 `error`。各分支请求样例和事件顺序见 `http/20-chat.http`。
 
-断连治理已完成连接层、模型取消传播、业务检查和最终提交协调：检测断连后取消当前 Chat/Intent/工单 Agent 请求，阻断后续校验、重生成和发送，并独立尝试清理。取消与提交通过一次性门闩竞争；提交响应不确定时按原 runId/代际原子核实，无法确认则保留未知，明确成功不因断连或审计故障回滚。完整批次指标、旧版本结果重放和前端兼容仍待步骤五；关闭上游连接不代表供应商立即停止计算或计费。进展见 [独立实施计划](docs/implementation-plan/18-chat-disconnect-cancellation-implementation-plan.md)。
+断连治理步骤一至五已完成：检测断连后取消当前 Chat/Intent/工单 Agent 请求，阻断后续校验、重生成和发送，并独立尝试清理。取消与提交通过一次性门闩竞争；提交响应不确定时按原 runId/代际原子核实，无法确认则保留未知，明确成功不因断连或审计故障回滚。同代际已完成消息支持旧版本重放，前端显式复用原消息 ID 重试并清除临时内容，不自动重连。已补齐固定维度取消/清理/上游指标及真实后端浏览器验收；关闭上游连接不代表供应商立即停止计算或计费。见 [实施计划](docs/implementation-plan/18-chat-disconnect-cancellation-implementation-plan.md)和[验收记录](docs/work-logs/2026-11-02-chat-replay-step-five.md)。
 
 除登录和健康检查外，业务接口均要求 Redis 不透明 Bearer Token。普通用户只能访问自己的会话、工单和长期记忆；新会话、知识草稿和手工工单要求显式知识空间，会话重置可保留原空间或显式切换。案例继承来源工单的空间归属。空间角色固定为 `READER`、`EDITOR`、`MANAGER`，平台管理员负责空间生命周期、用户和异步任务治理。账号安全示例见 `http/27-account-security.http`，知识空间示例见 `http/29-knowledge-spaces.http`。
 

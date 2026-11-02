@@ -120,6 +120,11 @@ class AgentScopeCancellationTransportIT {
                 cancelled.get(5, TimeUnit.SECONDS);
                 if (result != null) assertThatThrownBy(() -> result.get(5, TimeUnit.SECONDS))
                         .hasCauseInstanceOf(ChatCancellationException.class);
+                if (result != null) {
+                    assertThat(control.upstreamCancellationCount(com.lawrence.supportagent.observability.OptimizationTelemetryPort.UpstreamResult.REQUESTED)).isEqualTo(1);
+                    assertThat(control.upstreamCancellationCount(com.lawrence.supportagent.observability.OptimizationTelemetryPort.UpstreamResult.LOCAL_RELEASED)).isEqualTo(1);
+                    assertThat(control.upstreamCancellationCount(com.lawrence.supportagent.observability.OptimizationTelemetryPort.UpstreamResult.RELEASE_FAILED)).isZero();
+                }
                 assertThat(peer.get(5, TimeUnit.SECONDS)).isEqualTo(-1);
             } finally {
                 cancel.run();

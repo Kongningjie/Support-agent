@@ -61,6 +61,41 @@ class ChatBusinessCancellationTest {
     private final Instant now = Instant.parse("2026-11-02T00:00:00Z");
     private ChatUseCase useCase;
     private ChatUseCase.PreparedChat prepared;
+    private final OptimizationTelemetryPort telemetry = mock(OptimizationTelemetryPort.class);
+
+    /** 首次取消只在业务收尾记录一次，包含真实阶段及清理结果。 */
+    @Test void shouldReportCancellationOnceAfterCleanup() {
+        cancel();
+        execute();
+        cancel();
+        verify(telemetry).recordChatCancellation(eq(CancellationReason.CHAT_CLIENT_DISCONNECTED),
+                eq(OptimizationTelemetryPort.ChatStage.PREPARING), eq(OptimizationTelemetryPort.CleanupResult.RELEASED), anyLong(), eq(true));
+        assertThat(control.claimCancellationReport()).isFalse();
+    }
+
+    /** 持久化异常与提交成功后的断连不能被指标误记为成功清理或失败运行。 */
+    @Test void shouldReportPartialCleanupFailure() {
+        doThrow(new IllegalStateException()).when(store).fail(any(), any(), any(), any());
+        cancel(); execute();
+        verify(telemetry).recordChatCancellation(any(), any(), eq(OptimizationTelemetryPort.CleanupResult.PARTIAL_FAILURE), anyLong(), eq(true));
+    }
+
+    /** 重放发送前当前权限被撤销时，不发送任何原正文且不修改原审计。 */
+    @Test void shouldRevalidateReplayPermissionsBeforeBody() {
+        var spaces = mock(com.lawrence.supportagent.knowledgespace.KnowledgeSpaceAccessService.class);
+        when(spaces.retrievalContext(any(), any())).thenThrow(new com.lawrence.supportagent.sharedkernel.error.ApplicationException(
+                com.lawrence.supportagent.sharedkernel.error.ErrorCode.KNOWLEDGE_SPACE_NOT_FOUND, "空间不可访问"));
+        useCase = new ChatUseCase(intents, retrieval, model, tickets, store, audits, mock(AnswerValidator.class),
+                UUID::randomUUID, () -> now, "chat", "embedding", "rerank", 0.35, telemetry, Duration.ofHours(24),
+                null, null, new DeterministicPromptSecurityPolicy(new LlmSecuritySettings(true, true, true)), security, spaces);
+        prepared = new ChatUseCase.PreparedChat(prepared.request(), prepared.runId(),
+                new BeginResult(BeginStatus.REPLAY, prepared.begin().conversationId(), 1, KnowledgeSpace.GLOBAL_SPACE_ID,
+                        mock(CompletedTurn.class), null), prepared.accessContext());
+        assertThatThrownBy(this::execute).isInstanceOf(com.lawrence.supportagent.sharedkernel.error.ApplicationException.class);
+        assertThat(sink.events).isEmpty();
+        verifyNoInteractions(audits, model, intents);
+        verify(store, never()).fail(any(), any(), any(), any());
+    }
 
     /** 明确围栏拒绝保持原冲突错误语义，不发起核实或修改新运行。 */
     @Test void shouldPreserveExplicitCommitRejection() {
@@ -126,7 +161,10 @@ class ChatBusinessCancellationTest {
         ConversationContextService contexts = mock(ConversationContextService.class);
         when(contexts.prepare(any(), any(), any())).thenReturn(new ConversationContext(List.of(), 0, 0, 0));
         useCase = createUseCase(contexts, memories);
-        when(store.complete(any(), any(), any(), any(), any(), any())).thenThrow(new IllegalStateException());
+        when(store.complete(any(), any(), any(), any(), any(), any())).thenAnswer(call -> {
+            cancel();
+            throw new IllegalStateException();
+        });
         when(store.resolveCommitOrFail(any(), any(), any(), any(), anyLong(), any())).thenThrow(new IllegalStateException());
         execute();
         verify(store, never()).fail(any(), any(), any(), any());
@@ -134,6 +172,7 @@ class ChatBusinessCancellationTest {
         verify(audits, never()).succeed(any(), any(), any(), any(), any(), anyLong(), any());
         verify(contexts, never()).afterSuccessfulTurn(any(), any());
         verifyNoInteractions(memories);
+        verify(telemetry).recordChatCancellation(any(), any(), eq(OptimizationTelemetryPort.CleanupResult.UNKNOWN), anyLong(), eq(false));
         assertThat(sink.events).noneMatch(event -> List.of("answer.completed", "error").contains(event.eventType()));
     }
 
@@ -431,7 +470,7 @@ class ChatBusinessCancellationTest {
     private ChatUseCase createUseCase(ConversationContextService contexts, UserMemoryCandidateService candidates) {
         return new ChatUseCase(intents, retrieval, model, tickets, store, audits,
                 mock(AnswerValidator.class), UUID::randomUUID, () -> now, "chat", "embedding", "rerank", 0.35,
-                OptimizationTelemetryPort.noOp(), Duration.ofHours(24), contexts, candidates,
+                telemetry, Duration.ofHours(24), contexts, candidates,
                 new DeterministicPromptSecurityPolicy(new LlmSecuritySettings(true, true, true)), security);
     }
 

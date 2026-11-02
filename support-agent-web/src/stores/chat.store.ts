@@ -1,6 +1,11 @@
 import { computed, ref } from 'vue'
 import { defineStore } from 'pinia'
-import { ChatCancelledError, ChatStreamError, streamChat } from '@/api/chat.stream'
+import {
+  CHAT_RESULT_UNCERTAIN,
+  ChatCancelledError,
+  ChatStreamError,
+  streamChat,
+} from '@/api/chat.stream'
 import * as conversationApi from '@/api/conversation.api'
 import type {
   ChatCitation,
@@ -37,7 +42,7 @@ export const useChatStore = defineStore('chat', () => {
     loading.value = true
     try {
       const details = await conversationApi.getConversation(conversationId)
-      applyDetails(details)
+      applyDetails(details, conversation.value?.conversationId === conversationId)
     } finally {
       loading.value = false
     }
@@ -63,13 +68,18 @@ export const useChatStore = defineStore('chat', () => {
     if (
       !item ||
       !item.clientMessageId ||
-      item.state !== 'failed' ||
+      !['failed', 'cancelled'].includes(item.state) ||
       !item.retryable ||
       !canSend.value
     )
       return
     item.answer = ''
     item.citations = []
+    item.suggestionId = null
+    item.suggestionExpiresAt = null
+    item.retrievalStatus = null
+    item.resultStatus = null
+    item.completedAt = null
     item.errorMessage = null
     item.state = 'running'
     await execute(item)
@@ -137,12 +147,23 @@ export const useChatStore = defineStore('chat', () => {
           expectedConversationVersion: conversation.value?.version ?? null,
         },
         activeController.signal,
-        (event) => applyEvent(item, event),
+        (event) => {
+          if (controller.value === activeController && !activeController.signal.aborted)
+            applyEvent(item, event)
+        },
       )
+      if (activeController.signal.aborted && item.state !== 'completed')
+        throw new ChatCancelledError()
     } catch (error) {
+      if (
+        controller.value !== activeController ||
+        !messages.value.some((candidate) => candidate.key === item.key)
+      )
+        return
+      if (item.state === 'completed') return
       if (error instanceof ChatCancelledError) {
         item.state = 'cancelled'
-        item.errorMessage = '本轮已取消，未完成内容不会作为成功回答保存。'
+        item.errorMessage = CHAT_RESULT_UNCERTAIN
         item.retryable = true
       } else {
         item.state = 'failed'
@@ -150,26 +171,38 @@ export const useChatStore = defineStore('chat', () => {
         item.retryable =
           error instanceof ChatStreamError
             ? error.retryable
-            : error instanceof ApiError && error.retryable
+            : error instanceof ApiError &&
+              (error.retryable ||
+                error.code === 'CHAT_CONVERSATION_BUSY' ||
+                error.code === 'CHAT_VERSION_CONFLICT')
         if (error instanceof ApiError && (error.status === 404 || error.status === 410)) {
           conversation.value = null
         }
-        if (error instanceof ApiError && error.status === 409 && conversation.value) {
-          await openConversation(conversation.value.conversationId)
+        if (
+          error instanceof ApiError &&
+          error.code === 'CHAT_VERSION_CONFLICT' &&
+          conversation.value
+        ) {
+          try {
+            const details = await conversationApi.getConversation(conversation.value.conversationId)
+            applyDetails(details, true)
+          } catch {
+            // 刷新失败仍保留原消息 ID，等待用户显式恢复。
+          }
         }
       }
-      if (conversation.value?.status === 'RUNNING') {
-        conversation.value = { ...conversation.value, status: 'IDLE' }
-      }
     } finally {
-      if (controller.value === activeController) controller.value = null
-      progress.value = null
+      if (controller.value === activeController) {
+        controller.value = null
+        progress.value = null
+      }
     }
   }
 
   /** 按稳定事件类型更新运行进度、回答、引用、建议与会话版本。 */
   function applyEvent(item: ChatMessage, event: ChatEvent): void {
     if (event.eventType === 'conversation.started') {
+      item.runId = event.runId
       const version = numberValue(event.data.conversationVersion)
       conversation.value = {
         conversationId: event.conversationId,
@@ -208,11 +241,16 @@ export const useChatStore = defineStore('chat', () => {
       item.state = 'completed'
       item.completedAt = event.timestamp
       item.errorMessage = null
+      item.retryable = false
       if (conversation.value) {
         conversation.value = {
           ...conversation.value,
           status: 'IDLE',
-          version: numberValue(event.data.conversationVersion),
+          // 旧轮次重放携带原成功版本，不能覆盖 started 给出的当前会话版本。
+          version: Math.max(
+            conversation.value.version,
+            numberValue(event.data.conversationVersion),
+          ),
           lastAccessAt: event.timestamp,
         }
       }
@@ -224,8 +262,29 @@ export const useChatStore = defineStore('chat', () => {
     }
   }
 
-  /** 将详情轮次替换为只读成功消息，避免保留上一会话临时状态。 */
-  function applyDetails(details: ConversationDetails): void {
+  /** 以服务端轮次恢复成功结果；同会话保留待确认消息，代际改变后禁止旧消息重试。 */
+  function applyDetails(details: ConversationDetails, preservePending = false): void {
+    const sameGeneration =
+      preservePending && conversation.value?.generation === details.conversation.generation
+    const savedRuns = new Set(details.recentTurns.map((turn) => turn.runId))
+    const candidates = preservePending
+      ? messages.value.filter((item) => item.clientMessageId && item.state !== 'completed')
+      : []
+    const pending = sameGeneration
+      ? candidates.filter((item) => !savedRuns.has(item.runId || ''))
+      : candidates.map((item): ChatMessage => ({
+          ...item,
+          answer: '',
+          citations: [],
+          suggestionId: null,
+          suggestionExpiresAt: null,
+          completedAt: null,
+          retrievalStatus: null,
+          resultStatus: null,
+          state: 'failed',
+          retryable: false,
+          errorMessage: '会话已重置，这条旧代际消息不能重试；请重新发送问题',
+        }))
     conversation.value = details.conversation
     messages.value = details.recentTurns.map((turn) => ({
       key: turn.turnId,
@@ -244,6 +303,7 @@ export const useChatStore = defineStore('chat', () => {
       errorMessage: null,
       retryable: false,
     }))
+    messages.value.push(...pending)
     progress.value = null
   }
 

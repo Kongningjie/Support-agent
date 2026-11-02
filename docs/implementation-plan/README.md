@@ -4,7 +4,7 @@
 
 本文档集是后续实现、评审和验收的依据。若实现与文档冲突，应先记录设计变更，再修改代码。
 
-聊天运行治理已有[断连取消与结果重放冻结方案](../design-freezes/08-chat-disconnect-cancellation.md)及[单批次实施计划](18-chat-disconnect-cancellation-implementation-plan.md)：采用检测断连后取消，不做 SSE 断点续传；步骤一至四已完成，批次整体仍进行中，步骤五和完整批次验收待执行，不改变已完成产品阶段状态。
+聊天运行治理已有[断连取消与结果重放冻结方案](../design-freezes/08-chat-disconnect-cancellation.md)及[单批次实施计划](18-chat-disconnect-cancellation-implementation-plan.md)：采用检测断连后取消，不做 SSE 断点续传；步骤一至五及批次验收已完成，不改变已完成产品阶段状态。
 
 各产品期次已经确认的稳定业务与架构决策，独立保存在 [冻结方案目录](../design-freezes/README.md)。冻结方案不等同于实施计划，也不能直接作为编码指令；尚未实施的期次必须另行形成阶段、迁移顺序和质量门禁明确的实施计划。
 
@@ -28,7 +28,7 @@
 16. [用户回答反馈单批次实施计划](15-answer-feedback-implementation-plan.md)
 17. [人工评测单批次实施计划](16-human-evaluation-implementation-plan.md)
 18. [LLM-as-Judge单批次实施计划](17-llm-judge-implementation-plan.md)
-19. [聊天断连取消与结果重放单批次实施计划（步骤一至四完成，整体进行中）](18-chat-disconnect-cancellation-implementation-plan.md)
+19. [聊天断连取消与结果重放单批次实施计划（步骤一至五及验收完成）](18-chat-disconnect-cancellation-implementation-plan.md)
 
 后续业务开发必须以总计划为执行入口，一次只执行一个阶段；专题文档提供该阶段所需的精确字段和契约。
 

@@ -4,6 +4,10 @@ import java.util.Objects;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicIntegerArray;
+import com.lawrence.supportagent.observability.OptimizationTelemetryPort.ChatStage;
+import com.lawrence.supportagent.observability.OptimizationTelemetryPort.UpstreamResult;
 
 /** 保存单次聊天请求的首次连接取消原因，不依赖 Web 或模型框架。 */
 public final class ChatExecutionControl {
@@ -11,6 +15,31 @@ public final class ChatExecutionControl {
     private static final System.Logger LOGGER = System.getLogger(ChatExecutionControl.class.getName());
     private final List<Registration> registrations = new ArrayList<>();
     private boolean commitEntered;
+    private volatile ChatStage stage = ChatStage.PREPARING;
+    private volatile ChatStage cancelledStage = ChatStage.PREPARING;
+    private volatile long cancellationStarted;
+    private final AtomicBoolean cancellationReported = new AtomicBoolean();
+    private final AtomicIntegerArray upstreamResults = new AtomicIntegerArray(UpstreamResult.values().length);
+
+    /** 更新当前观测阶段，不干预提交获胜后的存储收尾。 */
+    public void enterStage(ChatStage next) { stage = Objects.requireNonNull(next); }
+
+    /** 返回首次检测取消时的固定业务阶段。 */
+    public ChatStage cancellationStage() { return cancelledStage; }
+
+    /** 计算从服务端检测取消到当前的耗时，不是用户关页面的时间。 */
+    public long cancellationElapsedMillis() {
+        return isCancelled() ? java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - cancellationStarted) : 0;
+    }
+
+    /** 每个请求仅允许报告一次收尾，重复生命周期回调不重复计数。 */
+    public boolean claimCancellationReport() { return isCancelled() && cancellationReported.compareAndSet(false, true); }
+
+    /** 累计当前调用的固定上游取消技术结果，不记录模型输入或输出。 */
+    public void noteUpstreamCancellation(UpstreamResult result) { upstreamResults.incrementAndGet(result.ordinal()); }
+
+    /** 返回固定上游技术动作次数；序号只作内存索引，不持久化。 */
+    public int upstreamCancellationCount(UpstreamResult result) { return upstreamResults.get(result.ordinal()); }
 
     /** 与首次取消共用短锁竞争一次提交权；获胜后连接仍可取消发送，但不撤销提交权。 */
     public boolean tryEnterCommit() {
@@ -26,7 +55,10 @@ public final class ChatExecutionControl {
         Objects.requireNonNull(cancellationReason);
         List<Registration> active;
         synchronized (registrations) {
-            if (!reason.compareAndSet(null, cancellationReason)) return;
+            if (reason.get() != null) return;
+            cancellationStarted = System.nanoTime();
+            cancelledStage = stage;
+            reason.set(cancellationReason);
             active = List.copyOf(registrations);
             registrations.clear();
         }

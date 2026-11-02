@@ -1,6 +1,12 @@
 package com.lawrence.supportagent.agent.model;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+
+import com.lawrence.supportagent.chat.ChatCancellationException;
+import com.lawrence.supportagent.chat.ChatExecutionControl;
+import com.lawrence.supportagent.model.ModelInvocationSecurity;
+import com.lawrence.supportagent.observability.OptimizationTelemetryPort.UpstreamResult;
 
 import java.util.List;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -10,6 +16,26 @@ import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
 /** 仅在明确提供真实密钥时验证 AgentScope Chat 在线协议。 */
 @EnabledIfEnvironmentVariable(named = "DASHSCOPE_API_KEY", matches = ".+")
 class DashScopeChatModelAdapterOnlineIT {
+    /** 收到真实首段文本后取消，验证局部资源释放且共享传输仍可处理下一次请求。 */
+    @Test
+    void shouldCancelRealStreamAndKeepNextRequestUsable() {
+        DashScopeChatModelAdapter adapter = new DashScopeChatModelAdapter(
+                System.getenv("DASHSCOPE_API_KEY"), modelName(), baseUrl());
+        ChatExecutionControl control = new ChatExecutionControl();
+        java.util.concurrent.atomic.AtomicLong cancelledAt = new java.util.concurrent.atomic.AtomicLong();
+        assertThatThrownBy(() -> adapter.greeting("你好", List.of(), () -> {
+            cancelledAt.set(System.nanoTime());
+            control.cancel(ChatExecutionControl.CancellationReason.CHAT_CLIENT_DISCONNECTED);
+        }, ModelInvocationSecurity.none(), control)).isInstanceOf(ChatCancellationException.class);
+        assertThat(cancelledAt.get()).isPositive();
+        assertThat(java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - cancelledAt.get()))
+                .isLessThan(5000);
+        assertThat(control.upstreamCancellationCount(UpstreamResult.REQUESTED)).isEqualTo(1);
+        assertThat(control.upstreamCancellationCount(UpstreamResult.LOCAL_RELEASED)).isEqualTo(1);
+        assertThat(control.upstreamCancellationCount(UpstreamResult.RELEASE_FAILED)).isZero();
+        assertThat(adapter.greeting("你好", List.of(), () -> { }).text()).isNotBlank();
+    }
+
     /** 验证内部流式消费可得到完整回答并触发首个有效文本回调。 */
     @Test
     void shouldGenerateCompleteGreeting() {

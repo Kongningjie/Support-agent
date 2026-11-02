@@ -72,9 +72,6 @@ public class RedisConversationStoreAdapter implements ConversationStorePort {
                   local storedSpace=redis.call('HGET',KEYS[1],'spaceId')
                   if not storedSpace then storedSpace='00000000-0000-0000-0000-000000000001'; redis.call('HSET',KEYS[1],'spaceId',storedSpace) end
                   if storedSpace~=ARGV[11] then return {'SPACE_MISMATCH'} end
-                  if ARGV[4]=='-' or (redis.call('HGET',KEYS[1],'version') or '0')~=ARGV[4] then
-                    return {'VERSION',redis.call('HGET',KEYS[1],'version') or '0'}
-                  end
                 end
                 local generation=redis.call('HGET',KEYS[1],'generation') or '0'
                 local messageKey=ARGV[9]..generation..':'..ARGV[8]
@@ -86,6 +83,9 @@ public class RedisConversationStoreAdapter implements ConversationStorePort {
                   redis.call('EXPIRE',KEYS[1],ARGV[7]); redis.call('EXPIRE',messageKey,ARGV[7])
                   redis.call('EXPIRE',KEYS[2],ARGV[7]); redis.call('EXPIRE',KEYS[3],ARGV[7]); redis.call('EXPIRE',KEYS[4],ARGV[7])
                   return {'REPLAY',redis.call('HGET',KEYS[1],'version') or '0',redis.call('HGET',messageKey,'result'),redis.call('HGET',KEYS[1],'spaceId'),generation}
+                end
+                if exists==1 and (ARGV[4]=='-' or (redis.call('HGET',KEYS[1],'version') or '0')~=ARGV[4]) then
+                  return {'VERSION',redis.call('HGET',KEYS[1],'version') or '0'}
                 end
                 local active=redis.call('HGET',KEYS[1],'activeRunId')
                 local lease=tonumber(redis.call('HGET',KEYS[1],'runLeaseUntil') or '0')

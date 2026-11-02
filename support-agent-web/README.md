@@ -2,6 +2,8 @@
 
 Support Agent 的独立 Vue 3 前端。工程不加入 Maven Reactor；开发时通过 Vite 代理访问本地 Spring Boot 后端。
 
+聊天中断后提示结果待确认，允许显式复用原消息 ID 重试或重新加载会话；不自动重连。重试清除临时正文，重放不重复创建消息。实现、离线真实后端浏览器验证及限制见[工作记录](../docs/frontend/work-logs/2026-11-02-chat-replay-step-five.md)。
+
 ## 环境
 
 - Windows 11、PowerShell 7

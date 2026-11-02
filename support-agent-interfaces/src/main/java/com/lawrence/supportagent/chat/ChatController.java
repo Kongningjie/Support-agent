@@ -71,16 +71,16 @@ public class ChatController {
         } catch (RuntimeException exception) {
             CancellationReason reason = control.cancellationReason();
             if (sink != null) sink.abort(CancellationReason.CHAT_CLIENT_DISCONNECTED);
-            releaseUnstarted(prepared, reason);
+            releaseUnstarted(prepared, reason, control);
             throw exception;
         }
     }
 
-    /** 已断连但尚未执行的任务只清理占用；运行中的模型取消留给后续实施步骤。 */
+    /** 未开始执行时终结占用并报告指标；已开始运行的取消由用例收尾。 */
     private void runPrepared(ChatUseCase.PreparedChat prepared, BoundedSseSink sink,
                              ChatExecutionControl control) {
         if (control.isCancelled()) {
-            releaseUnstarted(prepared, control.cancellationReason());
+            releaseUnstarted(prepared, control.cancellationReason(), control);
             return;
         }
         try {
@@ -95,9 +95,9 @@ public class ChatController {
     }
 
     /** 在非连接回调线程中释放未启动运行，失败只记录安全告警并保留租约兜底。 */
-    private void releaseUnstarted(ChatUseCase.PreparedChat prepared, CancellationReason reason) {
+    private void releaseUnstarted(ChatUseCase.PreparedChat prepared, CancellationReason reason, ChatExecutionControl control) {
         try {
-            useCase.failBeforeStart(prepared, reason);
+            useCase.failBeforeStart(prepared, reason, control);
         } catch (RuntimeException exception) {
             LOGGER.log(System.Logger.Level.ERROR, "未启动聊天运行清理失败，需按运行租约恢复");
         }

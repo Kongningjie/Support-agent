@@ -17,6 +17,194 @@ afterEach(() => {
 })
 
 describe('chat store', () => {
+  it('较早轮次重放不能降低服务端当前会话版本', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        sseResponse([
+          event('conversation.started', 20, { conversationVersion: 3, replayed: true }),
+          event('answer.completed', 21, {
+            answer: '原成功结果',
+            citations: [],
+            conversationVersion: 1,
+            resultStatus: 'GREETING',
+          }),
+        ]),
+      ),
+    )
+    const store = useChatStore()
+    await store.send('你好', '00000000-0000-0000-0000-000000000001')
+    expect(store.conversation?.version).toBe(3)
+    expect(store.messages[0]?.answer).toBe('原成功结果')
+  })
+  it('刷新发现代际变化时保留原消息标识但禁止跨代际重试', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi
+        .fn()
+        .mockResolvedValue(
+          sseResponse([
+            event('conversation.started', 1, { conversationVersion: 0, replayed: false }),
+            event('answer.delta', 2, { text: '旧临时正文' }),
+          ]),
+        ),
+    )
+    const store = useChatStore()
+    await store.send('你好', '00000000-0000-0000-0000-000000000001')
+    const current = store.conversation
+    if (!current) throw new Error('缺少测试会话')
+    const key = store.messages[0]?.key
+    vi.spyOn(conversationApi, 'getConversation').mockResolvedValue({
+      conversation: { ...current, generation: 1, status: 'IDLE' },
+      recentTurns: [],
+    })
+    await store.openConversation(current.conversationId)
+    expect(store.messages[0]).toMatchObject({ key, answer: '', retryable: false, state: 'failed' })
+    expect(store.messages[0]?.errorMessage).toContain('旧代际消息不能重试')
+    await store.retry(key || '')
+    expect(fetch).toHaveBeenCalledTimes(1)
+  })
+  it('用户取消后显示结果未知且允许原 ID 显式重试，不自动重发', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockImplementationOnce(
+        (_url, options: RequestInit) =>
+          new Promise((_resolve, reject) => {
+            options.signal?.addEventListener('abort', () =>
+              reject(new DOMException('aborted', 'AbortError')),
+            )
+          }),
+      )
+      .mockResolvedValueOnce(
+        sseResponse([
+          event('conversation.started', 1, { conversationVersion: 0, replayed: true }),
+          event('answer.completed', 2, {
+            answer: '已确认结果',
+            citations: [],
+            conversationVersion: 1,
+            resultStatus: 'GREETING',
+          }),
+        ]),
+      )
+    vi.stubGlobal('fetch', fetchMock)
+    const store = useChatStore()
+    const pending = store.send('你好', '00000000-0000-0000-0000-000000000001')
+    store.cancel()
+    await pending
+    const item = store.messages[0]
+    expect(item?.state).toBe('cancelled')
+    expect(item?.errorMessage).toContain('结果状态待确认')
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    await store.retry(item?.key || '')
+    const bodies = fetchMock.mock.calls.map(
+      (call) => JSON.parse(String(call[1]?.body)) as Record<string, unknown>,
+    )
+    expect(bodies[1]?.clientMessageId).toBe(bodies[0]?.clientMessageId)
+    expect(store.messages).toHaveLength(1)
+    expect(store.messages[0]?.state).toBe('completed')
+  })
+
+  it('重放替换临时正文、引用和建议，忙响应不丢失原消息或自动重试', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        sseResponse([
+          event('conversation.started', 1, { conversationVersion: 0, replayed: false }),
+          event('answer.delta', 2, { text: '临时正文' }),
+          event('ticket.suggested', 3, { suggestionId: 'old', expiresAt: '2099-01-01T00:00:00Z' }),
+        ]),
+      )
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ code: 'CHAT_CONVERSATION_BUSY', message: '会话繁忙' }), {
+          status: 409,
+        }),
+      )
+      .mockResolvedValueOnce(
+        sseResponse([
+          event('conversation.started', 10, { conversationVersion: 1, replayed: true }),
+          event('answer.delta', 11, { text: '安全结果' }),
+          event('answer.completed', 12, {
+            answer: '安全结果',
+            citations: [],
+            conversationVersion: 1,
+            resultStatus: 'GREETING',
+          }),
+        ]),
+      )
+    vi.stubGlobal('fetch', fetchMock)
+    const refresh = vi.spyOn(conversationApi, 'getConversation')
+    const store = useChatStore()
+    await store.send('你好', '00000000-0000-0000-0000-000000000001')
+    const key = store.messages[0]?.key || ''
+    await store.retry(key)
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+    expect(refresh).not.toHaveBeenCalled()
+    expect(store.messages).toHaveLength(1)
+    expect(store.messages[0]).toMatchObject({
+      key,
+      answer: '',
+      suggestionId: null,
+      retryable: true,
+    })
+    await store.retry(key)
+    expect(store.messages[0]).toMatchObject({
+      answer: '安全结果',
+      citations: [],
+      suggestionId: null,
+      state: 'completed',
+      retryable: false,
+    })
+    const ids = fetchMock.mock.calls.map(
+      (call) => (JSON.parse(String(call[1]?.body)) as Record<string, unknown>).clientMessageId,
+    )
+    expect(new Set(ids).size).toBe(1)
+  })
+
+  it('版本冲突刷新保留待确认消息；已保存 runId 按服务端事实合并', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        sseResponse([
+          event('conversation.started', 1, { conversationVersion: 0, replayed: false }),
+        ]),
+      )
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ code: 'CHAT_VERSION_CONFLICT', message: '版本变化' }), {
+          status: 409,
+        }),
+      )
+    vi.stubGlobal('fetch', fetchMock)
+    const store = useChatStore()
+    await store.send('你好', '00000000-0000-0000-0000-000000000001')
+    const current = store.conversation
+    if (!current) throw new Error('缺少测试会话')
+    const overview = { ...current, version: 1, status: 'IDLE' as const }
+    vi.spyOn(conversationApi, 'getConversation')
+      .mockResolvedValueOnce({ conversation: overview, recentTurns: [] })
+      .mockResolvedValueOnce({
+        conversation: overview,
+        recentTurns: [
+          {
+            turnId: 'saved',
+            runId: store.messages[0]?.runId || '',
+            userMessage: '你好',
+            answer: '服务端结果',
+            intent: 'GREETING',
+            retrievalStatus: null,
+            citations: [],
+            completedAt: '2026-11-02T00:00:00Z',
+            conversationVersion: 1,
+          },
+        ],
+      })
+    const key = store.messages[0]?.key || ''
+    await store.retry(key)
+    expect(store.messages[0]?.key).toBe(key)
+    expect(store.messages[0]?.retryable).toBe(true)
+    await store.openConversation(overview.conversationId)
+    expect(store.messages).toHaveLength(1)
+    expect(store.messages[0]).toMatchObject({ answer: '服务端结果', state: 'completed' })
+  })
   it('完成事件以服务端 conversationVersion 更新当前会话', async () => {
     const events = [
       event('conversation.started', 1, { conversationVersion: 0, replayed: false }),
@@ -68,7 +256,8 @@ describe('chat store', () => {
     await store.send('你好', '00000000-0000-0000-0000-000000000001')
     const firstId = store.messages[0]?.clientMessageId
     expect(store.messages[0]?.retryable).toBe(true)
-    expect(store.conversation?.status).toBe('IDLE')
+    // 传输错误不能证明服务端已经释放占用，保留最后一次服务端状态。
+    expect(store.conversation?.status).toBe('RUNNING')
     await store.retry(store.messages[0]?.key || '')
     const bodies = fetchMock.mock.calls.map(
       (call) => JSON.parse(String(call[1]?.body)) as Record<string, unknown>,

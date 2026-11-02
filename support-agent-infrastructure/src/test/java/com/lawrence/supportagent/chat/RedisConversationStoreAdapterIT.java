@@ -39,6 +39,64 @@ class RedisConversationStoreAdapterIT {
     private LettuceConnectionFactory connectionFactory;
     private StringRedisTemplate redisTemplate;
 
+    /** 旧版本或未知完成版本也能重放同代际成功消息，不重复轮次或建议。 */
+    @Test void shouldReplayCompletedMessageBeforeCheckingVersion() {
+        CommitFixture fixture = commitFixture();
+        store.complete(OWNER_ID, fixture.conversationId(), fixture.runId(), fixture.turn(), null, Instant.now());
+        for (Long version : new Long[] {0L, null, 1L}) {
+            var replay = store.begin(OWNER_ID, fixture.conversationId(), fixture.messageId(), "原问题", version, UUID.randomUUID(), Instant.now());
+            assertThat(replay.status()).isEqualTo(ConversationStorePort.BeginStatus.REPLAY);
+            assertThat(replay.replayTurn()).isEqualTo(fixture.turn());
+            assertThat(replay.version()).isEqualTo(1);
+            assertThat(replay.generation()).isZero();
+        }
+        assertThat(store.memorySnapshot(OWNER_ID, fixture.conversationId()).turns()).hasSize(1);
+        assertThat(redisTemplate.keys("support-agent:chat:suggestion:*")).hasSize(1);
+    }
+
+    /** 已完成内容哈希优先于版本；错误所有者或空间不能利用重放绕过权限。 */
+    @Test void shouldCheckHashOwnerAndSpaceBeforeReplay() {
+        CommitFixture fixture = commitFixture();
+        store.complete(OWNER_ID, fixture.conversationId(), fixture.runId(), fixture.turn(), null, Instant.now());
+        assertThatThrownBy(() -> store.begin(OWNER_ID, fixture.conversationId(), fixture.messageId(), "不同正文", 0L, UUID.randomUUID(), Instant.now()))
+                .isInstanceOfSatisfying(ApplicationException.class, ex -> assertThat(ex.errorCode()).isEqualTo(ErrorCode.CHAT_MESSAGE_ID_REUSED));
+        assertThatThrownBy(() -> store.begin(UUID.randomUUID(), fixture.conversationId(), fixture.messageId(), "原问题", 0L, UUID.randomUUID(), Instant.now()))
+                .isInstanceOfSatisfying(ApplicationException.class, ex -> assertThat(ex.errorCode()).isEqualTo(ErrorCode.CHAT_CONVERSATION_EXPIRED));
+        assertThatThrownBy(() -> store.begin(OWNER_ID, fixture.conversationId(), fixture.messageId(), "原问题", UUID.randomUUID(), 0L, UUID.randomUUID(), Instant.now()))
+                .isInstanceOfSatisfying(ApplicationException.class, ex -> assertThat(ex.errorCode()).isEqualTo(ErrorCode.CHAT_SPACE_MISMATCH));
+    }
+
+    /** 新消息和已失败消息依然严格校验最新版本，不能因放宽重放而并行执行。 */
+    @Test void shouldKeepStrictVersionForNewAndFailedMessages() {
+        CommitFixture fixture = commitFixture();
+        store.complete(OWNER_ID, fixture.conversationId(), fixture.runId(), fixture.turn(), null, Instant.now());
+        UUID failedMessage = UUID.randomUUID(), failedRun = UUID.randomUUID();
+        store.begin(OWNER_ID, fixture.conversationId(), failedMessage, "失败消息", 1L, failedRun, Instant.now());
+        store.fail(OWNER_ID, fixture.conversationId(), failedRun, Instant.now());
+        for (UUID message : List.of(failedMessage, UUID.randomUUID())) {
+            assertThatThrownBy(() -> store.begin(OWNER_ID, fixture.conversationId(), message,
+                    message.equals(failedMessage) ? "失败消息" : "新消息", 0L, UUID.randomUUID(), Instant.now()))
+                    .isInstanceOfSatisfying(ApplicationException.class, ex -> assertThat(ex.errorCode()).isEqualTo(ErrorCode.CHAT_VERSION_CONFLICT));
+        }
+    }
+
+    /** 成功重放不能清理另一条正在运行的消息，重置后也不能取到旧代际结果。 */
+    @Test void shouldIsolateReplayFromActiveRunAndResetGeneration() {
+        CommitFixture fixture = commitFixture();
+        store.complete(OWNER_ID, fixture.conversationId(), fixture.runId(), fixture.turn(), null, Instant.now());
+        UUID active = UUID.randomUUID();
+        store.begin(OWNER_ID, fixture.conversationId(), UUID.randomUUID(), "新问题", 1L, active, Instant.now());
+        assertThat(store.begin(OWNER_ID, fixture.conversationId(), fixture.messageId(), "原问题", 0L, UUID.randomUUID(), Instant.now()).status())
+                .isEqualTo(ConversationStorePort.BeginStatus.REPLAY);
+        assertThat(store.renew(OWNER_ID, fixture.conversationId(), active, Instant.now())).isTrue();
+        store.fail(OWNER_ID, fixture.conversationId(), active, Instant.now());
+        store.reset(OWNER_ID, fixture.conversationId(), 1, Instant.now());
+        var fresh = store.begin(OWNER_ID, fixture.conversationId(), fixture.messageId(), "原问题", 0L, UUID.randomUUID(), Instant.now());
+        assertThat(fresh.status()).isEqualTo(ConversationStorePort.BeginStatus.ACQUIRED);
+        assertThat(fresh.generation()).isEqualTo(1);
+        assertThat(fresh.replayTurn()).isNull();
+    }
+
     /** 已提交响应丢失可读回原轮次，且不能释放随后另一条消息的新运行。 */
     @Test void shouldResolveCommittedTurnWithoutTouchingNextRun() {
         CommitFixture fixture = commitFixture();

@@ -29,7 +29,7 @@
 
 ## 当前状态入口
 
-- 当前聊天治理实施：[步骤四：最终提交与响应不确定](2026-11-02-chat-commit-coordination-step-four.md)；已完成本步骤、完整 Review 和后端门禁，步骤五未执行。
+- 当前聊天治理实施：[步骤五：幂等重放、前端兼容与批次验收](2026-11-02-chat-replay-step-five.md)；步骤一至五、完整 Review、后端/前端门禁和真实后端浏览器专项验收已完成。
 
 - 最近聊天治理实施：[步骤三：业务取消与运行清理](2026-11-02-chat-business-cancellation-step-three.md)；已完成本步骤、完整 Review 和后端门禁。
 

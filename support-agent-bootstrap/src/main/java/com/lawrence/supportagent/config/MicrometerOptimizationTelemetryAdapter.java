@@ -18,6 +18,25 @@ public class MicrometerOptimizationTelemetryAdapter implements OptimizationTelem
 
     /** {@inheritDoc} */
     @Override
+    public void recordChatCancellation(com.lawrence.supportagent.chat.ChatExecutionControl.CancellationReason reason,
+                                        ChatStage stage, CleanupResult result, long durationMs, boolean cancelledExecution) {
+        if (cancelledExecution) registry.counter("support.agent.chat.cancellation", "reason", reason.name(),
+                "stage", stage.name()).increment();
+        Timer.builder("support.agent.chat.cancellation.cleanup").tag("reason", reason.name())
+                .tag("stage", stage.name()).tag("result", result.name()).register(registry)
+                .record(Math.max(0, durationMs), TimeUnit.MILLISECONDS);
+    }
+
+    /** {@inheritDoc} */
+    @Override
+    public void recordUpstreamCancellation(UpstreamResult result, int count) {
+        if (count <= 0) return;
+        registry.counter("support.agent.chat.upstream.cancellation", "result", result.name()).increment(count);
+        if (result == UpstreamResult.REQUESTED) registry.counter("support.agent.chat.cancelled.usage.unknown").increment(count);
+    }
+
+    /** {@inheritDoc} */
+    @Override
     public void recordDuration(Operation operation, long durationMs, boolean succeeded) {
         Timer.builder("support.agent.optimization.duration")
                 .description("Support Agent 优化阶段耗时")
