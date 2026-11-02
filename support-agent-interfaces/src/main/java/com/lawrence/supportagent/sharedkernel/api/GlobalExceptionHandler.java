@@ -5,6 +5,7 @@ import com.lawrence.supportagent.sharedkernel.error.ApplicationException;
 import com.lawrence.supportagent.sharedkernel.port.TimeProvider;
 import jakarta.validation.ConstraintViolationException;
 import jakarta.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.HttpServletResponse;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.converter.HttpMessageNotReadableException;
@@ -15,6 +16,7 @@ import org.springframework.web.method.annotation.HandlerMethodValidationExceptio
 import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
 import org.springframework.web.bind.MissingServletRequestParameterException;
 import org.springframework.web.bind.MissingRequestHeaderException;
+import org.springframework.web.context.request.async.AsyncRequestNotUsableException;
 
 /** 把可预期异常映射为安全、稳定的统一 JSON 响应。 */
 @RestControllerAdvice
@@ -28,6 +30,12 @@ public class GlobalExceptionHandler {
      */
     public GlobalExceptionHandler(TimeProvider timeProvider) {
         this.timeProvider = timeProvider;
+    }
+
+    /** 异步响应已经不可写时仅完成异常解析，禁止再向断开的 SSE 写入统一 JSON。 */
+    @ExceptionHandler(AsyncRequestNotUsableException.class)
+    public void handleDisconnected(AsyncRequestNotUsableException exception, HttpServletResponse response) {
+        // 响应参数告知 MVC 此异常已处理；连接生命周期负责通知取消与业务清理。
     }
 
     /** 将请求校验错误映射为 400。 */

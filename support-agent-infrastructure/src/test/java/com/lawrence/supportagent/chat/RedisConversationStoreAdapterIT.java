@@ -38,6 +38,29 @@ class RedisConversationStoreAdapterIT {
     private LettuceConnectionFactory connectionFactory;
     private StringRedisTemplate redisTemplate;
 
+    /** 旧运行已释放后取得新运行，迟到的清理、续租和提交都不能修改新运行。 */
+    @Test
+    void shouldFenceLateCancelledRunAfterNewRunAcquired() {
+        Instant now = Instant.now();
+        UUID oldRun = UUID.randomUUID();
+        UUID oldMessage = UUID.randomUUID();
+        var begin = store.begin(OWNER_ID, null, oldMessage, "旧问题", null, oldRun, now);
+        store.fail(OWNER_ID, begin.conversationId(), oldRun, now);
+        UUID nextRun = UUID.randomUUID();
+        store.begin(OWNER_ID, begin.conversationId(), UUID.randomUUID(), "新问题", 0L, nextRun, now);
+
+        store.fail(OWNER_ID, begin.conversationId(), oldRun, now);
+        assertThat(store.renew(OWNER_ID, begin.conversationId(), oldRun, now)).isFalse();
+        CompletedTurn late = new CompletedTurn(UUID.randomUUID(), oldMessage, oldRun, "旧问题", "旧问题",
+                ChatIntent.GREETING, "旧答案", null, List.of(), null, null, "GREETING", now, 1);
+        assertThatThrownBy(() -> store.complete(OWNER_ID, begin.conversationId(), oldRun, late, null, now))
+                .isInstanceOf(ApplicationException.class);
+        assertThat(store.renew(OWNER_ID, begin.conversationId(), nextRun, now)).isTrue();
+        var snapshot = store.lifecycleDetails(OWNER_ID, false, begin.conversationId(), 20, now);
+        assertThat(snapshot.version()).isZero();
+        assertThat(snapshot.turns()).isEmpty();
+    }
+
     /** 同一代际提供不同空间必须稳定拒绝，且不得取得新的运行租约。 */
     @Test
     void shouldRejectSpaceChangeWithinSameGeneration() {

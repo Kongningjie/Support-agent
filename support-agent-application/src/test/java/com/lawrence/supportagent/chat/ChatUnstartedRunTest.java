@@ -73,6 +73,7 @@ class ChatUnstartedRunTest {
                 .isInstanceOf(IllegalStateException.class).hasMessage("synthetic audit failure");
         verify(store).fail(prepared.request().actor().userId(), prepared.begin().conversationId(),
                 prepared.runId(), now);
+        verify(audits).fail(prepared.runId(), "FAILED", "COMMON_INTERNAL_ERROR", 0, now);
     }
 
     /** 构造已准备执行上下文；不运行模型、安全路由或检索。 */

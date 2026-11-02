@@ -29,7 +29,9 @@
 
 ## 当前状态入口
 
-- 当前聊天治理实施：[步骤二：模型取消传播](2026-11-02-chat-model-cancellation-step-two.md)；用户确认传输适配补齐后已完成本步骤及门禁，未进入步骤三。
+- 当前聊天治理实施：[步骤三：业务取消与运行清理](2026-11-02-chat-business-cancellation-step-three.md)；已完成本步骤、完整 Review 和后端门禁，步骤四、五未执行。
+
+- 最近聊天治理实施：[步骤二：模型取消传播](2026-11-02-chat-model-cancellation-step-two.md)；用户确认传输适配补齐后完成本步骤及门禁。
 
 - 最近聊天治理实施：[步骤一：SSE 生命周期与发送队列](2026-11-02-chat-sse-lifecycle-step-one.md)；仅本步骤，完整模型取消链路尚未完成。
 

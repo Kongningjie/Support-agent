@@ -47,6 +47,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 
 /** 编排意图、检索、受控模型、确定性校验、会话提交和 SSE 事件。 */
 public class ChatUseCase {
+    private static final System.Logger LOGGER = System.getLogger(ChatUseCase.class.getName());
     private static final int MODEL_CONTEXT_TURNS = 6;
     private static final int MODEL_CONTEXT_CHARACTERS = 12_000;
     private static final int MAXIMUM_ANSWER_CHARACTERS = 8_000;
@@ -280,16 +281,36 @@ public class ChatUseCase {
      */
     public void failBeforeStart(PreparedChat prepared, ChatExecutionControl.CancellationReason reason) {
         if (prepared.begin().status() == ConversationStorePort.BeginStatus.REPLAY) return;
-        UUID ownerUserId = prepared.request().actor().userId();
         String code = reason == null ? ErrorCode.COMMON_INTERNAL_ERROR.name() : reason.name();
+        finishFailedRun(prepared, code, 0, true);
+    }
+
+    /** 分别尝试运行释放、审计创建与失败终结；首个异常保留，其余异常不阻断清理。 */
+    private void finishFailedRun(PreparedChat prepared, String code, long durationMs, boolean createAudit) {
+        UUID ownerUserId = prepared.request().actor().userId();
+        RuntimeException failure = null;
         try {
             conversations.fail(ownerUserId, prepared.begin().conversationId(), prepared.runId(), time.now());
-        } finally {
-            // 独立尝试审计，Redis 故障不能使审计直接跳过；异常交给调度入口记录安全告警。
-            audits.start(prepared.runId(), ownerUserId, prepared.begin().conversationId(),
-                    prepared.request().clientMessageId(), time.now());
-            audits.fail(prepared.runId(), "FAILED", code, 0, time.now());
+        } catch (RuntimeException exception) {
+            failure = exception;
+            LOGGER.log(System.Logger.Level.WARNING, "Chat cleanup stage=release result=failed reason={0}", code);
         }
+        if (createAudit) {
+            try {
+                audits.start(prepared.runId(), ownerUserId, prepared.begin().conversationId(),
+                        prepared.request().clientMessageId(), time.now());
+            } catch (RuntimeException exception) {
+                if (failure == null) failure = exception;
+                LOGGER.log(System.Logger.Level.WARNING, "Chat cleanup stage=audit_start result=failed reason={0}", code);
+            }
+        }
+        try {
+            audits.fail(prepared.runId(), "FAILED", code, durationMs, time.now());
+        } catch (RuntimeException exception) {
+            if (failure == null) failure = exception;
+            LOGGER.log(System.Logger.Level.WARNING, "Chat cleanup stage=audit_fail result=failed reason={0}", code);
+        }
+        if (failure != null) throw failure;
     }
 
     /**
@@ -302,7 +323,7 @@ public class ChatUseCase {
         stream(prepared, sink, new ChatExecutionControl());
     }
 
-    /** 在线入口显式传播连接控制；全面业务取消与提交协调在后续步骤补齐。 */
+    /** 在业务阶段边界检查连接取消；最终提交的原子竞争由后续步骤补齐。 */
     public void stream(PreparedChat prepared, ChatEventSink sink, ChatExecutionControl control) {
         long started = System.nanoTime();
 
@@ -312,9 +333,15 @@ public class ChatUseCase {
         UUID ownerUserId = request.actor().userId();
         // 已完成的相同消息直接执行幂等重放，不再重复调用模型。
         if (begin.status() == ConversationStorePort.BeginStatus.REPLAY) {
-            replay(ownerUserId, begin, sink);
-            //记录：这次聊天请求耗时。
-            telemetry.recordDuration(Operation.CHAT_REQUEST, elapsed(started), true);
+            try {
+                replay(ownerUserId, begin, sink, control);
+                telemetry.recordDuration(Operation.CHAT_REQUEST, elapsed(started), true);
+            } catch (ChatCancellationException cancelled) {
+                // 重放未取得运行权，不清理原运行或改写原成功审计。
+                telemetry.recordDuration(Operation.CHAT_REQUEST, elapsed(started), false);
+            } finally {
+                closeSink(sink);
+            }
             return;
         }
 
@@ -328,18 +355,22 @@ public class ChatUseCase {
             }
             //记录当前 run 正式开始
             audits.start(runId, ownerUserId, begin.conversationId(), request.clientMessageId(), time.now());
+            control.checkCancelled();
             //向前端发送 conversation.started
             emit(ownerUserId, sink, begin.conversationId(), runId, "conversation.started",
-                    Map.of("conversationVersion", begin.version(), "replayed", false));
+                    Map.of("conversationVersion", begin.version(), "replayed", false), control);
             //加载模型上下文
-            List<String> context = modelContext(ownerUserId, begin.conversationId(), List.of(request.message()));
+            List<String> context = modelContext(ownerUserId, begin.conversationId(), List.of(request.message()), control);
             //意图识别
             IntentDecision decision = intents.recognize(request.message(), context, control);
+            control.checkCancelled();
             //记录意图识别结果
             audits.recordIntent(runId, decision);
+            control.checkCancelled();
             //route()：真正执行业务
             Outcome outcome = route(request.actor(), prepared.accessContext(), begin.conversationId(),
                     runId, request.message(), context, decision, sink, control);
+            control.checkCancelled();
             //构造 CompletedTurn  CompletedTurn pending 表示：已经生成完成，但是还没有正式提交到会话存储的一轮聊天结果。
             CompletedTurn pending = new CompletedTurn(ids.generate(), request.clientMessageId(), runId,
                     request.message().trim(), decision.standaloneQuery(), decision.intent(), outcome.answer,
@@ -347,14 +378,18 @@ public class ChatUseCase {
                     suggestionContext(request.message(), context), outcome.resultStatus,
                     time.now(), begin.version() + 1);
             //发送正文前再次校验空间权限
+            control.checkCancelled();
             revalidateBeforeAnswer(request.actor(), prepared.accessContext());
+            control.checkCancelled();
             //开始把答案正文通过 SSE 发出去
-            emitAnswerBody(ownerUserId, sink, begin.conversationId(), runId, pending, started);
+            emitAnswerBody(ownerUserId, sink, begin.conversationId(), runId, pending, started, control);
+            control.checkCancelled();
             //为后面的事件提前申请 sequence
             Long suggestionSequence = pending.suggestionId() == null ? null
                     : conversations.nextSequence(ownerUserId, begin.conversationId(), runId);
-
+            control.checkCancelled();
             long completedSequence = conversations.nextSequence(ownerUserId, begin.conversationId(), runId);
+            control.checkCancelled();
             //正式提交会话
             CompletedTurn completed = conversations.complete(ownerUserId, begin.conversationId(), runId, pending,
                     outcome.agentState, time.now());
@@ -365,24 +400,31 @@ public class ChatUseCase {
             // 先写成功审计，确保客户端收到完成事件时运行已经可以被评价。
             audits.succeed(runId, outcome.promptVersion, chatModelName, embeddingModelName,
                     rerankModelName, elapsed(started), time.now());
+            control.checkCancelled();
             //发送 answer.completed
             emitAnswerCompleted(ownerUserId, sink, begin.conversationId(), runId, completed,
-                    suggestionSequence, completedSequence);
+                    suggestionSequence, completedSequence, control);
             //记录 answer complete 指标  记录：从请求开始到完整答案完成一共多久。
             telemetry.recordDuration(Operation.ANSWER_COMPLETE, elapsed(started), true);
             //SSE 正常结束
             sink.complete();
             //聊天成功后更新上下文  一轮聊天成功后，更新会话上下文相关内容。
-            if (contextService != null) {
+            if (contextService != null && !control.isCancelled()) {
                 contextService.afterSuccessfulTurn(ownerUserId, begin.conversationId());
             }
             //生成长期记忆候选  聊天成功后，根据用户这次输入判断是否有值得长期保存的记忆候选。
-            if (memoryCandidates != null) {
+            if (memoryCandidates != null && !control.isCancelled()) {
                 memoryCandidates.afterSuccessfulTurn(ownerUserId, begin.conversationId(),
                         request.clientMessageId(), request.message());
             }
             //记录整个请求成功
             telemetry.recordDuration(Operation.CHAT_REQUEST, elapsed(started), true);
+        } catch (ChatCancellationException exception) {
+            if (committed) {
+                telemetry.recordDuration(Operation.CHAT_REQUEST, elapsed(started), true);
+            } else {
+                finishFailure(prepared, control, exception, started);
+            }
         } catch (RuntimeException exception) {
             //如果已经提交成功，就不能再算失败
             if (committed) {
@@ -391,27 +433,52 @@ public class ChatUseCase {
                 telemetry.recordDuration(Operation.CHAT_REQUEST, elapsed(started), true);
                 return;
             }
-            //确定错误码
-            String code = exception instanceof ApplicationException application
-                    ? application.errorCode().name() : exception instanceof ModelInvocationException model
-                    ? model.errorCode() : "COMMON_INTERNAL_ERROR";
-            //尝试把错误通过 SSE 发给前端
-            try {
-                //不泄漏内部实现细节的安全错误信息。
-                emit(ownerUserId, sink, begin.conversationId(), runId, "error", Map.of(
-                        "code", code, "message", safeMessage(exception),
-                        "retryable", retryable(code, exception)));
-                sink.complete();
-            } catch (RuntimeException ignored) {
-                // 客户端已经断开时只执行失败清理。
+            if (!control.isCancelled()) {
+                String code = failureCode(exception);
+                try {
+                    emit(ownerUserId, sink, begin.conversationId(), runId, "error", Map.of(
+                            "code", code, "message", safeMessage(exception),
+                            "retryable", retryable(code, exception)), control);
+                } catch (RuntimeException ignored) {
+                    // 发送失败不影响清理；若并发取消，以首次取消原因为准。
+                }
             }
-            //把会话运行标记失败
-            conversations.fail(ownerUserId, begin.conversationId(), runId, time.now());
-            //审计记录失败
-            audits.fail(runId, "FAILED", code, elapsed(started), time.now());
-            //Telemetry 记录失败
-            telemetry.recordDuration(Operation.CHAT_REQUEST, elapsed(started), false);
+            finishFailure(prepared, control, exception, started);
+        } finally {
+            closeSink(sink);
         }
+    }
+
+    /** 发送端终结失败不能改变已经确定的业务终态。 */
+    private void closeSink(ChatEventSink sink) {
+        try {
+            sink.complete();
+        } catch (RuntimeException ignored) {
+            LOGGER.log(System.Logger.Level.WARNING, "Chat cleanup stage=sink_close result=failed");
+        }
+    }
+
+    /** 统一选择终止原因并独立清理；不因清理故障重新发送错误或再次终结运行。 */
+    private void finishFailure(PreparedChat prepared, ChatExecutionControl control,
+                               RuntimeException exception, long started) {
+        String code = control.cancellationReason() != null ? control.cancellationReason().name()
+                : exception instanceof ChatCancellationException cancelled
+                ? cancelled.reason().name() : failureCode(exception);
+        if (control.isCancelled() || exception instanceof ChatCancellationException) {
+            LOGGER.log(System.Logger.Level.INFO, "Chat terminated reason={0}", code);
+        }
+        try {
+            finishFailedRun(prepared, code, elapsed(started), false);
+        } catch (RuntimeException ignored) {
+            // 已逐项记录安全告警；租约机制负责存储不可用期间的运行恢复。
+        }
+        telemetry.recordDuration(Operation.CHAT_REQUEST, elapsed(started), false);
+    }
+
+    /** 从正常业务故障中提取固定错误码，不输出原始模型内容。 */
+    private String failureCode(RuntimeException exception) {
+        return exception instanceof ApplicationException application ? application.errorCode().name()
+                : exception instanceof ModelInvocationException model ? model.errorCode() : "COMMON_INTERNAL_ERROR";
     }
 
     /** 在任何正文或引用发送前重新读取当前账号、空间和成员事实，权限变化时失败关闭。 */
@@ -433,8 +500,9 @@ public class ChatUseCase {
                           RetrievalAccessContext accessContext,
                           UUID conversationId, UUID runId, String message, List<String> context,
                           IntentDecision decision, ChatEventSink sink, ChatExecutionControl control) {
+        control.checkCancelled();
         return switch (decision.intent()) {
-            case OUT_OF_SCOPE -> fixed(OUT_OF_SCOPE, "OUT_OF_SCOPE");
+            case OUT_OF_SCOPE -> fixed(OUT_OF_SCOPE, "OUT_OF_SCOPE", control);
             case GREETING -> greeting(actor.userId(), conversationId, runId, message, context, control);
             case TICKET_QUERY -> ticket(actor, conversationId, runId, message, context, decision, control);
             case SUPPORT_QUERY -> support(actor.userId(), accessContext, conversationId, runId,
@@ -448,13 +516,17 @@ public class ChatUseCase {
         int regenerations = 0;
         List<String> feedback = List.of();
         while (true) {
+            control.checkCancelled();
             ModelInvocationSecurity invocation = outputSecurity.newInvocation(feedback);
             long modelStarted = System.nanoTime();
+            control.checkCancelled();
             ModelAnswer answer = chatModel.greeting(message, context,
-                    firstTokenCallback(ownerUserId, conversationId, runId, modelStarted), invocation, control);
+                    firstTokenCallback(ownerUserId, conversationId, runId, modelStarted, control), invocation, control);
+            control.checkCancelled();
             ModelOutputAssessment assessment = outputSecurity.assess(
                     ModelOutputType.GREETING, answer == null ? null : answer.text(),
                     invocation, message, List.of());
+            control.checkCancelled();
             if (assessment.action() == ModelOutputAction.PASS) {
                 return fromModel(answer, "GREETING", null, List.of(), null, null);
             }
@@ -474,20 +546,27 @@ public class ChatUseCase {
     private Outcome ticket(com.lawrence.supportagent.auth.AuthenticatedUser actor,
                            UUID conversationId, UUID runId, String message, List<String> context,
                            IntentDecision decision, ChatExecutionControl control) {
-        if (decision.ticketNo() == null) return fixed(TICKET_REQUIRED, "TICKET_NUMBER_REQUIRED");
+        control.checkCancelled();
+        if (decision.ticketNo() == null) return fixed(TICKET_REQUIRED, "TICKET_NUMBER_REQUIRED", control);
         try {
-            TicketDetails ticket = secureTicket(tickets.get(actor, decision.ticketNo()));
+            TicketDetails ticket = tickets.get(actor, decision.ticketNo());
+            control.checkCancelled();
+            ticket = secureTicket(ticket);
             List<String> answerContext = modelContext(actor.userId(), conversationId,
-                    ticketFixedSections(message, ticket));
+                    ticketFixedSections(message, ticket), control);
             int regenerations = 0;
             List<String> feedback = List.of();
             while (true) {
+                control.checkCancelled();
                 ModelInvocationSecurity invocation = outputSecurity.newInvocation(feedback);
+                control.checkCancelled();
                 ModelAnswer answer = chatModel.ticketAnswer(message, decision.ticketNo(), ticket,
-                        answerContext, () -> renew(actor.userId(), conversationId, runId), invocation, control);
+                        answerContext, () -> renew(actor.userId(), conversationId, runId, control), invocation, control);
+                control.checkCancelled();
                 ModelOutputAssessment assessment = outputSecurity.assess(
                         ModelOutputType.TICKET_ANSWER, answer == null ? null : answer.text(),
                         invocation, message, List.of());
+                control.checkCancelled();
                 if (assessment.action() == ModelOutputAction.PASS) {
                     return fromModel(answer, "TICKET_FOUND", null, List.of(), null,
                             answer.serializedAgentState());
@@ -503,9 +582,10 @@ public class ChatUseCase {
                 throw outputValidationFailure();
             }
         } catch (ApplicationException exception) {
+            control.checkCancelled();
             if (exception.errorCode() == ErrorCode.TICKET_NOT_FOUND) {
                 return fixed("未找到工单 " + decision.ticketNo() + "，请核对编号。",
-                        "TICKET_NOT_FOUND");
+                        "TICKET_NOT_FOUND", control);
             }
             throw exception;
         }
@@ -517,12 +597,15 @@ public class ChatUseCase {
                             String message, List<String> context,
                             IntentDecision decision, ChatEventSink sink, ChatExecutionControl control) {
         //先告诉前端：开始检索
-        emit(ownerUserId, sink, conversationId, runId, "retrieval.started", Map.of("mode", "HYBRID"));
+        emit(ownerUserId, sink, conversationId, runId, "retrieval.started", Map.of("mode", "HYBRID"), control);
         //真正执行 RAG 检索
-        RetrievalResult result = secureRetrieval(retrieval.retrieve(
-                decision.standaloneQuery(), accessContext));
+        RetrievalResult result = retrieval.retrieve(decision.standaloneQuery(), accessContext);
+        control.checkCancelled();
+        result = secureRetrieval(result);
+        control.checkCancelled();
         //记录检索审计
         audits.recordRetrieval(runId, decision.standaloneQuery(), result, groundedThreshold, time.now());
+        control.checkCancelled();
         //准备 retrieval.completed 的 SSE 数据
         Map<String, Object> completed = new LinkedHashMap<>();
         completed.put("status", result.status().name());
@@ -533,7 +616,7 @@ public class ChatUseCase {
         completed.put("selectedCount", result.evidence().size());
         //整个检索耗时。
         completed.put("durationMs", result.durationMs());
-        emit(ownerUserId, sink, conversationId, runId, "retrieval.completed", completed);
+        emit(ownerUserId, sink, conversationId, runId, "retrieval.completed", completed, control);
         //检索系统本身出故障了。
         if (result.status() == RetrievalStatus.RETRIEVAL_FAILED) {
             throw new ApplicationException(ErrorCode.RETRIEVAL_FAILED, "知识检索暂时不可用");
@@ -546,25 +629,30 @@ public class ChatUseCase {
         //有可靠知识，开始构造 Citation
         List<Citation> citations = citations(result.evidence(), accessContext.allowedSpaceIds());
         //重新准备回答模型的上下文  这次必须预留：当前用户问题+本次 RAG 检索证据
-        List<String> answerContext = modelContext(ownerUserId, conversationId, fixedSections(message, result.evidence()));
+        List<String> answerContext = modelContext(ownerUserId, conversationId, fixedSections(message, result.evidence()), control);
         //初始化“重生成次数”
         int regenerations = 0;
         List<String> feedback = List.of();
         while (true) {
+            control.checkCancelled();
             //为本次模型调用创建安全上下文
             ModelInvocationSecurity invocation = outputSecurity.newInvocation(feedback);
             //记录模型开始时间
             long modelStarted = System.nanoTime();
             //真正调用回答模型
+            control.checkCancelled();
             ModelAnswer answer = chatModel.groundedAnswer(message, answerContext,
                     result.evidence(), firstTokenCallback(ownerUserId, conversationId, runId,
-                            modelStarted), invocation, control);
+                            modelStarted, control), invocation, control);
+            control.checkCancelled();
             //给答案补 Disclosure
             answer = answer == null ? null : withDisclosure(answer, result.evidence());
             //对模型输出做安全校验
+            control.checkCancelled();
             ModelOutputAssessment assessment = outputSecurity.assess(
                     ModelOutputType.GROUNDED, answer == null ? null : answer.text(),
                     invocation, message, result.evidence());
+            control.checkCancelled();
             //PASS：直接返回答案
             if (assessment.action() == ModelOutputAction.PASS) {
                 return fromModel(answer, "GROUNDED", RetrievalStatus.GROUNDED,
@@ -601,17 +689,25 @@ public class ChatUseCase {
     }
 
     /** 使用阶段 10 服务组装模型上下文；旧构造器仅供既有隔离测试保留原行为。 */
-    private List<String> modelContext(UUID ownerUserId, UUID conversationId, List<String> fixedSections) {
+    private List<String> modelContext(UUID ownerUserId, UUID conversationId, List<String> fixedSections,
+                                      ChatExecutionControl control) {
+        control.checkCancelled();
         if (contextService == null) {
             //从会话存储中读取最近的聊天历史。
-            return conversations.recentContext(ownerUserId, conversationId,
-                            MODEL_CONTEXT_TURNS, MODEL_CONTEXT_CHARACTERS).stream()
+            List<String> recent = conversations.recentContext(ownerUserId, conversationId,
+                            MODEL_CONTEXT_TURNS, MODEL_CONTEXT_CHARACTERS);
+            control.checkCancelled();
+            List<String> safe = recent.stream()
                     //过滤掉历史记录里可能存在的 Prompt Injection。
                     .filter(value -> !promptSecurity.assess(
                             value, PromptSecuritySource.HISTORY).blocked())
                     .toList();
+            control.checkCancelled();
+            return safe;
         }
-        return contextService.prepare(ownerUserId, conversationId, fixedSections).modelContext();
+        List<String> context = contextService.prepare(ownerUserId, conversationId, fixedSections).modelContext();
+        control.checkCancelled();
+        return context;
     }
 
     /** 排除本次检索中携带高置信度注入指令的证据并重新确定检索三态。 */
@@ -677,70 +773,70 @@ public class ChatUseCase {
 
     /** 在落库前发送安全正文；客户端发送失败时不提交会话轮次。 */
     private void emitAnswerBody(UUID ownerUserId, ChatEventSink sink, UUID conversationId, UUID runId,
-                                CompletedTurn turn, long requestStarted) {
-        emit(ownerUserId, sink, conversationId, runId, "answer.started", Map.of("contentType", "text/markdown"));
+                                CompletedTurn turn, long requestStarted, ChatExecutionControl control) {
+        emit(ownerUserId, sink, conversationId, runId, "answer.started", Map.of("contentType", "text/markdown"), control);
         boolean firstFragment = true;
         for (String fragment : fragments(turn.answer())) {
-            emit(ownerUserId, sink, conversationId, runId, "answer.delta", Map.of("text", fragment));
+            emit(ownerUserId, sink, conversationId, runId, "answer.delta", Map.of("text", fragment), control);
             if (firstFragment) {
                 telemetry.recordDuration(Operation.SAFE_FIRST_DELTA, elapsed(requestStarted), true);
                 firstFragment = false;
             }
         }
         for (Citation citation : turn.citations()) {
-            emit(ownerUserId, sink, conversationId, runId, "citation", citationData(citation));
+            emit(ownerUserId, sink, conversationId, runId, "citation", citationData(citation), control);
         }
     }
 
     /** 在原子提交成功后发送带有新版本的完成事件。 */
     private void emitAnswerCompleted(UUID ownerUserId, ChatEventSink sink, UUID conversationId, UUID runId,
                                      CompletedTurn turn, Long suggestionSequence,
-                                     long completedSequence) {
+                                     long completedSequence, ChatExecutionControl control) {
         if (turn.suggestionId() != null) {
             emitPrepared(sink, conversationId, runId, suggestionSequence, "ticket.suggested", Map.of(
                     "suggestionId", turn.suggestionId().toString(),
-                    "expiresAt", turn.completedAt().plus(suggestionTtl).toString()));
+                    "expiresAt", turn.completedAt().plus(suggestionTtl).toString()), control);
         }
         Map<String, Object> data = new LinkedHashMap<>();
         data.put("answer", turn.answer());
         data.put("citations", turn.citations().stream().map(this::citationData).toList());
         data.put("conversationVersion", turn.conversationVersion());
         data.put("resultStatus", turn.resultStatus());
-        emitPrepared(sink, conversationId, runId, completedSequence, "answer.completed", data);
+        emitPrepared(sink, conversationId, runId, completedSequence, "answer.completed", data, control);
     }
 
     /** 重发成功消息而不执行模型、检索或增加会话版本。 */
-    private void replay(UUID ownerUserId, BeginResult begin, ChatEventSink sink) {
+    private void replay(UUID ownerUserId, BeginResult begin, ChatEventSink sink, ChatExecutionControl control) {
         CompletedTurn turn = begin.replayTurn();
         emitReplay(ownerUserId, sink, begin.conversationId(), turn.runId(), "conversation.started",
-                Map.of("conversationVersion", begin.version(), "replayed", true));
-        emitReplayAnswer(ownerUserId, sink, begin.conversationId(), turn.runId(), turn);
+                Map.of("conversationVersion", begin.version(), "replayed", true), control);
+        emitReplayAnswer(ownerUserId, sink, begin.conversationId(), turn.runId(), turn, control);
         sink.complete();
     }
 
     /** 使用新事件编号和新序号重放既有安全内容。 */
     private void emitReplayAnswer(UUID ownerUserId, ChatEventSink sink, UUID conversationId, UUID runId,
-                                  CompletedTurn turn) {
-        emitReplay(ownerUserId, sink, conversationId, runId, "answer.started", Map.of("contentType", "text/markdown"));
+                                  CompletedTurn turn, ChatExecutionControl control) {
+        emitReplay(ownerUserId, sink, conversationId, runId, "answer.started", Map.of("contentType", "text/markdown"), control);
         for (String fragment : fragments(turn.answer())) {
-            emitReplay(ownerUserId, sink, conversationId, runId, "answer.delta", Map.of("text", fragment));
+            emitReplay(ownerUserId, sink, conversationId, runId, "answer.delta", Map.of("text", fragment), control);
         }
 
         for (Citation citation : turn.citations()) {
-            emitReplay(ownerUserId, sink, conversationId, runId, "citation", citationData(citation));
+            emitReplay(ownerUserId, sink, conversationId, runId, "citation", citationData(citation), control);
         }
 
         if (turn.suggestionId() != null) {
             emitReplay(ownerUserId, sink, conversationId, runId, "ticket.suggested", Map.of(
                     "suggestionId", turn.suggestionId().toString(),
-                    "expiresAt", turn.completedAt().plus(suggestionTtl).toString()));
+                    "expiresAt", turn.completedAt().plus(suggestionTtl).toString()), control);
         }
         Map<String, Object> data = new LinkedHashMap<>();
         data.put("answer", turn.answer());
         data.put("citations", turn.citations().stream().map(this::citationData).toList());
         data.put("conversationVersion", turn.conversationVersion());
         data.put("resultStatus", turn.resultStatus());
-        emitReplay(ownerUserId, sink, conversationId, runId, "answer.completed", data);
+        emitReplay(ownerUserId, sink, conversationId, runId, "answer.completed", data, control);
     }
 
     /** 为最终证据按顺序分配 S1 开始的临时引用。 */
@@ -762,9 +858,11 @@ public class ChatUseCase {
     }
 
     /** 构造固定安全回答结果。 */
-    private Outcome fixed(String answer, String resultStatus) {
+    private Outcome fixed(String answer, String resultStatus, ChatExecutionControl control) {
+        control.checkCancelled();
         ModelOutputAssessment assessment = outputSecurity.assess(
                 ModelOutputType.FIXED, answer, ModelInvocationSecurity.none(), null, List.of());
+        control.checkCancelled();
         if (assessment.action() != ModelOutputAction.PASS) {
             throw outputValidationFailure();
         }
@@ -791,25 +889,33 @@ public class ChatUseCase {
 
     /** 原子分配序号并发送业务事件。 */
     private void emit(UUID ownerUserId, ChatEventSink sink, UUID conversationId, UUID runId,
-                      String eventType, Map<String, Object> data) {
+                      String eventType, Map<String, Object> data, ChatExecutionControl control) {
+        control.checkCancelled();
         long sequence = conversations.nextSequence(ownerUserId, conversationId, runId);
+        control.checkCancelled();
         sink.send(new ChatEvent(ids.generate(), eventType, runId, conversationId,
                 sequence, time.now(), Map.copyOf(data)));
+        control.checkCancelled();
     }
 
     /** 发送不要求存在活动运行租约的重放事件。 */
     private void emitReplay(UUID ownerUserId, ChatEventSink sink, UUID conversationId, UUID runId,
-                            String eventType, Map<String, Object> data) {
+                            String eventType, Map<String, Object> data, ChatExecutionControl control) {
+        control.checkCancelled();
         long sequence = conversations.nextReplaySequence(ownerUserId, conversationId);
+        control.checkCancelled();
         sink.send(new ChatEvent(ids.generate(), eventType, runId, conversationId,
                 sequence, time.now(), Map.copyOf(data)));
+        control.checkCancelled();
     }
 
     /** 使用提交前预留的序号发送提交后的终结事件。 */
     private void emitPrepared(ChatEventSink sink, UUID conversationId, UUID runId, long sequence,
-                              String eventType, Map<String, Object> data) {
+                              String eventType, Map<String, Object> data, ChatExecutionControl control) {
+        control.checkCancelled();
         sink.send(new ChatEvent(ids.generate(), eventType, runId, conversationId,
                 sequence, time.now(), Map.copyOf(data)));
+        control.checkCancelled();
     }
 
     /** 构建最多八千字符的工单建议冻结上下文。 */
@@ -833,21 +939,24 @@ public class ChatUseCase {
     }
 
     /** 在模型首次产生内容时续租，丢失围栏则中止运行。 */
-    private void renew(UUID ownerUserId, UUID conversationId, UUID runId) {
+    private void renew(UUID ownerUserId, UUID conversationId, UUID runId, ChatExecutionControl control) {
+        control.checkCancelled();
         if (!conversations.renew(ownerUserId, conversationId, runId, time.now())) {
             throw new ApplicationException(ErrorCode.CHAT_CONVERSATION_BUSY, "会话运行权已经失效");
         }
+        control.checkCancelled();
     }
 
     /** 创建每次模型调用只记录一次首 Token 的租约续期回调。 */
     private Runnable firstTokenCallback(UUID ownerUserId, UUID conversationId,
-                                        UUID runId, long modelStarted) {
+                                        UUID runId, long modelStarted, ChatExecutionControl control) {
         AtomicBoolean first = new AtomicBoolean();
         return () -> {
+            control.checkCancelled();
             if (first.compareAndSet(false, true)) {
                 telemetry.recordDuration(Operation.MODEL_FIRST_TOKEN, elapsed(modelStarted), true);
             }
-            renew(ownerUserId, conversationId, runId);
+            renew(ownerUserId, conversationId, runId, control);
         };
     }
 

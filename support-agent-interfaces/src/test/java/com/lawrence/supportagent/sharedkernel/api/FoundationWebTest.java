@@ -17,11 +17,42 @@ import org.springframework.http.HttpStatus;
 import org.springframework.mock.web.MockFilterChain;
 import org.springframework.mock.web.MockHttpServletRequest;
 import org.springframework.mock.web.MockHttpServletResponse;
+import org.springframework.test.web.servlet.setup.MockMvcBuilders;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.context.request.async.AsyncRequestNotUsableException;
 
 /** 验证统一响应、分页约束、异常映射和 traceId 请求基础设施。 */
 class FoundationWebTest {
     private static final Instant NOW = Instant.parse("2026-09-03T08:00:00Z");
     private static final UUID TRACE_ID = UUID.fromString("853ddf68-2f67-48f8-afeb-908f0e62c680");
+
+    /** 已断开的异步响应不应再触发 ApiResult JSON 转换或写入。 */
+    @Test
+    void shouldNotWriteJsonToUnusableAsyncResponse() throws Exception {
+        var mvc = MockMvcBuilders.standaloneSetup(new DisconnectedController())
+                .setControllerAdvice(new GlobalExceptionHandler(() -> NOW)).build();
+        var result = mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders
+                .get("/fixture/disconnected")).andReturn();
+        var response = result.getResponse();
+        assertTrue(result.getResolvedException() instanceof AsyncRequestNotUsableException);
+        assertTrue(response.isCommitted());
+        assertEquals("", response.getContentAsString());
+        assertEquals(200, response.getStatus());
+    }
+
+    /** 只在测试源集制造 MVC 已不可写的响应，不增加生产接口。 */
+    @RestController
+    static class DisconnectedController {
+        /** 模拟 SSE 写失败后的异步再分派。 */
+        @GetMapping("/fixture/disconnected")
+        public void disconnected(jakarta.servlet.http.HttpServletResponse response)
+                throws java.io.IOException {
+            response.setContentType("text/event-stream");
+            response.flushBuffer();
+            throw new AsyncRequestNotUsableException("synthetic disconnected response");
+        }
+    }
 
     /** 验证成功响应与安全失败响应的稳定字段语义。 */
     @Test
